@@ -16,11 +16,13 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSettings>
+#include <QFontInfo>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTextBlock>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QTextTable>
 #include <QTreeView>
@@ -37,6 +39,29 @@ QString fixture(const char *name)
         qFatal("missing fixture %s", name);
     }
     return QString::fromUtf8(f.readAll());
+}
+
+ViewMessage fixtureMessage(const char *name)
+{
+    ViewMessage m;
+    m.id = QString::fromLatin1(name);
+    m.from = QStringLiteral("Example Sender <noreply@example.com>");
+    m.subject = QString::fromLatin1(name);
+    m.bodyHtml = fixture(name);
+    return m;
+}
+
+// Smallest laid-out width among blocks whose text contains `needle`.
+qreal minBlockWidth(QTextDocument *doc, const QString &needle)
+{
+    qreal w = 0;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        if (b.text().contains(needle)) {
+            const qreal bw = doc->documentLayout()->blockBoundingRect(b).width();
+            w = w == 0 ? bw : std::min(w, bw);
+        }
+    }
+    return w;
 }
 
 ViewMessage vetMessage()
@@ -201,6 +226,134 @@ private slots:
         QVERIFY(out.contains(QStringLiteral("<div style='background-color: transparent'>plain</div>")));
     }
 
+    void tableMailKeepsItsContentColumnReadable()
+    {
+        // 0.3.0 drew a brokerage confirmation as a narrow column, one letter
+        // per line: the 10/15/10 px spacer columns were turned into
+        // percentages of their own sum (100% of the table), the hidden
+        // dark-mode twin was drawn too, and "margin: 0 auto" shifted cards.
+        MessageView v;
+        v.resize(760, 800);
+        v.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&v));
+        v.setMessage(fixtureMessage("brokerage-confirm.html"));
+        QTextDocument *doc = v.body()->document();
+        const QString text = doc->toPlainText();
+        QVERIFY(text.contains(QStringLiteral("Account ending in: 4242")));
+        QVERIFY(!text.contains(QStringLiteral("DARKTWIN")));   // display:none twin dropped
+        QVERIFY(!text.contains(QChar(0x200c)));                // hidden preheader dropped
+        const qreal info = minBlockWidth(doc, QStringLiteral("Account ending in"));
+        QVERIFY2(info > 150, qPrintable(QStringLiteral("info box %1 px").arg(info)));
+        const qreal para = minBlockWidth(doc, QStringLiteral("Hello Jordan"));
+        QVERIFY2(para > 300, qPrintable(QStringLiteral("paragraph %1 px").arg(para)));
+        QVERIFY(doc->size().width() <= v.body()->viewport()->width() + 2);
+
+        // The 600 px card (width:100%; max-width:600px) is centred, not
+        // stretched, in a wide pane.
+        v.resize(1200, 800);
+        QTRY_VERIFY(v.body()->viewport()->width() > 1100);
+        v.setMessage(fixtureMessage("brokerage-confirm.html"));
+        QTextTable *card = nullptr;
+        for (QTextFrame *f : doc->rootFrame()->childFrames()) {
+            auto *t = qobject_cast<QTextTable *>(f);
+            if (t && t->format().width().type() == QTextLength::FixedLength) {
+                card = t;
+                break;
+            }
+        }
+        QVERIFY(card);
+        QCOMPARE(card->format().width().rawValue(), 600.0);
+        QVERIFY(card->format().alignment() & Qt::AlignHCenter);
+
+        // Narrow pane: words stay whole (no letter-per-line), no sideways scroll.
+        v.resize(420, 800);
+        QTRY_VERIFY(v.body()->viewport()->width() < 440);
+        v.setMessage(fixtureMessage("brokerage-confirm.html"));
+        QCOMPARE(v.body()->wordWrapMode(), QTextOption::WordWrap);
+        QVERIFY(minBlockWidth(doc, QStringLiteral("Account ending in")) > 60);
+        QVERIFY(doc->size().width() <= v.body()->viewport()->width() + 2);
+    }
+
+    void iconColumnBesideTextKeepsItsPixelWidth()
+    {
+        MessageView v;
+        v.resize(760, 800);
+        v.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&v));
+        v.setMessage(fixtureMessage("retail-rx.html"));
+        QTextDocument *doc = v.body()->document();
+        QVERIFY(!doc->toPlainText().contains(QStringLiteral("prescription is expiring soon"))); // preheader
+        QVERIFY(!HtmlFit::prepare(fixture("retail-rx.html")).contains(QStringLiteral("DARKLOGO")));
+        const qreal copy = minBlockWidth(doc, QStringLiteral("You have no remaining refills"));
+        QVERIFY2(copy > 280, qPrintable(QStringLiteral("text column %1 px").arg(copy)));
+
+        // fit(): pixel spacers next to a column with no width stay pixels.
+        QTextDocument d;
+        d.setHtml(QStringLiteral("<table width='100%'><tr><td width='10'></td><td>content</td><td width='15'></td></tr></table>"
+                                 "<table width='95%'><tr><td width='30'>i</td><td>text</td></tr></table>"));
+        HtmlFit::Options o;
+        o.availableWidth = 600;
+        HtmlFit::fit(&d, o);
+        const auto frames = d.rootFrame()->childFrames();
+        auto *t0 = qobject_cast<QTextTable *>(frames.value(0));
+        auto *t1 = qobject_cast<QTextTable *>(frames.value(1));
+        QVERIFY(t0 && t1);
+        const auto c0 = t0->format().columnWidthConstraints();
+        QCOMPARE(c0.value(0).type(), QTextLength::FixedLength);
+        QCOMPARE(c0.value(0).rawValue(), 10.0);
+        QCOMPARE(c0.value(2).rawValue(), 15.0);
+        QCOMPARE(t1->format().columnWidthConstraints().value(0).type(), QTextLength::FixedLength);
+        QCOMPARE(t1->format().columnWidthConstraints().value(0).rawValue(), 30.0);
+    }
+
+    void concatenatedDocumentsAreNotBlank()
+    {
+        // A Meetup mail: a first document whose <body> holds only a pixel,
+        // then the real mail with no <body>. 0.3.0 showed an empty page.
+        MessageView v;
+        v.resize(760, 600);
+        v.setMessage(fixtureMessage("meetup-concat.html"));
+        const QString text = v.body()->document()->toPlainText();
+        QVERIFY(text.contains(QStringLiteral("Just scheduled: Practical Robotics Night")));
+        QVERIFY(text.contains(QStringLiteral("Bring a laptop")));
+        QVERIFY(!text.contains(QStringLiteral("Preheader nobody should see")));
+        QVERIFY(!text.contains(QStringLiteral(".y{color")));
+    }
+
+    void emojiUseTheColourFont()
+    {
+        QVERIFY(isEmojiCodePoint(0x1F43E));            // paw prints
+        QVERIFY(isEmojiCodePoint(0x1F4C5));            // calendar
+        QVERIFY(isEmojiCodePoint(0x2B50));             // star
+        QVERIFY(!isEmojiCodePoint(U'A'));
+        QVERIFY(!isEmojiCodePoint(0x25CF));            // bullet stays text
+        QVERIFY(!isEmojiCodePoint(0x2764));            // heart: text unless VS16
+        QVERIFY(isEmojiCodePoint(0x2764, 0xFE0F));
+        const QString emoji = emojiFamily();
+        if (emoji.isEmpty()) {
+            QSKIP("no colour emoji font installed");
+        }
+        // App font (message list, header, attachments label): real family
+        // first, emoji font behind it.
+        const QStringList fams = QApplication::font().families();
+        QVERIFY(fams.size() >= 2);
+        QCOMPARE(fams.last(), emoji);
+        QVERIFY(fams.first() != emoji);
+        QCOMPARE(fams.first(), QFontInfo(QApplication::font()).family());
+        // Mail body: emoji inside an explicit font-family point at the
+        // colour font; the text around them doesn't.
+        QTextDocument d;
+        d.setHtml(QStringLiteral("<p style='font-family: Arial, sans-serif'>Riley \U0001F43E is due</p>"));
+        HtmlFit::Options o;
+        o.availableWidth = 600;
+        HtmlFit::fit(&d, o);
+        QTextCursor c(&d);
+        c.setPosition(7); // after "Riley " + first UTF-16 unit
+        QVERIFY(c.charFormat().fontFamilies().toStringList().contains(emoji));
+        c.setPosition(2);
+        QVERIFY(!c.charFormat().fontFamilies().toStringList().contains(emoji));
+    }
+
     void htmlMailIsOnALightPageEvenInDarkTheme()
     {
         applyTheme(ThemeMode::Dark);
@@ -335,6 +488,17 @@ private slots:
 
     void splitterAndPreviewLayoutAreRemembered()
     {
+        {
+            // Default split favours the message (about 35/65).
+            MainWindow w;
+            w.resize(1200, 900);
+            w.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&w));
+            const QList<int> sz = w.findChild<QSplitter *>(QStringLiteral("listPreviewSplitter"))->sizes();
+            QVERIFY2(sz.value(1) > 1.6 * sz.value(0), qPrintable(QStringLiteral("%1/%2").arg(sz.value(0)).arg(sz.value(1))));
+            w.close();
+            QSettings().clear();
+        }
         {
             MainWindow w;
             auto *split = w.findChild<QSplitter *>(QStringLiteral("listPreviewSplitter"));

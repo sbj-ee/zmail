@@ -145,6 +145,11 @@ MessageView::MessageView(QWidget *parent)
     m_body->setObjectName(QStringLiteral("messageBody"));
     m_body->setFrameShape(QFrame::NoFrame);
     m_body->setOpenLinks(false);
+    // QTextEdit's default (WrapAtWordBoundaryOrAnywhere) lets a table cell's
+    // minimum width fall to one character, so a squeezed column broke text
+    // one letter per line. Break only between words; zoom-to-fit handles
+    // anything that still can't fit.
+    m_body->setWordWrapMode(QTextOption::WordWrap);
     m_body->document()->setDocumentMargin(kMargin);
     m_body->viewport()->installEventFilter(this);
     lay->addWidget(m_body, 1);

@@ -10,3 +10,4 @@ endfunction()
 
 zmail_add_test(tst_version)
 zmail_add_test(tst_mainwindow)
+zmail_add_test(tst_limits)

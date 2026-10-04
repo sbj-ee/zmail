@@ -34,6 +34,7 @@ add_library(zmail_app STATIC
   src/MainWindow.hpp
   src/UpdateChecker.cpp
   src/UpdateChecker.hpp
+  src/core/Limits.h
 )
 target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"

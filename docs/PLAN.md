@@ -255,13 +255,56 @@ For a mail client that has to show real HTML mail, that's worth it.
   format is used. Signatures are stored in the `signatures` table and edited
   in Settings.
 - **Attachments (sending):** add them with the file picker or by dropping
-  files onto the compose window. A chip list shows each file's size and the
-  running total. **Gmail's limit is 25 MB** for personal accounts [11], and
-  that limit applies to the encoded message, so zmail measures the
-  **base64-encoded** size: `4·⌈n/3⌉` plus CRLF every 76 characters, about
-  1.37× in total. The indicator turns amber at 80% (20 MB encoded) and red
-  above 25 MB, where Send asks "remove attachments or share a Drive link
-  instead (later)".
+  files onto the compose window. A chip list shows each file's size, and a
+  **size meter** in the compose window shows the running total of the
+  **encoded** message. The limits and thresholds are in §4.5.1.
+
+#### 4.5.1 Message size limits (mirroring Google's)
+Every limit lives in a single constants header, **`src/core/Limits.h`**
+(added in this PR, with unit tests). Each value is written next to its doc
+link, so a change on Google's side is a one-line edit. Checked on
+2026-10-03:
+
+| Limit | Value used | Google's figure | Source |
+|---|---|---|---|
+| Send (personal Gmail) | `kSendLimitBytes` = 25,000,000 | "For personal Gmail accounts, the limit is 25 MB" | [11] |
+| Gmail API upload for `messages.send` and `drafts.*` | `kApiSendUploadMaxBytes` = 36,700,160 (35 MiB) | `mediaUpload.maxSize: "36700160"` | [18][12] |
+| Receive | `kReceiveLimitBytes` = 50,000,000 | "receive emails of up to 50 MB ... after encoding, which adds about a 37% increase" | [19] |
+
+How these compare with what we expected:
+- **Send:** 25 MB, as expected.
+- **API upload:** 35 MB as expected. Precisely, it's 35 **MiB** (36,700,160
+  bytes), and `messages.import`/`insert` allow 150 MiB.
+- **Receive:** 50 MB as expected, but Google documents it on the
+  **Workspace** receiving-limits page (Enterprise Plus can get 70 MB). The
+  personal-Gmail help page states a send limit only. zmail uses 50 MB solely
+  to plan downloads.
+- **Encoding overhead:** Google quotes "about 37%", not 33%. Base64's 4/3
+  plus a CRLF every 76 characters works out to about 1.37×.
+
+The 25 MB send limit is lower than the API cap, so it's the one that
+binds. Rules:
+- **Measure the whole encoded MIME message**: headers, text and HTML parts,
+  inline images, and every attachment at `base64MimeSize(n) = 4·⌈n/3⌉ +
+  2·⌊(len−1)/76⌋`. That's not the sum of file sizes. An 18.5 MB file already
+  goes over the limit.
+- **Size meter:** green below 80% (`kSendWarnPercent`, 20 MB encoded),
+  amber from 80%, and red above the limit.
+- **Block sending** when the total is over `kSendLimitBytes`. Send is
+  disabled with "Message is 26.1 MB after encoding; Gmail's limit is
+  25 MB. Remove attachments" (Drive links come later). The same check runs
+  again in `MessageBuilder` on the final bytes, before `messages.send`
+  and before the outbox (§4.12) accepts a scheduled message.
+- **Large received messages:** messages can't exceed the receive limit, but
+  big ones still need care. Anything whose `sizeEstimate` is over
+  `kLargeMessageBytes` (5 MB):
+  - is fetched in stages: `format=full` structure, then text/HTML, then
+    attachments through `messages.attachments.get` on demand or in idle time
+  - streams to disk from `QNetworkReply::readyRead`, so it's never buffered
+    whole in memory
+  - shows progress in the preview pane, with a size-scaled timeout
+  - restarts after a failure without blocking the sync queue
+  - is marked "attachments not yet downloaded" when offline
 
 ### 4.6 Spell check (reused from zwriter)
 zwriter's `SpellChecker` is a thin Hunspell wrapper: it searches
@@ -589,7 +632,9 @@ soft failure, semver comparison, and a rate-limit message.
   - spell checker (ignore, add to dictionary, skipping quotes and URLs)
   - the shared zwriter dictionary (concurrent appends from two processes
     without lost lines, reload after an external change, path override)
-  - encoded-size math against real base64 output
+  - encoded-size math against real base64 output, and the 80%/limit
+    thresholds (`tst_limits` in this PR), the compose meter and Send
+    blocking, and staged or streamed download of a 40 MB fixture
   - AttachmentPolicy (extension × sniffed-type matrix, no exec bit)
   - scanner fixtures (forged lower `Authentication-Results`, homoglyph
     domains, xn--, mismatched links, docm/OLE VBA, encrypted zip, clamd with
@@ -691,3 +736,5 @@ Stephen settled these on 2026-10-03. The sections above reflect them.
 15. Unicode, *UTS #39 Unicode Security Mechanisms* (confusable skeletons). <https://www.unicode.org/reports/tr39/>
 16. sbj-ee/zwriter, `src/UpdateChecker.*`, `src/SpellChecker.*`, `src/WritingHighlighter.*` (read-only reference). <https://github.com/sbj-ee/zwriter>
 17. sbj-ee/zterminal, CMake/CPack/CI layout and the Fildem menu-bar note (read-only reference). <https://github.com/sbj-ee/zterminal>
+18. Google, *Gmail API discovery document*: `users.messages.send`/`drafts.send`/`drafts.create`/`drafts.update` `mediaUpload.maxSize` = 36700160, and `messages.import`/`insert` = 157286400. <https://gmail.googleapis.com/$discovery/rest?version=v1>
+19. Google Workspace Admin Help, *Gmail receiving limits in Google Workspace*: 50 MB (70 MB Enterprise Plus) after encoding, about 37% overhead. <https://support.google.com/a/answer/1366776>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QPointer>
 
 class QActionGroup;
 class QLabel;
@@ -8,15 +9,23 @@ class QLineEdit;
 class QModelIndex;
 class QSplitter;
 class QTextBrowser;
+class QTimer;
+class QAction;
 class QTreeView;
 class QTreeWidget;
 class QTreeWidgetItem;
 class UpdateChecker;
 class ComposeWindow;
 
+namespace zmail {
+class MailSession;
+}
 namespace zmail::ui {
 class MessageListModel;
 class MessageFilterProxy;
+class NewMailSound;
+class SafeHtmlView;
+class ConnectDialog;
 enum class ThemeMode;
 } // namespace zmail::ui
 
@@ -29,6 +38,15 @@ class MainWindow : public QMainWindow
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+
+    // Attach a Gmail session. Without one (tests, offline screenshots) the
+    // window shows the built-in sample data.
+    void setSession(zmail::MailSession *session);
+    zmail::MailSession *session() const { return m_session; }
+    bool isLive() const { return m_live; }
+    // Opens the first-run / sign-in dialog (non-modal; returns it for tests).
+    zmail::ui::ConnectDialog *showConnectDialog(const QString &notice = {});
+    zmail::ui::NewMailSound *newMailSound() const { return m_sound; }
 
     // "zmail 0.1.0": built from project(VERSION), never hardcoded.
     static QString baseTitle();
@@ -50,12 +68,19 @@ private:
     void showMessage(const QModelIndex &proxyIndex);
     void updateCounts();
     void refreshIcons();
+    void sessionStateChanged();
+    void attachSync();
+    void reloadFromCache();
+    void checkMail();
+    void updateSyncLabel(const QString &status = {});
+    QString labelForMailbox(const QString &key) const;
+    void showLiveMessage(int row);
 
     QSplitter *m_splitter = nullptr;
     QSplitter *m_listSplitter = nullptr;
     QTreeWidget *m_mailboxes = nullptr;
     QTreeView *m_list = nullptr;
-    QTextBrowser *m_preview = nullptr;
+    zmail::ui::SafeHtmlView *m_preview = nullptr;
     QLineEdit *m_search = nullptr;
     QLabel *m_syncLabel = nullptr;
     QLabel *m_countLabel = nullptr;
@@ -64,4 +89,13 @@ private:
     UpdateChecker *m_updates = nullptr;
     QActionGroup *m_themeGroup = nullptr;
     QList<ComposeWindow *> m_composers;
+    zmail::MailSession *m_session = nullptr;
+    zmail::ui::NewMailSound *m_sound = nullptr;
+    QPointer<zmail::ui::ConnectDialog> m_connect;
+    QAction *m_signInAction = nullptr;
+    QAction *m_signOutAction = nullptr;
+    bool m_live = false;
+    QString m_lastSync;     // "8:45 AM"
+    QString m_shownId;      // message currently in the preview
+    QTimer *m_reloadTimer = nullptr;
 };

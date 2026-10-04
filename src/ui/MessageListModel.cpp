@@ -216,6 +216,25 @@ void MessageFilterProxy::setMailbox(const QString &mailbox)
     invalidateFilter();
 }
 
+int MessageListModel::rowForId(const QString &id) const
+{
+    for (int i = 0; i < m_items.size(); ++i) {
+        if (m_items.at(i).id == id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void MessageListModel::setStatus(int row, MailStatus status)
+{
+    if (row < 0 || row >= m_items.size() || m_items[row].status == status) {
+        return;
+    }
+    m_items[row].status = status;
+    emit dataChanged(index(row, 0), index(row, ColumnCount - 1));
+}
+
 void MessageFilterProxy::setSearchText(const QString &text)
 {
     m_search = text.trimmed();
@@ -239,6 +258,11 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
     return true;
 }
 
+// Sample rows leave the live-data fields (id, to) at their defaults.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#endif
 QList<MailItem> sampleMail()
 {
     // All people, companies and addresses are fictional (example.* domains,
@@ -304,5 +328,8 @@ QList<MailItem> sampleMail()
          at(6, 8, 0), 61'000, "Your September points summary", {}, false, {"Trash"}, "You earned 1,240 points.", {}});
     return v;
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 } // namespace zmail::ui

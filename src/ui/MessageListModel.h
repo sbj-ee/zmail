@@ -29,6 +29,9 @@ struct MailItem
     QStringList mailboxes;  // "In", "Out", "Junk", "Trash"
     QString preview;        // plain-text body for the preview pane
     QStringList attachments;
+    // Live Gmail data (empty for sample data).
+    QString id;             // Gmail message id
+    QString to;             // To: header
 };
 
 // Eudora-style columns.
@@ -49,6 +52,8 @@ public:
     void setItems(QList<MailItem> items);
     const QList<MailItem> &items() const { return m_items; }
     const MailItem &item(int row) const { return m_items.at(row); }
+    int rowForId(const QString &id) const;
+    void setStatus(int row, MailStatus status);
 
     int rowCount(const QModelIndex &parent = {}) const override;
     int columnCount(const QModelIndex &parent = {}) const override;

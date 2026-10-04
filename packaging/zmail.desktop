@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=zmail
+GenericName=Mail Client
+Comment=Gmail client with per-sender new-mail sounds
+Exec=zmail
+Icon=mail-client
+Terminal=false
+Categories=Network;Email;Qt;
+StartupWMClass=zmail

@@ -1,0 +1,18 @@
+#pragma once
+
+// Generated from CMake project(zmail VERSION ...): do not edit by hand.
+// Bump the version only in the top-level CMakeLists.txt project() call.
+
+namespace zmail {
+
+inline constexpr int kVersionMajor = @PROJECT_VERSION_MAJOR@;
+inline constexpr int kVersionMinor = @PROJECT_VERSION_MINOR@;
+inline constexpr int kVersionPatch = @PROJECT_VERSION_PATCH@;
+
+// Full "MAJOR.MINOR.PATCH" string, same as PROJECT_VERSION / CPack.
+inline constexpr const char kVersionString[] = "@PROJECT_VERSION@";
+
+inline constexpr const char kAppName[] = "zmail";
+inline constexpr const char kRepo[] = "sbj-ee/zmail";
+
+} // namespace zmail

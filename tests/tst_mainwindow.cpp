@@ -155,7 +155,7 @@ private slots:
         QAbstractItemModel *m = list->model();
         QCOMPARE(m->columnCount(), int(MessageListModel::ColumnCount));
         QCOMPARE(m->headerData(MessageListModel::Who, Qt::Horizontal).toString(), QStringLiteral("Who"));
-        QCOMPARE(m->headerData(MessageListModel::Size, Qt::Horizontal).toString(), QStringLiteral("K"));
+        QCOMPARE(m->headerData(MessageListModel::Size, Qt::Horizontal).toString(), QStringLiteral("Size"));
         QCOMPARE(m->headerData(MessageListModel::Subject, Qt::Horizontal).toString(), QStringLiteral("Subject"));
         QVERIFY(list->isSortingEnabled());
 

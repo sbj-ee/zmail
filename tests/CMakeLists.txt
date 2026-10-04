@@ -16,6 +16,7 @@ function(zmail_add_test name)
 endfunction()
 
 zmail_add_test(tst_version)
+zmail_add_test(tst_listfixes)
 zmail_add_test(tst_mainwindow)
 zmail_add_test(tst_limits)
 zmail_add_test(tst_compose)

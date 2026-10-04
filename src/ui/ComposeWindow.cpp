@@ -11,6 +11,7 @@
 #include "core/RichText.h"
 #include "core/Sender.h"
 #include "core/Signatures.h"
+#include "core/SizeFormat.h"
 #include "core/SpellChecker.h"
 #include "version.hpp"
 
@@ -71,8 +72,7 @@ SpellChecker *sharedSpellChecker()
 
 QString formatBytes(qint64 n)
 {
-    return n >= 1'000'000 ? QStringLiteral("%1 MB").arg(double(n) / 1e6, 0, 'f', 1)
-                          : QStringLiteral("%1 K").arg(QLocale(QLocale::English).toString((n + 1023) / 1024));
+    return zmail::formatSize(n); // same units as the message list and status bar
 }
 
 QString plainToHtml(const QString &text)
@@ -202,6 +202,7 @@ void ComposeWindow::buildToolbar()
     QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later\u2026"));
     later->setObjectName(QStringLiteral("actionSendLater"));
     later->setEnabled(false);
+    later->setVisible(false); // hidden until scheduled send is implemented
     later->setToolTip(tr("Scheduled send arrives in a later release"));
     m_saveDraft = tb->addAction(icon(QStringLiteral("save")), tr("Save Draft"));
     m_saveDraft->setObjectName(QStringLiteral("actionSaveDraft"));
@@ -731,10 +732,8 @@ void ComposeWindow::updateSizeMeter()
         return;
     }
     const qint64 size = encodedSize();
-    const double mb = double(size) / 1e6;
-    const double limitMb = double(limits::kSendLimitBytes) / 1e6;
     m_sizeMeter->setValue(int(std::min<qint64>(1000, size * 1000 / limits::kSendLimitBytes)));
-    m_sizeMeter->setFormat(tr("%1 MB of %2 MB (encoded)").arg(mb, 0, 'f', 1).arg(limitMb, 0, 'f', 0));
+    m_sizeMeter->setFormat(tr("%1 of %2 (encoded)").arg(formatBytes(size), formatBytes(limits::kSendLimitBytes)));
 
     const auto level = limits::classifySendSize(size);
     const QString chunk = level == limits::SizeLevel::Blocked ? QStringLiteral("#d32f2f")

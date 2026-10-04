@@ -167,6 +167,11 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     });
 
     reloadSignatures();
+    // Put the default signature in the body now. Before, only setDraft()
+    // (Reply/Forward), setSignatureStore() or a format change inserted it,
+    // so a New message in the default format went out unsigned even though
+    // the bar said "Signature: <name>".
+    applySignature();
     refreshChips();
     updateTitle();
     updateSizeMeter();
@@ -974,9 +979,14 @@ void ComposeWindow::applySignature()
             break;
         }
     }
+    // Where the user is typing. Inserting at that very position would push
+    // their cursor below the signature, so put it back afterwards.
+    QTextCursor user = m_body->textCursor();
+    const int keep = user.position();
+    const int at = anchor.position() + anchor.length() - 1;
     QTextCursor c(doc);
     c.beginEditBlock();
-    c.setPosition(anchor.position() + anchor.length() - 1);
+    c.setPosition(at);
     c.insertBlock(QTextBlockFormat(), QTextCharFormat()); // blank line before "-- "
     const int start = c.position();
     c.insertBlock(QTextBlockFormat(), QTextCharFormat());
@@ -997,6 +1007,10 @@ void ComposeWindow::applySignature()
     }
     tagBlocks(doc, start, c.position(), kSigProp, kQuoteProp);
     c.endEditBlock();
+    if (keep <= at && user.position() != keep) {
+        user.setPosition(keep);
+        m_body->setTextCursor(user);
+    }
     doc->setModified(false);
 }
 

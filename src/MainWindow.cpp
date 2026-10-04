@@ -221,6 +221,7 @@ void MainWindow::buildMenus()
     dark->setObjectName(QStringLiteral("actionDarkMail"));
     dark->setCheckable(true);
     connect(dark, &QAction::toggled, this, [this](bool on) { m_view->setDarkMail(on); });
+    view->addAction(soundAction()); // Play Sound for New Mail (also on the toolbar)
     view->addSeparator();
     QMenu *theme = view->addMenu(tr("&Theme"));
     theme->setObjectName(QStringLiteral("menuTheme"));
@@ -324,6 +325,7 @@ void MainWindow::buildToolbar()
             &MainWindow::checkMail);
     connect(findChild<QAction *>(QStringLiteral("actionDelete")), &QAction::triggered, this,
             [this]() { trashMessage(m_shownId); });
+    addSoundButton(tb);
 
     auto *spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -1171,6 +1173,61 @@ StripesDialog *MainWindow::showStripesDialog()
     connect(dlg, &StripesDialog::finishedWith, this, &MainWindow::setStripeStrength);
     dlg->show();
     return dlg;
+}
+
+// ---- new-mail sound on/off --------------------------------------------------
+
+QAction *MainWindow::soundAction()
+{
+    if (!m_soundAction) {
+        // One checkable action for View > Play Sound for New Mail and the
+        // toolbar speaker; remembered in notify/sound (default on).
+        m_soundAction = new QAction(tr("Play &Sound for New Mail"), this);
+        m_soundAction->setObjectName(QStringLiteral("actionSound"));
+        m_soundAction->setCheckable(true);
+        m_soundAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
+        m_soundAction->setIconText(tr("Sound"));
+        m_soundAction->setIconVisibleInMenu(false); // a plain check box in View, like Dark Background
+        m_sound->setEnabled(QSettings().value(QStringLiteral("notify/sound"), true).toBool());
+        m_soundAction->setChecked(m_sound->isEnabled());
+        connect(m_soundAction, &QAction::toggled, this, &MainWindow::setNewMailSoundOn);
+        updateSoundAction();
+    }
+    return m_soundAction;
+}
+
+void MainWindow::addSoundButton(QToolBar *tb)
+{
+    tb->addSeparator();
+    tb->addAction(soundAction());
+}
+
+bool MainWindow::newMailSoundOn() const
+{
+    return m_sound->isEnabled();
+}
+
+void MainWindow::setNewMailSoundOn(bool on)
+{
+    m_sound->setEnabled(on);
+    QSettings().setValue(QStringLiteral("notify/sound"), on);
+    if (m_soundAction && m_soundAction->isChecked() != on) {
+        const QSignalBlocker block(m_soundAction);
+        m_soundAction->setChecked(on);
+    }
+    updateSoundAction();
+    statusBar()->showMessage(on ? tr("New-mail sound on.") : tr("New-mail sound muted."), 3000);
+}
+
+void MainWindow::updateSoundAction()
+{
+    const bool on = m_sound->isEnabled();
+    const QString name = on ? QStringLiteral("volume-2") : QStringLiteral("volume-x");
+    m_soundAction->setProperty("lucide", name); // refreshIcons() keeps it on theme changes
+    m_soundAction->setIcon(icon(name));
+    const QString key = m_soundAction->shortcut().toString(QKeySequence::NativeText);
+    m_soundAction->setToolTip(on ? tr("New-mail sound is on. Click to mute (%1)").arg(key)
+                                 : tr("New-mail sound is muted. Click to turn it on (%1)").arg(key));
 }
 
 void MainWindow::changeEvent(QEvent *ev)

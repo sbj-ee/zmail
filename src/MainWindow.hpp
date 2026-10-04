@@ -11,6 +11,7 @@ class QSplitter;
 class QTextBrowser;
 class QTimer;
 class QAction;
+class QToolBar;
 class QTreeView;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -52,6 +53,10 @@ public:
     // Opens the first-run / sign-in dialog (non-modal; returns it for tests).
     zmail::ui::ConnectDialog *showConnectDialog(const QString &notice = {});
     zmail::ui::NewMailSound *newMailSound() const { return m_sound; }
+    // View > Play Sound for New Mail / toolbar speaker (Ctrl+Shift+M),
+    // remembered in QSettings notify/sound.
+    bool newMailSoundOn() const;
+    void setNewMailSoundOn(bool on);
 
     // "zmail 0.1.0": built from project(VERSION), never hardcoded.
     static QString baseTitle();
@@ -126,6 +131,10 @@ private:
     QList<ComposeWindow *> m_composers;
     zmail::MailSession *m_session = nullptr;
     zmail::ui::NewMailSound *m_sound = nullptr;
+    QAction *m_soundAction = nullptr;
+    QAction *soundAction();
+    void addSoundButton(QToolBar *tb);
+    void updateSoundAction();
     QPointer<zmail::ui::ConnectDialog> m_connect;
     QAction *m_signInAction = nullptr;
     QAction *m_signOutAction = nullptr;

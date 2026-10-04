@@ -430,7 +430,7 @@ private slots:
         o.messageIdHeader = QStringLiteral("<orig@example.com>");
         o.threadId = QStringLiteral("t1");
         o.bodyText = QStringLiteral("line one\nline two");
-        o.internalDateMs = QDateTime(QDate(2026, 10, 3), QTime(20, 12), QTimeZone::UTC).toMSecsSinceEpoch();
+        o.internalDateMs = QDateTime(QDate(2026, 10, 3), QTime(20, 12), QTimeZone::utc()).toMSecsSinceEpoch();
 
         const ComposeDraft r = ReplyBuilder::make(ReplyBuilder::Kind::Reply, o, QStringLiteral("demo.user@example.com"));
         QCOMPARE(r.to, QStringLiteral("Priya Raman <priya.raman@example.com>"));

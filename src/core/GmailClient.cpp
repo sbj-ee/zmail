@@ -93,6 +93,11 @@ void GmailClient::modifyLabels(const QString &id, const QStringList &add, const 
              5, 0, false, std::move(cb)});
 }
 
+void GmailClient::trashMessage(const QString &id, JsonCb cb)
+{
+    enqueue({"POST", QStringLiteral("/messages/%1/trash").arg(id), {}, {}, 5, 0, false, std::move(cb)});
+}
+
 void GmailClient::listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb)
 {
     QUrlQuery q;

@@ -1,6 +1,7 @@
 #include "AboutDialog.hpp"
 #include "MainWindow.hpp"
 #include "ui/MessageListModel.h"
+#include "ui/MessageView.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
@@ -31,7 +32,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.2.0"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.2.1"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -96,7 +97,8 @@ private slots:
         QVERIFY(split);
         QCOMPARE(split->orientation(), Qt::Vertical);
         QVERIFY(qobject_cast<QTreeView *>(split->widget(0)));
-        QVERIFY(qobject_cast<QTextBrowser *>(split->widget(1)));
+        QVERIFY(qobject_cast<zmail::ui::MessageView *>(split->widget(1)));
+        QVERIFY(split->widget(1)->findChild<QTextBrowser *>(QStringLiteral("previewPane")));
     }
 
     void eudoraColumnsAndSorting()

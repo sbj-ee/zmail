@@ -243,6 +243,46 @@ The cost is a larger dependency (`qt6-webengine`, about 150 MB installed).
 For a mail client that has to show real HTML mail, that's worth it.
 **Decided:** Stephen accepts the size.
 
+### 4.4.1 Interim viewer, v0.2.1 (QTextBrowser)
+Until the WebEngine view lands, `ui/MessageView` makes the QTextBrowser
+viewer usable for real mail. 0.2.0 drew builder-made HTML (Unlayer,
+Mailchimp, PetDesk...) as a ~90 px column with words broken mid-word, faint
+theme-coloured text and a white card on the dark theme. The causes, and the
+fixes in `ui/HtmlFit`:
+
+- These templates keep their fixed widths (`<table style="width:500px">`,
+  `<td width="250">`) inside Outlook-only `<!--[if mso]>` comments. What's
+  left is an outer table with no width and nested `width=100%` tables, which
+  QTextDocument shrinks to the narrowest word. `HtmlFit::fit()` runs after
+  `setHtml()`: tables with no width become 100 %, fixed tables or columns
+  wider than the pane become proportional percentages, narrower ones keep
+  their size; images are capped to the pane, keeping aspect.
+- QTextDocument ignores CSS `display:table`/`table-cell` and draws a
+  `<div>`'s background only behind its own lines. `HtmlFit::prepare()` turns
+  those divs into real tables, so columns stay side by side and coloured
+  bands sit behind their content. A link inside `<span style="color:...">`
+  gets that colour (Qt would paint it link-blue).
+- Mail is drawn on a white page with dark text whatever the app theme, like
+  other clients. **View → Dark Background for Messages** (`viewer/darkMail`)
+  inverts the mail's own colours' lightness instead.
+- Content that still can't fit (a long unbreakable line) is zoomed to fit
+  rather than scrolled sideways. Plain-text mail is capped at 78 characters
+  per line and links are made clickable.
+
+Around the body: a header block (Subject, From, To, Cc, Date, label), an
+attachments row, and a **Load images** bar. Remote images stay blocked
+until it's pressed, per message; they're then fetched with no cookies, no
+auth, a 15 s timeout and a 10 MB cap per image. `cid:` parts aren't fetched.
+Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 and Ctrl+wheel zoom (50-300 %, remembered
+as `viewer/zoom`). The list/preview splitter remembers its sizes per layout,
+and **View → Preview Pane** puts the preview below the list (Eudora) or to
+its right (`ui/previewRight`). Double-click (or Message → Open in New
+Window, Ctrl+O) opens a message in its own window with Reply / Reply All /
+Forward / Delete. Delete is `users.messages.trash` with an optimistic cache
+update that is rolled back on failure. Several windows can be open; they
+cascade from the last saved geometry (`messageWindow/geometry`). Reply All
+and Forward wait for sending (0.3.0).
+
 ### 4.5 Compose and send
 - **Plain text, HTML or Markdown**, with a mode switch per message (the
   compose toolbar's **Format** box). The default is set in Settings. HTML compose uses QTextEdit's rich text (bold, italic, lists,

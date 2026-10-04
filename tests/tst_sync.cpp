@@ -291,6 +291,36 @@ private slots:
         QVERIFY(!r.g.messages().value(id).labels.contains(QStringLiteral("UNREAD")));
     }
 
+    void trashIsOptimisticAndCcIsCached()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        auto m = r.msg(QStringLiteral("Copy me"));
+        m.cc = QStringLiteral("Grace Hopper <grace@example.org>");
+        const QString id = r.g.addMessage(m, false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(id) && !r.sync->isBusy(), 20000);
+        QCOMPARE(r.cache.message(id).cc, m.cc);
+
+        QSignalSpy changed(r.sync.get(), &SyncEngine::messagesChanged);
+        r.sync->trash(id);
+        QVERIFY(r.cache.message(id).labels.contains(QStringLiteral("TRASH"))); // optimistic
+        QVERIFY(!r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+        QVERIFY(changed.count() >= 1);
+        QTRY_COMPARE(r.g.trashCalls, QStringList{id});
+        QTRY_VERIFY(r.g.messages().value(id).labels.contains(QStringLiteral("TRASH")));
+
+        // Gmail refuses (404): the optimistic move is rolled back.
+        CachedMessage local;
+        local.id = QStringLiteral("gone-at-google");
+        local.subject = QStringLiteral("Deleted elsewhere");
+        local.labels = {QStringLiteral("INBOX")};
+        r.cache.upsert(local);
+        r.sync->trash(local.id);
+        QVERIFY(r.cache.message(local.id).labels.contains(QStringLiteral("TRASH")));
+        QTRY_COMPARE(r.cache.message(local.id).labels, QStringList{QStringLiteral("INBOX")});
+    }
+
     void parserHandlesCharsetsAndAddresses()
     {
         QCOMPARE(MessageParser::splitAddress(QStringLiteral("\"Raman, Priya\" <priya@example.com>")),

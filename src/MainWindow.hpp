@@ -25,6 +25,9 @@ class MessageListModel;
 class MessageFilterProxy;
 class NewMailSound;
 class SafeHtmlView;
+class MessageView;
+class MessageWindow;
+struct ViewMessage;
 class ConnectDialog;
 enum class ThemeMode;
 } // namespace zmail::ui
@@ -55,9 +58,20 @@ public:
     void selectMailbox(const QString &key);
     void setTheme(zmail::ui::ThemeMode mode);
 
+    // Preview pane under the list (Eudora) or to its right; remembered.
+    void setPreviewRight(bool right);
+    bool previewRight() const;
+    zmail::ui::MessageView *messageView() const { return m_view; }
+    // Open the list row (proxy index) in its own window, as double-click does.
+    zmail::ui::MessageWindow *openMessageWindow(const QModelIndex &proxyIndex);
+    QList<zmail::ui::MessageWindow *> messageWindows() const;
+
 public slots:
     void showAbout();
     void checkForUpdates();
+
+protected:
+    void closeEvent(QCloseEvent *ev) override;
 
 private:
     void buildMenus();
@@ -75,12 +89,17 @@ private:
     void updateSyncLabel(const QString &status = {});
     QString labelForMailbox(const QString &key) const;
     void showLiveMessage(int row);
+    zmail::ui::ViewMessage sampleViewMessage(int row) const;
+    void trashMessage(const QString &id);
+    void saveSplitters();
+    void restoreListSplitter();
 
     QSplitter *m_splitter = nullptr;
     QSplitter *m_listSplitter = nullptr;
     QTreeWidget *m_mailboxes = nullptr;
     QTreeView *m_list = nullptr;
-    zmail::ui::SafeHtmlView *m_preview = nullptr;
+    zmail::ui::MessageView *m_view = nullptr;
+    QList<QPointer<zmail::ui::MessageWindow>> m_messageWindows;
     QLineEdit *m_search = nullptr;
     QLabel *m_syncLabel = nullptr;
     QLabel *m_countLabel = nullptr;

@@ -18,14 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check bundled sound licenses
-        run: ./tools/check-sound-licenses.sh
+      - name: Check bundled asset licenses (sounds, icons)
+        run: ./tools/check-asset-licenses.sh
 
       - name: Install Qt 6 + build tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            qt6-base-dev qt6-qpa-plugins libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
+            qt6-base-dev qt6-svg-dev qt6-qpa-plugins libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -45,6 +45,7 @@ jobs:
           dpkg-deb -c zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/bin/zmail$'
           dpkg-deb -f zmail_*_amd64.deb Version | grep -qx '0.1.0'
+          dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6svg6'
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v7

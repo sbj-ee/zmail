@@ -1,0 +1,41 @@
+# Bundled icon licenses: one line per file under assets/icons/.
+# Format: <path relative to assets/icons> | <source> | <license> | <url>
+# Allowed: ISC, MIT, CC0-1.0, original-MIT. Full texts: lucide/LICENSE.
+lucide/archive.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/archive.svg
+lucide/baseline.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/baseline.svg
+lucide/bold.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/bold.svg
+lucide/clock.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/clock.svg
+lucide/file-archive.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/file-archive.svg
+lucide/file-image.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/file-image.svg
+lucide/file-text.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/file-text.svg
+lucide/flag.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/flag.svg
+lucide/folder-open.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/folder-open.svg
+lucide/folder.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/folder.svg
+lucide/forward.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/forward.svg
+lucide/inbox.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/inbox.svg
+lucide/italic.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/italic.svg
+lucide/link.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/link.svg
+lucide/list-ordered.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/list-ordered.svg
+lucide/list.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/list.svg
+lucide/mail-open.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/mail-open.svg
+lucide/mail.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/mail.svg
+lucide/paperclip.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/paperclip.svg
+lucide/quote.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/quote.svg
+lucide/refresh-cw.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/refresh-cw.svg
+lucide/reply-all.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/reply-all.svg
+lucide/reply.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/reply.svg
+lucide/search.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/search.svg
+lucide/send-horizontal.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/send-horizontal.svg
+lucide/send.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/send.svg
+lucide/shield-alert.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/shield-alert.svg
+lucide/signature.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/signature.svg
+lucide/spell-check.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/spell-check.svg
+lucide/square-pen.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/square-pen.svg
+lucide/star.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/star.svg
+lucide/tag.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/tag.svg
+lucide/text-align-center.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/text-align-center.svg
+lucide/text-align-end.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/text-align-end.svg
+lucide/text-align-start.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/text-align-start.svg
+lucide/trash.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/trash.svg
+lucide/type.svg | Lucide Icons (lucide-icons/lucide@500620a), derived from Feather (Cole Bemis) | MIT | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/type.svg
+lucide/underline.svg | Lucide Icons (lucide-icons/lucide@500620a) | ISC | https://github.com/lucide-icons/lucide/blob/500620a2e8123f8d1db191538886dc0c223f69a9/icons/underline.svg

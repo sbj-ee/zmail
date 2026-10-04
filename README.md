@@ -89,6 +89,8 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - **View → Preview Pane** shows the preview below the list or to its right.
   Drag the divider to resize it; zmail remembers the layout.
 - Double-click a message (or press Ctrl+O) to open it in its own window.
+- **Settings → Row Stripes** sets how strongly alternate rows in the message
+  list are shaded (a slider with Off / Subtle / Normal / Strong presets).
 
 ## License
 

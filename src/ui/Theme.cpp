@@ -1,6 +1,9 @@
 #include "Theme.h"
 
 #include <QApplication>
+#include <QString>
+#include <QVariant>
+#include <algorithm>
 #include <QStyleFactory>
 #include <QStyleHints>
 #include <cmath>
@@ -41,7 +44,7 @@ QPalette lightPalette()
     p.setColor(QPalette::AlternateBase, QColor(0xf6, 0xf7, 0xf9));
     p.setColor(QPalette::ToolTipBase, QColor(0xff, 0xff, 0xf0));
     p.setColor(QPalette::ToolTipText, text);
-    p.setColor(QPalette::PlaceholderText, QColor(0x8a, 0x8f, 0x96));
+    p.setColor(QPalette::PlaceholderText, QColor(0x6b, 0x70, 0x78)); // >= 4.5:1 on Base, 3:1 on strong stripes
     p.setColor(QPalette::Text, text);
     p.setColor(QPalette::Button, QColor(0xf4, 0xf5, 0xf6));
     p.setColor(QPalette::ButtonText, text);
@@ -130,6 +133,64 @@ QColor rowTint(const QColor &rule, const QColor &base)
     return QColor::fromRgbF(base.redF() * (1 - a) + rule.redF() * a,
                             base.greenF() * (1 - a) + rule.greenF() * a,
                             base.blueF() * (1 - a) + rule.blueF() * a);
+}
+
+int stripePreset(StripeStrength s)
+{
+    switch (s) {
+    case StripeStrength::Off: return 0;
+    case StripeStrength::Subtle: return 20;
+    case StripeStrength::Normal: return 40;
+    case StripeStrength::Strong: return 72;
+    }
+    return kStripeDefault;
+}
+
+double stripeTargetContrast(int strength)
+{
+    return 1.0 + std::clamp(strength, 0, kStripeMax) / 200.0;
+}
+
+QColor stripeColor(const QPalette &p, int strength)
+{
+    const QColor base = p.color(QPalette::Base);
+    if (strength <= 0) {
+        return base;
+    }
+    const QColor text = p.color(QPalette::Text);
+    const QColor hl = p.color(QPalette::Highlight);
+    // A hint of the accent keeps the stripe from looking like a disabled row.
+    const QColor toward = QColor::fromRgbF(text.redF() * 0.85 + hl.redF() * 0.15, text.greenF() * 0.85 + hl.greenF() * 0.15,
+                                           text.blueF() * 0.85 + hl.blueF() * 0.15);
+    const double target = stripeTargetContrast(strength);
+    // Binary search on the blend amount (at most halfway to the text colour).
+    double lo = 0.0, hi = 0.5;
+    auto blend = [&](double a) {
+        return QColor::fromRgbF(base.redF() * (1 - a) + toward.redF() * a, base.greenF() * (1 - a) + toward.greenF() * a,
+                                base.blueF() * (1 - a) + toward.blueF() * a);
+    };
+    for (int i = 0; i < 24; ++i) {
+        const double mid = (lo + hi) / 2;
+        (contrastRatio(blend(mid), base) < target ? lo : hi) = mid;
+    }
+    return blend(hi);
+}
+
+int stripeStrengthFromSetting(const QVariant &v)
+{
+    if (!v.isValid()) {
+        return kStripeDefault;
+    }
+    bool ok = false;
+    const int n = v.toString().toInt(&ok);
+    if (ok) {
+        return std::clamp(n, 0, kStripeMax);
+    }
+    const QString l = v.toString().toLower();
+    if (l == QLatin1String("off")) return stripePreset(StripeStrength::Off);
+    if (l == QLatin1String("subtle")) return stripePreset(StripeStrength::Subtle);
+    if (l == QLatin1String("strong")) return stripePreset(StripeStrength::Strong);
+    return kStripeDefault;
 }
 
 QColor suspiciousForeground(const QPalette &p)

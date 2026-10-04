@@ -2,6 +2,7 @@
 #include "MainWindow.hpp"
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
+#include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
@@ -12,6 +13,9 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPushButton>
+#include <QSettings>
+#include <QSlider>
 #include <QSplitter>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -49,6 +53,49 @@ private slots:
             titles << a->text().remove(QLatin1Char('&'));
         }
         QCOMPARE(titles, (QStringList{"File", "Edit", "View", "Message", "Settings", "Help"}));
+    }
+
+    void rowStripesSliderIsRemembered()
+    {
+        QSettings().remove(QStringLiteral("ui/rowStripes"));
+        {
+            MainWindow w;
+            auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+            QCOMPARE(w.stripeStrength(), kStripeDefault);
+            QVERIFY(list->alternatingRowColors());
+            QCOMPARE(list->palette().color(QPalette::AlternateBase), stripeColor(QApplication::palette(), kStripeDefault));
+            QVERIFY(w.findChild<QAction *>(QStringLiteral("actionRowStripes")));
+
+            // Slider previews live; Cancel restores.
+            StripesDialog *dlg = w.showStripesDialog();
+            dlg->slider()->setValue(90);
+            QCOMPARE(list->palette().color(QPalette::AlternateBase), stripeColor(QApplication::palette(), 90));
+            dlg->reject();
+            QCOMPARE(w.stripeStrength(), kStripeDefault);
+            QCOMPARE(list->palette().color(QPalette::AlternateBase), stripeColor(QApplication::palette(), kStripeDefault));
+
+            // Presets set the slider; Off turns stripes off.
+            dlg = w.showStripesDialog();
+            dlg->findChild<QPushButton *>(QStringLiteral("stripePresetOff"))->click();
+            QCOMPARE(dlg->slider()->value(), 0);
+            QVERIFY(!list->alternatingRowColors());
+            dlg->findChild<QPushButton *>(QStringLiteral("stripePresetStrong"))->click();
+            QCOMPARE(dlg->slider()->value(), stripePreset(StripeStrength::Strong));
+            dlg->slider()->setValue(55);
+            dlg->accept();
+            QCOMPARE(w.stripeStrength(), 55);
+
+            // Theme switch recomputes the stripe; other roles follow the theme.
+            w.setTheme(ThemeMode::Dark);
+            QCOMPARE(list->palette().color(QPalette::AlternateBase), stripeColor(darkPalette(), 55));
+            QCOMPARE(list->palette().color(QPalette::Base), darkPalette().color(QPalette::Base));
+            w.setTheme(ThemeMode::Light);
+            QCOMPARE(list->palette().color(QPalette::Base), lightPalette().color(QPalette::Base));
+        }
+        QCOMPARE(QSettings().value(QStringLiteral("ui/rowStripes")).toInt(), 55);
+        MainWindow again;
+        QCOMPARE(again.stripeStrength(), 55);
+        QSettings().remove(QStringLiteral("ui/rowStripes"));
     }
 
     void helpMenuHasAboutAndUpdates()

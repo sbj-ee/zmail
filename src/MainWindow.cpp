@@ -17,6 +17,7 @@
 #include "ui/MessageWindow.h"
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
+#include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
@@ -126,6 +127,7 @@ MainWindow::MainWindow(QWidget *parent)
     buildStatusBar();
     findChild<QAction *>(QString::fromLatin1(previewRight() ? "actionPreviewRight" : "actionPreviewBelow"))->setChecked(true);
     findChild<QAction *>(QStringLiteral("actionDarkMail"))->setChecked(m_view->darkMail());
+    applyStripes();
     selectMailbox(QStringLiteral("In"));
 
     // Poll on window focus as well as on the 30 s timer.
@@ -261,6 +263,10 @@ void MainWindow::buildMenus()
     later(settings, tr("&Rules (Sounds && Colours)\u2026"));
     QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
     sigs->setObjectName(QStringLiteral("actionSignatures"));
+    settings->addSeparator();
+    m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
+    QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
+    stripes->setObjectName(QStringLiteral("actionRowStripes"));
 
     QMenu *help = addMenu("menuHelp", tr("&Help"));
     QAction *about = help->addAction(tr("&About zmail"), this, &MainWindow::showAbout);
@@ -668,6 +674,7 @@ void MainWindow::refreshIcons()
     populateMailboxes();
     selectMailbox(box);
     m_model->paletteChanged();
+    applyStripes();
     if (cur.isValid()) {
         m_list->setCurrentIndex(cur);
     }
@@ -1124,4 +1131,51 @@ void MainWindow::trashMessage(const QString &id)
         m_shownId.clear();
     }
     statusBar()->showMessage(tr("Moved to Trash."), 5000);
+}
+
+void MainWindow::setStripeStrength(int strength)
+{
+    m_stripes = std::clamp(strength, 0, kStripeMax);
+    QSettings().setValue(QStringLiteral("ui/rowStripes"), m_stripes);
+    applyStripes();
+}
+
+StripesDialog *MainWindow::showStripesDialog()
+{
+    auto *dlg = new StripesDialog(m_stripes, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &StripesDialog::strengthChanged, this, [this](int v) {
+        // Live preview without touching the saved value.
+        m_stripes = v;
+        applyStripes();
+    });
+    connect(dlg, &StripesDialog::finishedWith, this, &MainWindow::setStripeStrength);
+    dlg->show();
+    return dlg;
+}
+
+void MainWindow::changeEvent(QEvent *ev)
+{
+    QMainWindow::changeEvent(ev);
+    if (ev->type() == QEvent::ApplicationPaletteChange) {
+        applyStripes();
+    }
+}
+
+void MainWindow::applyStripes()
+{
+    if (!m_list) {
+        return;
+    }
+    // The application palette with the list's own stripe colour. Redone on
+    // every theme/palette change (setTheme, changeEvent).
+    const QPalette app = QApplication::palette();
+    QPalette p = app;
+    const QColor stripe = stripeColor(app, m_stripes);
+    for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        p.setColor(group, QPalette::AlternateBase, stripe);
+    }
+    m_list->setPalette(p);
+    m_list->setAlternatingRowColors(m_stripes > 0);
+    m_list->viewport()->update();
 }

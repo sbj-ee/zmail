@@ -1,0 +1,93 @@
+#pragma once
+
+#include <QDateTime>
+#include <QSqlDatabase>
+#include <QString>
+#include <QStringList>
+
+namespace zmail {
+
+struct CachedLabel
+{
+    QString id;        // "INBOX", "Label_123"
+    QString name;      // "INBOX", "Receipts/2026"
+    QString type;      // "system" | "user"
+    int unread = 0;
+    int total = 0;
+    QString color;     // background colour (#rrggbb) or ""
+};
+
+struct CachedMessage
+{
+    QString id;
+    QString threadId;
+    qint64 historyId = 0;
+    qint64 internalDateMs = 0;
+    QString fromName;
+    QString fromAddr;
+    QString to;
+    QString subject;
+    QString snippet;
+    qint64 size = 0;
+    QStringList labels;
+    bool hasAttachment = false;
+    // Filled once the full message has been fetched.
+    bool hasBody = false;
+    QString bodyText;
+    QString bodyHtml;
+    QStringList attachments;
+
+    bool unread() const { return labels.contains(QStringLiteral("UNREAD")); }
+    QDateTime date() const { return QDateTime::fromMSecsSinceEpoch(internalDateMs); }
+};
+
+// Per-account SQLite cache (~/.local/share/zmail/<account>/zmail.db, dir 0700)
+// with an FTS5 index over subject/from/to/snippet/body.
+class MailCache
+{
+public:
+    MailCache();
+    ~MailCache();
+    MailCache(const MailCache &) = delete;
+    MailCache &operator=(const MailCache &) = delete;
+
+    static QString defaultPath(const QString &account);
+
+    bool open(const QString &path);
+    bool isOpen() const;
+    QString lastError() const { return m_error; }
+    bool hasFts5() const { return m_fts5; }
+
+    bool begin();
+    bool commit();
+
+    QString meta(const QString &key) const;
+    void setMeta(const QString &key, const QString &value);
+    qint64 historyId() const { return meta(QStringLiteral("historyId")).toLongLong(); }
+    void setHistoryId(qint64 id) { setMeta(QStringLiteral("historyId"), QString::number(id)); }
+
+    void replaceLabels(const QList<CachedLabel> &labels);
+    QList<CachedLabel> labels() const;
+
+    // Insert or update metadata; keeps an already-fetched body.
+    void upsert(const CachedMessage &m);
+    void setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments);
+    void setLabels(const QString &id, const QStringList &labels);
+    void modifyLabels(const QString &id, const QStringList &add, const QStringList &remove);
+    void remove(const QString &id);
+    void clearMessages();
+    bool contains(const QString &id) const;
+
+    CachedMessage message(const QString &id) const;
+    QList<CachedMessage> messages(const QString &labelId, int limit = 5000) const;
+    int count(const QString &labelId = {}) const;
+    QStringList search(const QString &ftsQuery, int limit = 200) const;
+
+private:
+    bool exec(const QString &sql);
+    QString m_conn;
+    QString m_error;
+    bool m_fts5 = false;
+};
+
+} // namespace zmail

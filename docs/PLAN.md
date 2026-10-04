@@ -104,27 +104,32 @@ install under its own 100-user cap and within the personal-use exception.
 
 ## 3. Google Cloud setup (Stephen does this once)
 
-1. Go to <https://console.cloud.google.com/> and **create a project** named `zmail-personal`.
-2. **APIs & Services → Library**: enable the **Gmail API**. If you want contacts sync, also enable the **People API**.
-3. **Google Auth Platform → Branding / Audience** (the OAuth consent screen):
-   app name `zmail`, support email stevebj.ee@gmail.com, **User type: External**.
-4. **Audience → Test users**: add stevebj.ee@gmail.com. This is needed while in Testing.
-5. **Data Access → Add scopes**:
-   - `https://www.googleapis.com/auth/gmail.modify` (restricted)
-   - `openid`, `https://www.googleapis.com/auth/userinfo.email`
-   - optional: `https://www.googleapis.com/auth/contacts.readonly` and
-     `https://www.googleapis.com/auth/contacts.other.readonly` [10] (sensitive)
-6. **Clients → Create client → Application type: Desktop app**, name `zmail
-   desktop`. Download the JSON.
-7. Save it as `~/.config/zmail/oauth-client.json`, then `chmod 600` it. zmail
-   reads only this path, or `$ZMAIL_OAUTH_CLIENT` if set. It refuses to start
-   sign-in if the file is group- or world-readable, and offers to fix the
-   mode. The repo's `.gitignore` excludes `client_secret*.json` and
+Matches the first-run dialog and the README's "Connect your Gmail" (PR #3):
+
+1. <https://console.cloud.google.com/>: **create a project** (e.g. `zmail`).
+2. **APIs & Services → Library**: enable the **Gmail API**. (People API later,
+   for contacts sync.)
+3. **Google Auth Platform → Get started** (Branding): app name `zmail`,
+   support/contact email stevebj.ee@gmail.com.
+4. **Audience**: **User type: External**, then **Publish app** → **In
+   production** (unverified; don't submit for verification). No test-user
+   list is needed in production, and refresh tokens don't hit the 7-day
+   Testing expiry (§2.1).
+5. **Data Access** (optional): add `https://www.googleapis.com/auth/gmail.modify`.
+   zmail requests exactly `gmail.modify openid email` at sign-in either way.
+6. **Clients → Create client → Application type: Desktop app**, name `zmail`.
+   **Download JSON** in the "OAuth client created" box right away (Google
+   may not show the secret again) → `~/Downloads/client_secret_<id>.apps.googleusercontent.com.json`.
+7. In zmail's **Connect your Gmail** dialog, **Choose client file…** copies it
+   to `~/.config/zmail/oauth-client.json` (or `$ZMAIL_OAUTH_CLIENT`) with mode
+   0600, directory 0700, via an `O_EXCL` temp file + rename. A file that's
+   group/other-readable gets a warning and a **Fix (chmod 600)** button, and
+   sign-in stays disabled until it's 0600. Only the standard `installed`
+   format is accepted; a "Web application" client or non-Google endpoints are
+   refused. The repo's `.gitignore` excludes `client_secret*.json` and
    `oauth-client*.json`. **Never commit this file.**
-8. **Audience → Publish app** (move to **In production**). Don't submit for
-   verification. This avoids the 7-day refresh-token expiry (§2.1). On first
-   sign-in, accept the "Google hasn't verified this app" screen via
-   **Advanced → Go to zmail (unsafe)**.
+8. **Sign in with Google** → browser → **Advanced → Go to zmail (unsafe)** →
+   allow Gmail access.
 
 **About the client secret:** for Desktop clients, Google says the secret is
 embedded in the app and "is obviously not treated as a secret" [1]. Security
@@ -689,6 +694,62 @@ people appear.
 zwriter's `UpdateChecker`: GitHub `releases/latest`, a 5 s timeout, soft
 failure, semver comparison, and a rate-limit message.
 
+### 4.16 PR #3 (v0.2.0): what's implemented
+
+- `core/ClientConfig`: parse/validate/install the Desktop client JSON (0600).
+- `core/AuthManager` + `core/LoopbackServer` + `core/Pkce`: loopback redirect
+  on `127.0.0.1:<random port>` (one-shot, 5-minute timeout), PKCE S256,
+  `state` compared in constant time, `access_type=offline&prompt=consent`,
+  system browser via `QDesktopServices`. Verifies the granted scope includes
+  `gmail.modify` and reads the address from the `id_token`. Refresh tokens
+  go to QtKeychain (`KeychainTokenStore`, service `zmail`, key
+  `refresh-token:<email>`); there is no plaintext fallback. Concurrent callers
+  share one refresh. `invalid_grant` deletes the stored token and raises a
+  re-sign-in prompt. Sign out revokes at `oauth2.googleapis.com/revoke`.
+- Logging: categories `zmail.auth`, `zmail.sync`, `zmail.gmail`. Secrets,
+  codes and tokens are never logged (tests assert this).
+- `core/GmailClient`: REST v1 with a quota token bucket (6,000 units/min,
+  600 burst), exponential backoff + jitter on 429/5xx/rate-limit 403
+  (honours `Retry-After`, up to 6 attempts), and a single refresh-and-retry on
+  401.
+- `core/SyncEngine`: profile `historyId` first, `labels.list`, newest 500
+  INBOX messages via `messages.list` + `messages.get?format=metadata`
+  (From/To/Subject/Date, snippet, labels, size), next pages on scroll and
+  other labels' first page when selected. `history.list` (paged) every 30 s
+  and on window focus; a 404 clears the cache and does a full resync. New
+  INBOX+UNREAD arrivals emit `newMail` → bundled CC0 chime
+  (`assets/sounds/new-mail.wav`, generated by `tools/make-new-mail-chime.py`).
+- `core/MailCache`: SQLite (WAL) per account with `meta`, `labels`,
+  `messages`, `message_labels` and an FTS5 external-content `messages_fts`
+  kept in sync by triggers. (Raw `.eml` blob store, `pending_ops` and the
+  query parser are still M2/M3 work.)
+- Reading: `messages.get?format=full` on select, parsed from JSON (MIME tree
+  walk, base64url, charset via `QStringDecoder`), cached. Opening a message
+  calls `messages.modify` with `removeLabelIds: ["UNREAD"]` (optimistic).
+  Live mail is never auto-opened, so nothing is marked read by accident.
+- Viewer (interim): `ui/SafeHtmlView` on QTextBrowser, which has no JS engine.
+  `loadResource` refuses everything but `data:` (remote, `file:`, `cid:`
+  images blocked), the HTML is stripped of scripts/iframes/forms/event
+  handlers/`javascript:` URLs, and link clicks show the real URL and ask. The
+  QtWebEngine viewer from §4.4 is a follow-up PR, to keep its Chromium
+  sandbox/AppArmor setup and CI cost out of this one.
+- UI: `ui/ConnectDialog` (first run, sign-in, waiting-for-browser with a
+  copyable URL, re-auth notice); File → Sign In / Sign Out; the mailbox tree
+  maps INBOX→In, SENT→Out, SPAM→Junk/Suspicious, TRASH→Trash, with Starred,
+  Important, Drafts and user labels (nested on `/`, Gmail colours, unread
+  counts) under Gmail Labels. Without a session (`--offline`, tests,
+  screenshots) the sample data is shown.
+- Tests: `tests/mock/MockGoogle` is an in-process HTTP server for the auth,
+  token, revoke and Gmail endpoints (PKCE verified server-side, fault
+  injection, history expiry). `tst_auth`, `tst_sync` and `tst_connect` cover
+  PKCE, state mismatch, refresh, `invalid_grant`, revoke, client-file
+  handling, labels, initial sync and paging, history paging, 404 resync,
+  429/503 backoff, 401 retry, the rate limiter, full fetch + mark-read, the
+  new-mail chime, the sanitizer, and that no secret reaches the logs. CI
+  never calls Google.
+- Not yet: sending (next PR), attachments download, batch requests, the
+  WebEngine viewer, the background fetch of older mail beyond scroll paging.
+
 ## 5. v1 features vs later
 
 **v1**
@@ -803,11 +864,12 @@ failure, semver comparison, and a rate-limit message.
 
 ## 7. Milestones
 
-- **M0 (this PR):** PLAN.md and scaffold (window, menus, About, update
+- **M0 (PR #1, done):** PLAN.md and scaffold (window, menus, About, update
   check, CI, `.deb`)
-- **M1:** auth (loopback/PKCE, keyring), Google setup doc, `oauth-client.json`
-  handling
-- **M2:** sync engine, cache, blob store, FTS5 search, message list
+- **M1 (PR #3, v0.2.0, done):** auth (loopback/PKCE, keyring), Google setup
+  doc, `oauth-client.json` handling
+- **M2 (PR #3 in part):** sync engine, cache and FTS5 table, message list done;
+  blob store and the search query parser remain
 - **M3:** MIME parse, safe viewer, attachments (receiving), security scanner
 - **M4:** rules (sound, color, notification), notifications, DND, quiet hours,
   themes

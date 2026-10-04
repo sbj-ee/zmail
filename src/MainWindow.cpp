@@ -2,15 +2,27 @@
 
 #include "AboutDialog.hpp"
 #include "UpdateChecker.hpp"
+#include "core/MailCache.h"
+#include "core/MailSession.h"
+#include "core/MessageParser.h"
+#include "core/SyncEngine.h"
 #include "ui/ComposeWindow.h"
+#include "ui/ConnectDialog.h"
+#include "ui/NewMailSound.h"
+#include "ui/SafeHtmlView.h"
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
+#include <algorithm>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QGuiApplication>
+#include <QPointer>
+#include <QScrollBar>
+#include <QTimer>
 #include <QDesktopServices>
 #include <QHeaderView>
 #include <QLabel>
@@ -70,11 +82,24 @@ MainWindow::MainWindow(QWidget *parent)
     m_proxy = new MessageFilterProxy(this);
     m_proxy->setSourceModel(m_model);
 
+    m_sound = new NewMailSound(this);
+    m_reloadTimer = new QTimer(this);
+    m_reloadTimer->setSingleShot(true);
+    m_reloadTimer->setInterval(150);
+    connect(m_reloadTimer, &QTimer::timeout, this, &MainWindow::reloadFromCache);
+
     buildMenus();
     buildToolbar();
     buildPanes();
     buildStatusBar();
     selectMailbox(QStringLiteral("In"));
+
+    // Poll on window focus as well as on the 30 s timer.
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState st) {
+        if (st == Qt::ApplicationActive && m_live && m_session->sync()) {
+            m_session->sync()->pollNow(false);
+        }
+    });
     resize(1180, 760);
 }
 
@@ -101,10 +126,25 @@ void MainWindow::buildMenus()
     QMenu *file = addMenu("menuFile", tr("&File"));
     QAction *nm = file->addAction(tr("&New Message"), this, [this]() { openCompose(); });
     nm->setShortcut(QKeySequence::New);
-    QAction *cm = file->addAction(tr("&Check Mail"), this, [this]() {
-        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 sign-in arrives in M1"));
-    });
+    QAction *cm = file->addAction(tr("&Check Mail"), this, &MainWindow::checkMail);
     cm->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
+    file->addSeparator();
+    m_signInAction = file->addAction(icon(QStringLiteral("log-in")), tr("Sign &In to Gmail\u2026"), this,
+                                     [this]() { showConnectDialog(); });
+    m_signInAction->setObjectName(QStringLiteral("actionSignIn"));
+    m_signInAction->setProperty("lucide", QStringLiteral("log-in"));
+    m_signOutAction = file->addAction(icon(QStringLiteral("log-out")), tr("Sign &Out"), this, [this]() {
+        if (m_session && QMessageBox::question(this, tr("Sign out"),
+                                               tr("Sign out of %1? zmail forgets the saved sign-in and revokes "
+                                                  "it at Google. Your mail stays in Gmail.")
+                                                   .arg(m_session->account())) == QMessageBox::Yes) {
+            m_session->signOut();
+        }
+    });
+    m_signOutAction->setObjectName(QStringLiteral("actionSignOut"));
+    m_signOutAction->setProperty("lucide", QStringLiteral("log-out"));
+    m_signInAction->setEnabled(false);
+    m_signOutAction->setEnabled(false);
     file->addSeparator();
     later(file, tr("&Save Attachments\u2026"));
     later(file, tr("&Print\u2026"), QKeySequence::Print);
@@ -186,9 +226,8 @@ void MainWindow::buildToolbar()
             [this]() { openCompose(); });
     connect(findChild<QAction *>(QStringLiteral("actionReply")), &QAction::triggered, this,
             [this]() { openCompose(true); });
-    connect(findChild<QAction *>(QStringLiteral("actionCheckMail")), &QAction::triggered, this, [this]() {
-        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 sign-in arrives in M1"));
-    });
+    connect(findChild<QAction *>(QStringLiteral("actionCheckMail")), &QAction::triggered, this,
+            &MainWindow::checkMail);
 
     auto *spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -259,7 +298,7 @@ void MainWindow::buildPanes()
     connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &cur) { showMessage(cur); });
 
-    m_preview = new QTextBrowser(m_listSplitter);
+    m_preview = new SafeHtmlView(m_listSplitter);
     m_preview->setObjectName(QStringLiteral("previewPane"));
     m_preview->setOpenLinks(false);
 
@@ -267,12 +306,25 @@ void MainWindow::buildPanes()
     connect(m_mailboxes, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *it) {
         if (it && !it->data(0, Qt::UserRole).toString().isEmpty()) {
             m_proxy->setMailbox(it->data(0, Qt::UserRole).toString());
+            if (m_live && m_session->sync()) {
+                m_session->sync()->ensureLabel(labelForMailbox(m_proxy->mailbox()));
+            }
             updateCounts();
-            if (m_proxy->rowCount() > 0) {
+            // Live mail: don't auto-open (that would mark the newest message read).
+            if (!m_live && m_proxy->rowCount() > 0) {
                 m_list->setCurrentIndex(m_proxy->index(0, 0));
             } else {
                 m_preview->clear();
+                m_shownId.clear();
             }
+        }
+    });
+
+    // Infinite scroll: the next page of this label when the list hits bottom.
+    connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int v) {
+        QScrollBar *sb = m_list->verticalScrollBar();
+        if (m_live && m_session->sync() && sb->maximum() > 0 && v >= sb->maximum() - 2) {
+            m_session->sync()->fetchMore(labelForMailbox(m_proxy->mailbox()));
         }
     });
 
@@ -301,12 +353,12 @@ void MainWindow::populateMailboxes()
         return n;
     };
     auto add = [&](QTreeWidgetItem *parent, const QString &name, const QIcon &ic, const QString &key,
-                   bool countUnread = true) {
+                   bool countUnread = true, int forced = -1) {
         auto *it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_mailboxes);
         it->setText(0, name);
         it->setIcon(0, ic);
         it->setData(0, Qt::UserRole, key);
-        const int n = key.isEmpty() ? 0 : countFor(key, countUnread);
+        const int n = forced >= 0 ? forced : key.isEmpty() ? 0 : countFor(key, countUnread);
         if (n > 0) {
             it->setText(1, QString::number(n));
             it->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
@@ -320,6 +372,66 @@ void MainWindow::populateMailboxes()
         return it;
     };
     const QPalette pal = QApplication::palette();
+    if (m_live && m_session->cache()) {
+        // Real Gmail labels: system ones map onto Eudora's mailboxes, user
+        // labels (nested on "/") go under "Gmail Labels". Unread counts come
+        // from Gmail, so they're right even for mail not cached yet.
+        QHash<QString, zmail::CachedLabel> byId;
+        for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+            byId.insert(l.id, l);
+        }
+        auto unread = [&](const QString &id) { return byId.contains(id) ? byId.value(id).unread : 0; };
+        add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), true, unread(QStringLiteral("INBOX")));
+        QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false, 0);
+        out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
+        QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
+                                    icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
+                                    QStringLiteral("Junk"), false, 0);
+        junk->setForeground(0, suspiciousForeground(pal));
+        junk->setToolTip(0, tr("Gmail Spam"));
+        add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false, 0);
+
+        auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
+        root->setFlags(root->flags() & ~Qt::ItemIsSelectable);
+        struct S { const char *id; QString name; const char *icon; };
+        for (const S &sys : {S{"STARRED", tr("Starred"), "star"}, S{"IMPORTANT", tr("Important"), "flag"},
+                             S{"DRAFT", tr("Drafts"), "square-pen"}}) {
+            const QString id = QString::fromLatin1(sys.id);
+            if (byId.contains(id)) {
+                add(root, sys.name, icon(QString::fromLatin1(sys.icon)), QStringLiteral("gmail:") + id, true,
+                    id == QLatin1String("DRAFT") ? 0 : unread(id));
+            }
+        }
+        QHash<QString, QTreeWidgetItem *> folders;
+        QList<zmail::CachedLabel> user;
+        for (const zmail::CachedLabel &l : byId) {
+            if (l.type == QLatin1String("user")) {
+                user.append(l);
+            }
+        }
+        std::sort(user.begin(), user.end(), [](const auto &a, const auto &b) {
+            return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+        });
+        for (const zmail::CachedLabel &l : user) {
+            QTreeWidgetItem *parent = root;
+            const QStringList parts = l.name.split(QLatin1Char('/'));
+            QString path;
+            for (int i = 0; i + 1 < parts.size(); ++i) {
+                path += (i ? QStringLiteral("/") : QString()) + parts[i];
+                if (!folders.contains(path)) {
+                    auto *f = add(parent, parts[i], icon(QStringLiteral("folder")), QString());
+                    f->setFlags(f->flags() & ~Qt::ItemIsSelectable);
+                    folders.insert(path, f);
+                }
+                parent = folders.value(path);
+            }
+            const QColor c = l.color.isEmpty() ? pal.color(QPalette::Mid) : QColor(l.color);
+            QTreeWidgetItem *it = add(parent, parts.last(), swatch(c, 14), QStringLiteral("gmail:") + l.id, true, l.unread);
+            folders.insert(l.name, it);
+        }
+        m_mailboxes->expandAll();
+        return;
+    }
     add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"));
     QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false);
     out->setToolTip(0, tr("Queued and sent mail"));
@@ -369,6 +481,8 @@ void MainWindow::updateCounts()
     QString box = m_proxy->mailbox();
     if (box.startsWith(QLatin1String("label:"))) {
         box = box.mid(6);
+    } else if (box.startsWith(QLatin1String("gmail:")) && m_mailboxes->currentItem()) {
+        box = m_mailboxes->currentItem()->text(0);
     }
     m_countLabel->setText(tr("%1: %2 messages, %3 unread, %4 K  \u00b7  %5 queued ")
                               .arg(box)
@@ -393,7 +507,7 @@ void MainWindow::selectMailbox(const QString &key)
     }
     m_proxy->setMailbox(key);
     updateCounts();
-    if (m_proxy->rowCount() > 0) {
+    if (!m_live && m_proxy->rowCount() > 0) {
         m_list->setCurrentIndex(m_proxy->index(0, 0));
     }
 }
@@ -402,6 +516,11 @@ void MainWindow::showMessage(const QModelIndex &proxyIndex)
 {
     if (!proxyIndex.isValid()) {
         m_preview->clear();
+        m_shownId.clear();
+        return;
+    }
+    if (m_live) {
+        showLiveMessage(m_proxy->mapToSource(proxyIndex).row());
         return;
     }
     const MailItem &m = m_model->item(m_proxy->mapToSource(proxyIndex).row());
@@ -499,4 +618,298 @@ void MainWindow::checkForUpdates()
     statusBar()->showMessage(tr("Checking for updates\u2026"));
     m_updates->checkForUpdates(QString::fromLatin1(zmail::kVersionString),
                                QString::fromLatin1(zmail::kRepo));
+}
+
+// ---- Gmail session ---------------------------------------------------------
+
+void MainWindow::setSession(zmail::MailSession *session)
+{
+    m_session = session;
+    if (!session) {
+        return;
+    }
+    connect(session, &zmail::MailSession::ready, this, [this]() {
+        m_live = true;
+        attachSync();
+        reloadFromCache();
+        selectMailbox(QStringLiteral("In"));
+        sessionStateChanged();
+    });
+    connect(session, &zmail::MailSession::stateChanged, this, &MainWindow::sessionStateChanged);
+    connect(session, &zmail::MailSession::reauthRequired, this,
+            [this](const QString &reason) { showConnectDialog(reason); });
+    sessionStateChanged();
+}
+
+void MainWindow::sessionStateChanged()
+{
+    using State = zmail::MailSession::State;
+    const State st = m_session ? m_session->state() : State::NeedsClient;
+    if (m_live && st != State::SignedIn) {
+        // Signed out (or the token was revoked): back to the sample data.
+        m_live = false;
+        m_model->setItems(sampleMail());
+        populateMailboxes();
+        selectMailbox(QStringLiteral("In"));
+    }
+    if (m_signInAction) {
+        m_signInAction->setEnabled(m_session && st != State::SignedIn);
+        m_signOutAction->setEnabled(m_session && st == State::SignedIn);
+    }
+    updateSyncLabel();
+}
+
+void MainWindow::attachSync()
+{
+    zmail::SyncEngine *sync = m_session->sync();
+    if (!sync) {
+        return;
+    }
+    connect(sync, &zmail::SyncEngine::labelsChanged, this, [this]() {
+        const QString box = m_proxy->mailbox();
+        populateMailboxes();
+        const QSignalBlocker block(m_mailboxes);
+        QTreeWidgetItemIterator it(m_mailboxes);
+        while (*it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == box) {
+                m_mailboxes->setCurrentItem(*it);
+                break;
+            }
+            ++it;
+        }
+    });
+    connect(sync, &zmail::SyncEngine::messagesChanged, m_reloadTimer, qOverload<>(&QTimer::start));
+    connect(sync, &zmail::SyncEngine::newMail, this, [this](const QStringList &ids) {
+        m_sound->play();
+        statusBar()->showMessage(tr("%n new message(s)", nullptr, int(ids.size())), 8000);
+    });
+    connect(sync, &zmail::SyncEngine::statusChanged, this, [this](const QString &s) { updateSyncLabel(s); });
+    connect(sync, &zmail::SyncEngine::idle, this, [this]() {
+        m_lastSync = QLocale(QLocale::English).toString(QTime::currentTime(), QStringLiteral("h:mm AP"));
+        updateSyncLabel();
+    });
+    connect(sync, &zmail::SyncEngine::syncError, this,
+            [this](const QString &e) { statusBar()->showMessage(e, 10000); });
+}
+
+QString MainWindow::labelForMailbox(const QString &key) const
+{
+    if (key == QLatin1String("In")) return QStringLiteral("INBOX");
+    if (key == QLatin1String("Out")) return QStringLiteral("SENT");
+    if (key == QLatin1String("Junk")) return QStringLiteral("SPAM");
+    if (key == QLatin1String("Trash")) return QStringLiteral("TRASH");
+    if (key.startsWith(QLatin1String("gmail:"))) return key.mid(6);
+    return {};
+}
+
+void MainWindow::reloadFromCache()
+{
+    if (!m_live || !m_session->cache()) {
+        return;
+    }
+    zmail::MailCache *cache = m_session->cache();
+    QHash<QString, zmail::CachedLabel> labels;
+    for (const zmail::CachedLabel &l : cache->labels()) {
+        labels.insert(l.id, l);
+    }
+    const QPalette pal = QApplication::palette();
+    QList<MailItem> items;
+    for (const zmail::CachedMessage &c : cache->messages({}, 20000)) {
+        MailItem m;
+        m.id = c.id;
+        const bool sent = c.labels.contains(QStringLiteral("SENT"));
+        m.status = c.unread() ? MailStatus::Unread : sent ? MailStatus::Sent : MailStatus::Read;
+        m.priority = MailPriority::Normal;
+        m.hasAttachment = c.hasAttachment;
+        for (const QString &id : c.labels) {
+            const auto it = labels.constFind(id);
+            if (it != labels.constEnd() && it->type == QLatin1String("user")) {
+                m.label = it->name.section(QLatin1Char('/'), -1);
+                m.labelColor = it->color.isEmpty() ? pal.color(QPalette::Mid) : QColor(it->color);
+                break;
+            }
+        }
+        if (sent && !c.labels.contains(QStringLiteral("INBOX"))) {
+            const auto to = zmail::MessageParser::splitAddress(c.to.section(QLatin1Char(','), 0, 0));
+            m.who = to.first;
+            m.address = to.second;
+        } else {
+            m.who = c.fromName;
+            m.address = c.fromAddr;
+        }
+        m.to = c.to;
+        m.date = c.date().toLocalTime();
+        m.sizeBytes = c.size;
+        m.subject = c.subject.isEmpty() ? tr("(no subject)") : c.subject;
+        m.suspicious = c.labels.contains(QStringLiteral("SPAM"));
+        for (const QString &id : c.labels) {
+            if (id == QLatin1String("INBOX")) m.mailboxes << QStringLiteral("In");
+            else if (id == QLatin1String("SENT")) m.mailboxes << QStringLiteral("Out");
+            else if (id == QLatin1String("SPAM")) m.mailboxes << QStringLiteral("Junk");
+            else if (id == QLatin1String("TRASH")) m.mailboxes << QStringLiteral("Trash");
+            m.mailboxes << QStringLiteral("gmail:") + id;
+        }
+        m.preview = c.hasBody ? c.bodyText : c.snippet;
+        m.attachments = c.attachments;
+        items.append(std::move(m));
+    }
+    const QString keep = m_shownId;
+    const int scroll = m_list->verticalScrollBar()->value();
+    m_model->setItems(std::move(items));
+    const int row = keep.isEmpty() ? -1 : m_model->rowForId(keep);
+    if (row >= 0) {
+        const QModelIndex pi = m_proxy->mapFromSource(m_model->index(row, 0));
+        if (pi.isValid()) {
+            const QSignalBlocker block(m_list->selectionModel());
+            m_list->setCurrentIndex(pi);
+            m_shownId = keep;
+        }
+    }
+    m_list->verticalScrollBar()->setValue(scroll);
+    updateCounts();
+}
+
+void MainWindow::showLiveMessage(int row)
+{
+    const MailItem &item = m_model->item(row);
+    const QString id = item.id;
+    m_shownId = id;
+    zmail::SyncEngine *sync = m_session->sync();
+    zmail::MailCache *cache = m_session->cache();
+    if (!sync || !cache) {
+        return;
+    }
+    auto render = [this](const zmail::CachedMessage &c, bool loading, const QString &error) {
+        const QPalette pal = QApplication::palette();
+        const QString dim = pal.color(QPalette::PlaceholderText).name();
+        QString html = QStringLiteral("<html><body style='color:%1'>").arg(pal.color(QPalette::Text).name());
+        if (c.labels.contains(QStringLiteral("SPAM"))) {
+            html += QStringLiteral("<table width='100%' cellpadding='8' style='background:%1; color:%2'><tr><td>"
+                                   "<b>\u26a0 Gmail put this message in Spam.</b> Links and remote images are "
+                                   "blocked; check the sender before replying.</td></tr></table><p></p>")
+                        .arg(suspiciousBackground(pal).name(), suspiciousForeground(pal).name());
+        }
+        html += QStringLiteral("<table width='100%' cellpadding='3' cellspacing='0' style='background:%1'>")
+                    .arg(pal.color(QPalette::AlternateBase).name());
+        auto row = [&](const QString &k, const QString &v) {
+            html += QStringLiteral("<tr><td width='76' align='right' style='color:%1'><b>%2</b></td><td>%3</td></tr>")
+                        .arg(dim, k, v);
+        };
+        row(tr("From:"), QStringLiteral("%1 &lt;%2&gt;").arg(esc(c.fromName), esc(c.fromAddr)));
+        if (!c.to.isEmpty()) {
+            row(tr("To:"), esc(c.to));
+        }
+        row(tr("Subject:"), QStringLiteral("<b>%1</b>").arg(esc(c.subject.isEmpty() ? tr("(no subject)") : c.subject)));
+        const QDateTime dt = c.date().toLocalTime();
+        row(tr("Date:"), esc(QLocale(QLocale::English, QLocale::UnitedStates)
+                                 .toString(dt, QStringLiteral("dddd, MMMM d, yyyy h:mm AP"))
+                             + QLatin1Char(' ') + dt.timeZoneAbbreviation()));
+        if (!c.attachments.isEmpty()) {
+            row(tr("Attached:"), esc(c.attachments.join(QStringLiteral(",  "))));
+        }
+        html += QStringLiteral("</table>");
+        int blocked = 0;
+        QString body;
+        if (loading) {
+            body = QStringLiteral("<p>%1</p><p style='color:%2'><i>%3</i></p>")
+                       .arg(esc(c.snippet), dim, tr("Loading message\u2026"));
+        } else if (!c.bodyHtml.isEmpty()) {
+            body = SafeHtmlView::sanitize(c.bodyHtml, &blocked);
+        } else {
+            body = QStringLiteral("<div style='white-space:pre-wrap'>%1</div>")
+                       .arg(esc(c.bodyText.isEmpty() ? c.snippet : c.bodyText));
+        }
+        if (blocked > 0) {
+            html += QStringLiteral("<p style='color:%1'><small>%2</small></p>")
+                        .arg(dim, tr("%n remote image(s) blocked.", nullptr, blocked));
+        }
+        if (!error.isEmpty()) {
+            html += QStringLiteral("<p style='color:#b3261e'>%1</p>").arg(esc(tr("Couldn't load the message: %1").arg(error)));
+        }
+        html += QStringLiteral("<div style='margin:10px 6px'>") + body + QStringLiteral("</div></body></html>");
+        m_preview->resetBlocked();
+        m_preview->setHtml(html);
+    };
+
+    const zmail::CachedMessage c = cache->message(id);
+    render(c, !c.hasBody, {});
+    if (!c.hasBody) {
+        QPointer<MainWindow> guard(this);
+        sync->fetchBody(id, [guard, id, render](const zmail::CachedMessage &full, const QString &err) {
+            if (guard && guard->m_shownId == id) {
+                render(full, false, err);
+            }
+        });
+    }
+    if (c.unread()) {
+        sync->markRead(id); // messages.modify removeLabelIds: ["UNREAD"]
+        m_model->setStatus(row, MailStatus::Read);
+        updateCounts();
+    }
+}
+
+void MainWindow::checkMail()
+{
+    if (m_live && m_session->sync()) {
+        updateSyncLabel(tr("Checking for new mail\u2026"));
+        m_session->sync()->pollNow(true);
+    } else if (m_session) {
+        showConnectDialog();
+    } else {
+        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 not signed in"));
+    }
+}
+
+void MainWindow::updateSyncLabel(const QString &status)
+{
+    if (!m_syncLabel) {
+        return;
+    }
+    using State = zmail::MailSession::State;
+    if (!m_session) {
+        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 not signed in \u00b7 last sync: never"));
+        return;
+    }
+    switch (m_session->state()) {
+    case State::NeedsClient:
+        m_syncLabel->setText(tr("\u25cf Sample data \u00b7 not connected \u00b7 File \u2192 Sign In to Gmail\u2026 to set up"));
+        return;
+    case State::SignedOut:
+        m_syncLabel->setText(tr("\u25cf Sample data \u00b7 signed out \u00b7 last sync: never"));
+        return;
+    case State::Restoring:
+        m_syncLabel->setText(tr("\u25cf Restoring sign-in\u2026"));
+        return;
+    case State::SigningIn:
+        m_syncLabel->setText(tr("\u25cf Waiting for Google sign-in in your browser\u2026"));
+        return;
+    case State::SignedIn:
+        break;
+    }
+    QString text = QStringLiteral("\u25cf %1").arg(m_session->account());
+    if (!status.isEmpty()) {
+        text += QStringLiteral(" \u00b7 ") + status;
+    }
+    text += QStringLiteral(" \u00b7 ") +
+            (m_lastSync.isEmpty() ? tr("last sync: never")
+                                  : tr("last sync %1 %2").arg(m_lastSync, QDateTime::currentDateTime().timeZoneAbbreviation()));
+    m_syncLabel->setText(text);
+}
+
+ConnectDialog *MainWindow::showConnectDialog(const QString &notice)
+{
+    if (!m_session) {
+        return nullptr;
+    }
+    if (!m_connect) {
+        m_connect = new ConnectDialog(m_session, this);
+        m_connect->setAttribute(Qt::WA_DeleteOnClose);
+    }
+    if (!notice.isEmpty()) {
+        m_connect->setNotice(notice);
+    }
+    m_connect->show();
+    m_connect->raise();
+    m_connect->activateWindow();
+    return m_connect;
 }

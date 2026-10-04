@@ -1,4 +1,5 @@
 #include "MainWindow.hpp"
+#include "core/MailSession.h"
 #include "ui/ComposeWindow.h"
 #include "ui/Theme.h"
 #include "version.hpp"
@@ -22,8 +23,11 @@ int main(int argc, char *argv[])
                              QStringLiteral("mode"), QStringLiteral("light"));
     QCommandLineOption compose(QStringLiteral("compose"),
                                QStringLiteral("Open a sample reply in a compose window (preview)."));
+    QCommandLineOption offline(QStringLiteral("offline"),
+                               QStringLiteral("Don't connect to Gmail; show the built-in sample data."));
     cli.addOption(theme);
     cli.addOption(compose);
+    cli.addOption(offline);
     cli.process(app);
 
     const QString t = cli.value(theme).toLower();
@@ -33,6 +37,16 @@ int main(int argc, char *argv[])
 
     MainWindow w;
     w.show();
+    if (!cli.isSet(offline)) {
+        // Reads ~/.config/zmail/oauth-client.json; refresh token from the keyring.
+        auto *session = zmail::MailSession::createDefault(&app);
+        w.setSession(session);
+        session->restoreSaved();
+        if (session->state() != zmail::MailSession::State::Restoring &&
+            session->state() != zmail::MailSession::State::SignedIn) {
+            w.showConnectDialog(); // first run, or signed out last time
+        }
+    }
     if (cli.isSet(compose)) {
         w.openCompose(true);
     }

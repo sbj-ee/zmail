@@ -25,7 +25,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            qt6-base-dev qt6-svg-dev qt6-qpa-plugins libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
+            qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
+            libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -33,8 +34,8 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+      - name: Test (mock Google only; no network access to Google)
+        run: ctest --test-dir build --output-on-failure --timeout 180
 
       - name: Package .deb
         run: |
@@ -44,8 +45,12 @@ jobs:
           dpkg-deb -I zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/bin/zmail$'
-          dpkg-deb -f zmail_*_amd64.deb Version | grep -qx '0.1.0'
-          dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6svg6'
+          want="$(sed -nE 's/^project\(zmail VERSION ([0-9.]+).*/\1/p' ../CMakeLists.txt)"
+          echo "expect Version $want"
+          dpkg-deb -f zmail_*_amd64.deb Version | grep -qx "$want"
+          dpkg-deb -f zmail_*_amd64.deb Depends | tee /dev/stderr | grep -q 'libqt6svg6'
+          dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6sql6-sqlite'
+          dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6keychain'
 
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v7

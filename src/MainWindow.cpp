@@ -12,6 +12,7 @@
 #include "ui/ConnectDialog.h"
 #include "ui/NewMailSound.h"
 #include "ui/SafeHtmlView.h"
+#include "ui/PrivacyDialog.h"
 #include "ui/SignaturesDialog.h"
 #include "ui/MessageView.h"
 #include "ui/MessageWindow.h"
@@ -263,6 +264,8 @@ void MainWindow::buildMenus()
     later(settings, tr("&Rules (Sounds && Colours)\u2026"));
     QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
     sigs->setObjectName(QStringLiteral("actionSignatures"));
+    QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showPrivacyDialog()->open(); });
+    privacy->setObjectName(QStringLiteral("actionPrivacy"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
@@ -1139,6 +1142,21 @@ void MainWindow::setStripeStrength(int strength)
     m_stripes = std::clamp(strength, 0, kStripeMax);
     QSettings().setValue(QStringLiteral("ui/rowStripes"), m_stripes);
     applyStripes();
+}
+
+PrivacyDialog *MainWindow::showPrivacyDialog()
+{
+    auto *dlg = new PrivacyDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QDialog::accepted, this, []() {
+        // The preview and any open message windows.
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            for (MessageView *v : top->findChildren<MessageView *>()) {
+                v->reloadImagePolicy();
+            }
+        }
+    });
+    return dlg;
 }
 
 StripesDialog *MainWindow::showStripesDialog()

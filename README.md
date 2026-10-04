@@ -82,11 +82,16 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 
 ## Reading mail
 
-- HTML mail is shown on a white page, laid out to the width of the pane, with
-  remote images blocked until you press **Load images** for that message.
+- HTML mail is shown on a white page, laid out to the width of the pane.
   **View → Dark Background for Messages** gives a dark version. Content the
   sender hid (preheaders, dark-mode duplicates) stays hidden, and 600 px
   newsletter cards are centred as in Gmail.
+- Remote images: **Settings → Privacy → Remote images** is *Always load*
+  (default), *Ask* (a **Load images** bar per message, with **Always for this
+  sender**; the allow list is edited or cleared on the same page) or *Never*.
+  Image requests never carry cookies or credentials and are size-capped, and
+  known tracking pixels (1×1 images, read-receipt services) are dropped even
+  in *Always*, unless you untick **Block tracking pixels**.
 - Emoji in subjects and messages use Noto Color Emoji when it's installed
   (`fonts-noto-color-emoji`, recommended by the .deb).
 - Ctrl+= and Ctrl+- (or Ctrl+wheel) zoom the message; Ctrl+0 resets it.

@@ -5,6 +5,8 @@
 #include "ui/HtmlFit.h"
 #include "ui/MessageView.h"
 #include "ui/MessageWindow.h"
+#include "ui/PrivacyDialog.h"
+#include "ui/RemoteImages.h"
 #include "ui/SafeHtmlView.h"
 #include "ui/Theme.h"
 
@@ -14,9 +16,15 @@
 #include <QFile>
 #include <QImage>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
+#include <QRadioButton>
+#include <QCheckBox>
 #include <QPushButton>
 #include <QSettings>
 #include <QFontInfo>
+#include <QDialogButtonBox>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -95,6 +103,7 @@ class ImageServer : public QTcpServer
 {
 public:
     QStringList paths;
+    QList<QByteArray> requests; // raw request heads
     ImageServer()
     {
         QImage img(40, 20, QImage::Format_RGB32);
@@ -114,8 +123,10 @@ public:
                     }
                     const QList<QByteArray> first = pending->left(pending->indexOf("\r\n")).split(' ');
                     paths << QString::fromLatin1(first.value(1));
+                    requests << pending->left(end);
                     pending->remove(0, end + 4);
-                    s->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nConnection: close\r\nContent-Length: " +
+                    s->write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nSet-Cookie: track=me; Path=/\r\n"
+                             "Connection: close\r\nContent-Length: " +
                              QByteArray::number(m_png.size()) + "\r\n\r\n" + m_png);
                     s->disconnectFromHost();
                 });
@@ -413,43 +424,212 @@ private slots:
         QVERIFY(att->isHidden());
     }
 
-    void remoteImagesBlockedUntilAsked()
+    static ViewMessage imageMessage(const QString &base, const QString &id, const QString &from)
     {
-        ImageServer server;
-        const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
         ViewMessage m;
-        m.id = QStringLiteral("img");
+        m.id = id;
+        m.from = from;
         m.subject = QStringLiteral("pics");
-        m.bodyHtml = QStringLiteral("<p>Hi</p><img src='%1logo.png' width='40'><img src='%1open.gif' width='1' height='1'>"
+        m.bodyHtml = QStringLiteral("<p>Hi</p><img src='%1logo.png' width='40'>"
+                                    "<img src='%1open.gif' width='1' height='1'>"     // 1x1 pixel
+                                    "<img src='%1wf/open?upn=abc' style='border:0'>" // SendGrid-style open tracker
                                     "<img src='cid:part1'>")
                          .arg(base);
+        return m;
+    }
+
+    void remoteImagesLoadByDefault()
+    {
+        // No setting at all: Always load (Stephen's default), trackers dropped.
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Always);
+        QVERIFY(RemoteImages::blockTrackers());
+        ImageServer server;
+        const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
         MessageView v;
         v.resize(600, 400);
         v.show();
-        v.setMessage(m);
+        v.setMessage(imageMessage(base, QStringLiteral("a"), QStringLiteral("Shop <news@shop.example.com>")));
         auto *bar = v.findChild<QWidget *>(QStringLiteral("remoteImagesBar"));
-        QVERIFY(bar && !bar->isHidden());
-        QCOMPARE(v.blockedImages(), 3);
-        QTest::qWait(200);
-        QVERIFY(server.paths.isEmpty());
-        QCOMPARE(v.body()->remoteFetches(), 0);
-
-        v.findChild<QPushButton *>(QStringLiteral("loadImagesButton"))->click();
-        QVERIFY(v.imagesLoaded());
         QVERIFY(bar->isHidden());
-        QTRY_COMPARE_WITH_TIMEOUT(server.paths.size(), 2, 5000); // cid: parts are never fetched
+        QVERIFY(v.imagesLoaded());
+        QCOMPARE(v.trackersBlocked(), 2);
+        QTRY_COMPARE_WITH_TIMEOUT(server.paths.size(), 1, 5000);
         QTest::qWait(300);
-        QCOMPARE(server.paths.size(), 2); // each image once, re-renders use the cache
-        QVERIFY(server.paths.contains(QStringLiteral("/logo.png")));
+        QCOMPARE(server.paths, QStringList{QStringLiteral("/logo.png")}); // no pixels, no cid:
         QTRY_VERIFY(!v.body()->loadResource(QTextDocument::ImageResource, QUrl(base + QStringLiteral("logo.png")))
                          .value<QImage>()
                          .isNull());
 
-        // Next message: blocked again.
-        m.id = QStringLiteral("img2");
-        v.setMessage(m);
+        // Safeguards: the server set a cookie; it is never sent back.
+        ViewMessage m2 = imageMessage(base, QStringLiteral("b"), QStringLiteral("Shop <news@shop.example.com>"));
+        m2.bodyHtml.replace(QStringLiteral("logo.png"), QStringLiteral("logo2.png"));
+        v.setMessage(m2);
+        QTRY_COMPARE_WITH_TIMEOUT(server.paths.size(), 2, 5000);
+        for (const QByteArray &r : std::as_const(server.requests)) {
+            QVERIFY2(!r.toLower().contains("\r\ncookie:"), r.constData());
+            QVERIFY(!r.toLower().contains("authorization:"));
+        }
+
+        // Tracker blocking off: the pixels load too.
+        RemoteImages::setBlockTrackers(false);
+        server.paths.clear();
+        v.setMessage(imageMessage(base, QStringLiteral("c"), QStringLiteral("x@shop.example.com")));
+        QCOMPARE(v.trackersBlocked(), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(server.paths.contains(QStringLiteral("/open.gif")) &&
+                                     server.paths.contains(QStringLiteral("/wf/open?upn=abc")),
+                                 5000);
+    }
+
+    void trackingPixelsAreRecognised()
+    {
+        using namespace RemoteImages;
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src='https://a.example.com/x.png' width='1' height='1'>")));
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src=\"https://a.example.com/x.png\" height=\"0\">")));
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src='https://a.example.com/x.png' style='width:1px;height:1px'>")));
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src='https://mailtrack.io/trace/mail/abc.png'>")));
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src='https://x.list-manage.com/track/open.php?u=1'>")));
+        QVERIFY(isTrackerImgTag(QStringLiteral("<img src='https://u123.ct.sendgrid.net/wf/open?upn=z'>")));
+        QVERIFY(!isTrackerImgTag(QStringLiteral("<img src='https://cdn.example.com/hero.jpg' width='600'>")));
+        QVERIFY(!isTrackerImgTag(QStringLiteral("<img src='https://cdn.example.com/icon.png' width='16' height='16'>")));
+        QVERIFY(!isTrackerImgTag(QStringLiteral("<img src='https://cdn.example.com/open-house.png' width='120'>")));
+        QVERIFY(!isTrackerImgTag(QStringLiteral("<img src='https://cdn.example.com/a.png' style='max-width:100%'>")));
+    }
+
+    void remoteImagesAskModeBarAndSenderList()
+    {
+        RemoteImages::setMode(RemoteImageMode::Ask);
+        ImageServer server;
+        const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
+        const QString vet = QStringLiteral("Maple Grove Vet <Reminders@MapleGrove-Vet.example.com>");
+        MessageView v;
+        v.resize(700, 400);
+        v.show();
+        v.setMessage(imageMessage(base, QStringLiteral("img"), vet));
+        auto *bar = v.findChild<QWidget *>(QStringLiteral("remoteImagesBar"));
+        QVERIFY(bar && !bar->isHidden());
+        auto *always = v.findChild<QPushButton *>(QStringLiteral("alwaysForSenderButton"));
+        QVERIFY(always && !always->isHidden());
+        QCOMPARE(v.blockedImages(), 4);
+        QTest::qWait(200);
+        QVERIFY(server.paths.isEmpty());
+        QCOMPARE(v.body()->remoteFetches(), 0);
+
+        // "Load images": this message only.
+        v.findChild<QPushButton *>(QStringLiteral("loadImagesButton"))->click();
+        QVERIFY(v.imagesLoaded());
+        QVERIFY(bar->isHidden());
+        QTRY_COMPARE_WITH_TIMEOUT(server.paths.size(), 1, 5000); // trackers and cid: never fetched
+        QTest::qWait(300);
+        QCOMPARE(server.paths.size(), 1); // each image once, re-renders use the cache
+        QVERIFY(RemoteImages::allowedSenders().isEmpty());
+
+        v.setMessage(imageMessage(base, QStringLiteral("img2"), vet)); // next message: blocked again
         QVERIFY(!v.imagesLoaded());
         QVERIFY(!bar->isHidden());
+
+        // "Always for this sender": loads now and remembers the address.
+        always->click();
+        QVERIFY(v.imagesLoaded());
+        QCOMPARE(RemoteImages::allowedSenders(), QStringList{QStringLiteral("reminders@maplegrove-vet.example.com")});
+        v.setMessage(imageMessage(base, QStringLiteral("img3"), QStringLiteral("reminders@maplegrove-vet.example.com")));
+        QVERIFY(v.imagesLoaded());
+        QVERIFY(bar->isHidden());
+        // Someone else still asks.
+        v.setMessage(imageMessage(base, QStringLiteral("img4"), QStringLiteral("Other <other@example.com>")));
+        QVERIFY(!v.imagesLoaded());
+        QVERIFY(!bar->isHidden());
+
+        // No usable address: no "Always for this sender".
+        v.setMessage(imageMessage(base, QStringLiteral("img5"), QStringLiteral("Undisclosed")));
+        QVERIFY(!bar->isHidden());
+        QVERIFY(always->isHidden());
+    }
+
+    void remoteImagesNeverMode()
+    {
+        ImageServer server;
+        const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
+        RemoteImages::allowSender(QStringLiteral("friend@example.com")); // the list doesn't override Never
+        RemoteImages::setMode(RemoteImageMode::Never);
+        MessageView v;
+        v.resize(600, 400);
+        v.show();
+        v.setMessage(imageMessage(base, QStringLiteral("n1"), QStringLiteral("friend@example.com")));
+        QVERIFY(!v.imagesLoaded());
+        QCOMPARE(v.blockedImages(), 4);
+        QVERIFY(v.findChild<QWidget *>(QStringLiteral("remoteImagesBar"))->isHidden()); // no bar to click
+        QTest::qWait(300);
+        QVERIFY(server.paths.isEmpty());
+        QVERIFY(!v.body()->toHtml().contains(QStringLiteral("logo.png")));
+
+        // Switching an open message's policy (Settings > Privacy, OK).
+        RemoteImages::setMode(RemoteImageMode::Always);
+        v.reloadImagePolicy();
+        QVERIFY(v.imagesLoaded());
+        QTRY_COMPARE_WITH_TIMEOUT(server.paths.size(), 1, 5000);
+        RemoteImages::setMode(RemoteImageMode::Never);
+        v.reloadImagePolicy();
+        QVERIFY(!v.imagesLoaded());
+        QVERIFY(!v.body()->toHtml().contains(QStringLiteral("logo.png")));
+    }
+
+    void privacySettingsPage()
+    {
+        MainWindow w;
+        QAction *act = w.findChild<QAction *>(QStringLiteral("actionPrivacy"));
+        QVERIFY(act);
+        QVERIFY(w.findChild<QMenu *>(QStringLiteral("menuSettings"))->actions().contains(act));
+
+        RemoteImages::setAllowedSenders({QStringLiteral("b@example.com"), QStringLiteral("A <a@example.com>")});
+        PrivacyDialog *dlg = w.showPrivacyDialog();
+        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAlways"))->isChecked()); // default
+        QVERIFY(dlg->findChild<QCheckBox *>(QStringLiteral("blockTrackers"))->isChecked());
+        QCOMPARE(dlg->senders(), (QStringList{QStringLiteral("a@example.com"), QStringLiteral("b@example.com")}));
+
+        auto *edit = dlg->findChild<QLineEdit *>(QStringLiteral("addSenderEdit"));
+        auto *add = dlg->findChild<QPushButton *>(QStringLiteral("addSenderButton"));
+        edit->setText(QStringLiteral("not an address"));
+        QVERIFY(!add->isEnabled());
+        edit->setText(QStringLiteral("Pat Example <PAT@Example.com>"));
+        QVERIFY(add->isEnabled());
+        add->click();
+        QCOMPARE(dlg->senders().size(), 3);
+        QVERIFY(dlg->senders().contains(QStringLiteral("pat@example.com")));
+        dlg->senderList()->setCurrentRow(0); // a@example.com
+        dlg->findChild<QPushButton *>(QStringLiteral("removeSenderButton"))->click();
+        QCOMPARE(dlg->senders(), (QStringList{QStringLiteral("b@example.com"), QStringLiteral("pat@example.com")}));
+        dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAsk"))->click();
+
+        // Nothing is saved before OK.
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Always);
+        dlg->save();
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Ask);
+        QCOMPARE(RemoteImages::allowedSenders(),
+                 (QStringList{QStringLiteral("b@example.com"), QStringLiteral("pat@example.com")}));
+        delete dlg;
+
+        // Clear all, Never, OK.
+        dlg = w.showPrivacyDialog();
+        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAsk"))->isChecked());
+        dlg->findChild<QPushButton *>(QStringLiteral("clearSendersButton"))->click();
+        QCOMPARE(dlg->senderList()->count(), 0);
+        dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesNever"))->click();
+        dlg->open();
+        dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Never);
+        QVERIFY(RemoteImages::allowedSenders().isEmpty());
+        QVERIFY(!QSettings().contains(QStringLiteral("privacy/remoteImageSenders")));
+    }
+
+    void senderAddressesAreNormalised()
+    {
+        using RemoteImages::senderAddress;
+        QCOMPARE(senderAddress(QStringLiteral("\"Doe, Jane\" <Jane.Doe@Example.COM>")), QStringLiteral("jane.doe@example.com"));
+        QCOMPARE(senderAddress(QStringLiteral("  bob@example.org ")), QStringLiteral("bob@example.org"));
+        QCOMPARE(senderAddress(QStringLiteral("mailto:x@y.example")), QStringLiteral("x@y.example"));
+        QVERIFY(senderAddress(QStringLiteral("Undisclosed recipients")).isEmpty());
+        QVERIFY(senderAddress(QString()).isEmpty());
+        QCOMPARE(RemoteImages::modeFromKey(QStringLiteral("bogus")), RemoteImageMode::Always);
     }
 
     void zoomShortcutsAndZoomToFit()

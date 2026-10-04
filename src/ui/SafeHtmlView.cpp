@@ -1,5 +1,7 @@
 #include "SafeHtmlView.h"
 
+#include "RemoteImages.h"
+
 #include <QDesktopServices>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
@@ -48,6 +50,16 @@ void SafeHtmlView::fetch(const QUrl &url)
 {
     if (m_pending.contains(url) || m_pending.size() + m_images.size() >= kMaxRemoteImages) {
         return;
+    }
+    // RFC 2606 / 6761 names can't resolve: don't send them to DNS at all.
+    const QString host = url.host().toLower();
+    for (const char *tld : {".example", ".test", ".invalid", ".localhost"}) {
+        if (host.endsWith(QLatin1String(tld)) || host == QLatin1String(tld + 1)) {
+            QImage none(1, 1, QImage::Format_ARGB32);
+            none.fill(Qt::transparent);
+            m_images.insert(url, none);
+            return;
+        }
     }
     if (!m_nam) {
         m_nam = new QNetworkAccessManager(this);
@@ -148,6 +160,30 @@ QString SafeHtmlView::sanitize(const QString &html, int *blockedImages, bool kee
     static const RE remoteImgTag(QStringLiteral("<img\\b[^>]*\\bsrc\\s*=\\s*[\"']?\\s*(https?:|//|cid:)[^>]*>"), opts);
     s.remove(remoteImgTag);
     return s;
+}
+
+QString SafeHtmlView::dropTrackers(const QString &s, int *count)
+{
+    using RE = QRegularExpression;
+    static const RE remoteTag(QStringLiteral("<img\\b[^>]*\\bsrc\\s*=\\s*[\"']?\\s*https?:[^>]*>"),
+                              RE::CaseInsensitiveOption | RE::DotMatchesEverythingOption);
+    int n = 0;
+    QString out;
+    out.reserve(s.size());
+    qsizetype last = 0;
+    for (auto it = remoteTag.globalMatch(s); it.hasNext();) {
+        const auto m = it.next();
+        if (RemoteImages::isTrackerImgTag(m.captured(0))) {
+            out += QStringView(s).mid(last, m.capturedStart() - last);
+            last = m.capturedEnd();
+            ++n;
+        }
+    }
+    out += QStringView(s).mid(last);
+    if (count) {
+        *count = n;
+    }
+    return out;
 }
 
 } // namespace zmail::ui

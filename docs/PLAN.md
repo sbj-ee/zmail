@@ -54,17 +54,18 @@ Libraries (all available as Ubuntu 24.04 packages, all MIT-compatible):
   servers. For installed apps and user devices, Google still recommends
   polling with the sync guide [6]. IMAP IDLE would give instant push, but it
   would need the broad `https://mail.google.com/` scope and an IMAP parser.
-  v1 polls `history.list` every 30 s (configurable, minimum 15 s) and again on
-  window focus. That's close enough to instant for a desk client. An IMAP
-  IDLE "doorbell" on INBOX remains a later option (§9).
+  **Decided: v1 polls `history.list` every 30 s** (configurable in Settings,
+  minimum 15 s) and again on window focus. That's close enough to instant for
+  a desk client. An IMAP IDLE "doorbell" would need the full-mail scope, which
+  was ruled out (§8), so it's off the table unless that decision is revisited.
 - **Raw messages.** `messages.get?format=raw` returns RFC 822 bytes for the
   offline cache. `messages.send` takes RFC 822 bytes that we build with GMime.
-- **Scopes.** We request `gmail.modify` (read, label, archive, send, trash, no
-  permanent delete) [3]. Google classes `https://mail.google.com/`, `gmail.readonly`,
+- **Scopes. Decided: `gmail.modify` only** (read, label, archive, send, trash,
+  no permanent delete) [3]. "Delete" in zmail always means move to Trash. Google classes `https://mail.google.com/`, `gmail.readonly`,
   `gmail.compose`, `gmail.insert`, `gmail.modify` and `gmail.metadata` as
   **restricted** [3], so any useful mail-reading scope makes zmail a
-  restricted-scope app. We don't need permanent delete, so we skip
-  `https://mail.google.com/`. People API scopes are optional (§4.11).
+  restricted-scope app. zmail never requests full mail access
+  (`https://mail.google.com/`). People API scopes are optional (§4.11).
 
 ### 2.1 OAuth token lifetime (the key finding)
 
@@ -75,8 +76,8 @@ only OAuth scopes requested are a subset of name, email address, and user
 profile."* [1] Gmail scopes aren't in that subset. **In Testing mode, zmail
 would make Stephen sign in again every week.**
 
-The fix is to set the app's publishing status to **In production** and leave
-it **unverified**:
+**Decided:** set the app's publishing status to **In production** and leave
+it **unverified** (personal use):
 
 - Apps with restricted scopes normally need verification and, if they store or
   transmit restricted data on servers, a security assessment [3][8]. Google
@@ -232,6 +233,7 @@ configuration. The QtWebEngine setup:
 
 The cost is a larger dependency (`qt6-webengine`, about 150 MB installed).
 For a mail client that has to show real HTML mail, that's worth it.
+**Decided:** Stephen accepts the size.
 
 ### 4.5 Compose and send
 - **Plain text or HTML**, with a toggle per message. The default is set in
@@ -265,7 +267,9 @@ For a mail client that has to show real HTML mail, that's worth it.
 zwriter's `SpellChecker` is a thin Hunspell wrapper: it searches
 `/usr/share/hunspell` and `/usr/share/myspell/dicts` for `en_US.aff/.dic`,
 supports session-only `ignoreWord`, and keeps a persistent
-`addToUserDictionary` at `AppDataLocation/user-dictionary.txt`. Its
+`addToUserDictionary` at `AppDataLocation/user-dictionary.txt`, which
+resolves to `~/.local/share/sbj-ee/zwriter/user-dictionary.txt` because
+zwriter sets organization `sbj-ee`. Its
 `WritingHighlighter` is a `QSyntaxHighlighter` with a pluggable
 "is misspelled" function that draws a red wavy underline. zmail copies both
 (MIT, same author), along with zwriter's CMake Hunspell detection (an
@@ -275,6 +279,18 @@ compose context menu shows up to 8 suggestions, then **Add to Dictionary**
 and **Ignore**. A `QSyntaxHighlighter` works on the QTextDocument, so spell
 check is the same in plain and HTML mode. The `.deb` depends on
 `libhunspell-1.7-0, hunspell-en-us`.
+
+**Decided: share zwriter's personal dictionary.** zmail reads and appends to
+`~/.local/share/sbj-ee/zwriter/user-dictionary.txt`, the same one-word-per-line
+format zwriter uses, instead of keeping its own. A word added in either app
+is known to both:
+- the file is created if it doesn't exist, and is never rewritten in place
+- **Add to Dictionary** appends one line with `O_APPEND`, so writes from both
+  apps don't clobber each other
+- a `QFileSystemWatcher` reloads the file when zwriter changes it
+- Settings → Spelling shows the path and has an override, for anyone who
+  wants a separate file
+- session-only **Ignore** stays per-app
 
 ### 4.7 Attachments (receiving)
 The viewer's attachment bar lists name, size and MIME type, with **Open**,
@@ -307,7 +323,11 @@ Checks:
   different email address or domain ("PayPal <x@evil.tld>"). Confusable
   characters, detected by comparing the Unicode TR39 skeleton of the domain
   and display name (with a bundled confusables table) against known
-  contacts, frequent correspondents and a bundled brand list. Punycode
+  contacts, frequent correspondents and a bundled brand list. The brand list is editable in Settings → Security,
+stored at `~/.config/zmail/brands.json`. The proposed default: major US banks
+and card issuers, PayPal, Venmo, Amazon, Apple, Google, Microsoft,
+DocuSign, Dropbox, FedEx, UPS, USPS, DHL, IRS/SSA, plus Stephen's
+employer domain once he gives it. Punycode
   `xn--` domains. Mixed-script labels. Edit distance ≤ 2 from a known
   contact's domain. `Reply-To` that differs from `From`.
 - **Links** (from the HTML DOM and from text): visible text that looks like a
@@ -327,8 +347,11 @@ Checks:
 The score maps to Clean, Caution or Suspicious. **The UI** shows a warning
 banner above the message listing the reasons, a ⚠ column in the message
 list with the fixed warning color, and "Suspicious:" in notifications.
-**User controls:** Mark Safe / Mark Suspicious (`user_verdicts` table,
-optionally applying the Gmail label `zmail/Suspicious`), and a trusted-sender
+**Gmail label mirror (decided: on by default):** a Suspicious result
+(from the scanner or from the user) applies the Gmail label
+`zmail/Suspicious`, so other devices see it. **Mark Safe** removes the label.
+Settings → Security can turn the mirror off; zmail then keeps verdicts local
+only. **User controls:** Mark Safe / Mark Suspicious (`user_verdicts` table), and a trusted-sender
 allowlist (`trusted_senders`, also fed by the contacts trusted flag). Suspicious
 mail can trigger its own sound through a built-in rule condition
 `scan:suspicious`.
@@ -382,8 +405,10 @@ default sound and logs a warning.
 or bundled. In particular, the Monty Python clip and any other copyrighted
 audio must never enter the public repo. `.gitignore` excludes
 `/sounds-local/`, and review rejects audio outside `assets/sounds/`.
-**Bundled sounds are original (generated by our own script, as zwriter's
-`gen_typewriter_sounds.py` does) or CC0 only.** Each bundled file has an
+**Decided: the default sounds are bundled, and are original (generated by
+our own script, as zwriter's `gen_typewriter_sounds.py` does) or CC0 only.
+Users can pick their own files for any rule, including the default sound.**
+The proposed original set is chime (default), thunk and klaxon. Each bundled file has an
 entry in `assets/sounds/LICENSES` (file name, source/author, license,
 URL). A CI step (`tools/check-sound-licenses.sh`, in this PR) fails the
 build if any `assets/sounds/*.{wav,ogg,mp3}` lacks an entry, or if an entry's
@@ -461,8 +486,13 @@ The Gmail API has **no public scheduled-send**: `messages.send` and
 - **Missed sends** (whose time passed while zmail wasn't running) are listed
   at startup with a prompt: send now, reschedule or cancel. They're never
   sent silently.
-- **Optional `zmail-sender` systemd --user service** (same binary,
-  `zmail --sender`) reads the refresh token from the keyring and sends due
+- **`zmail-sender` systemd --user service. Decided: the `.deb` installs it
+  disabled; turning it on is opt-in from Settings.** The `.deb` ships
+  `/usr/lib/systemd/user/zmail-sender.service`, which the package scripts
+  never enable. **Settings → Sending → "Send scheduled mail while zmail is
+  closed"** runs `systemctl --user enable --now zmail-sender.service`, and
+  turning it off runs `disable --now`. The service is the same binary,
+  `zmail --sender`, which reads the refresh token from the keyring and sends due
   items. To make sure nothing is sent twice, a sender claims a row in
   `BEGIN IMMEDIATE` (`state=sending`, `lease_until`). The Message-ID is
   generated when the item is queued. Before retrying an expired lease, the
@@ -472,7 +502,7 @@ The Gmail API has **no public scheduled-send**: `messages.send` and
   open. With it, mail still only goes out while the machine is awake, logged
   in (the keyring is unlocked) and online. **Nothing is sent while the
   machine is asleep or off.** An optional setting **mirrors queued items as
-  Gmail drafts** (`drafts.create`), so Stephen can send one from his phone if
+  Gmail drafts** (`drafts.create`, covered by `gmail.modify`), so Stephen can send one from his phone if
   needed. zmail deletes the mirror draft after sending.
 
 ### 4.13 Snooze
@@ -480,9 +510,10 @@ The Gmail API has **no public scheduled-send**: `messages.send` and
 are later today (+3 h), tomorrow 8 AM, next week (Monday 8 AM), or a custom
 time. Snoozed messages are hidden from INBOX in the local view. When one
 wakes, it returns to the top of the inbox with a notification and rule
-sound. **Optionally** zmail applies the label `zmail/Snoozed` and removes
-`INBOX` on Gmail so other devices see it, then restores INBOX and removes
-the label on wake. The same caveat as schedule send applies: messages only
+sound. **Decided: Gmail label mirror on by default.** zmail applies the label
+`zmail/Snoozed` and removes `INBOX` on Gmail so other devices see it, then
+restores INBOX and removes the label on wake. Settings can switch snooze to
+local-only. The same caveat as schedule send applies: messages only
 wake while zmail or the `zmail-sender` service is running. Overdue snoozes
 wake at startup.
 
@@ -531,7 +562,7 @@ soft failure, semver comparison, and a rate-limit message.
 - About, Check for Updates, the version in the title, a `.deb`
 
 **Later**
-- Several accounts. An IMAP IDLE doorbell for instant push. HTML signature
+- Several accounts. An IMAP IDLE doorbell for instant push (only if the `gmail.modify`-only decision is revisited). HTML signature
   editor polish (v1 edits HTML signatures in a QTextEdit). Drive links for
   large files. Send-later through the service while the machine is asleep
   (not possible locally). PGP/S/MIME. Gmail filters sync. Writing to Google
@@ -556,6 +587,8 @@ soft failure, semver comparison, and a rate-limit message.
   - signature insertion and swapping, including the `-- ` delimiter and
     placement above quotes
   - spell checker (ignore, add to dictionary, skipping quotes and URLs)
+  - the shared zwriter dictionary (concurrent appends from two processes
+    without lost lines, reload after an external change, path override)
   - encoded-size math against real base64 output
   - AttachmentPolicy (extension × sniffed-type matrix, no exec bit)
   - scanner fixtures (forged lower `Authentication-Results`, homoglyph
@@ -572,7 +605,11 @@ soft failure, semver comparison, and a rate-limit message.
   - outbox scheduling across both 2026/2027 America/Chicago DST transitions
   - lease and claim with two processes (no double send)
   - missed-send prompt
-  - snooze wake and label restore
+  - snooze wake and label restore (`zmail/Snoozed` applied, INBOX restored)
+  - the Suspicious label mirror (applied by default, removed by Mark Safe,
+    nothing sent to Gmail when the mirror is off)
+  - the `.deb` ships `zmail-sender.service` but doesn't enable it (a CI
+    `dpkg-deb -c` check, plus maintainer scripts free of `systemctl enable`)
 - **Renderer:** a WebEngine test page with remote `<img>`, `<script>`, CSS
   `url()` and `<link rel=prefetch>`. The interceptor log must show zero
   allowed external requests until Load images is clicked.
@@ -602,26 +639,38 @@ soft failure, semver comparison, and a rate-limit message.
 - **M7:** schedule send, snooze, `zmail-sender` user service
 - **M8:** polish, a performance pass, the v1.0.0 release `.deb`
 
-## 8. Open questions for Stephen
+## 8. Decisions (2026-10-03)
 
-1. Are you OK publishing the Cloud project as **In production but unverified**
-   (one-time "unverified app" click-through) to avoid weekly re-sign-in?
-2. `gmail.modify` only, with no permanent delete (Trash only)? Or do you want
-   `https://mail.google.com/` for permanent delete or a future IMAP IDLE?
-3. Default poll interval: is 30 s fine?
-4. Should zmail share zwriter's personal dictionary file, or keep its own?
-5. Is QtWebEngine's size (about 150 MB of deps) acceptable for the HTML
-   viewer?
-6. Do you want the `zmail-sender` user service installed (disabled) by the
-   `.deb`, or opt-in from Settings?
-7. Which personal clips should be your defaults (for example "Message for
-   you, sir" as the default new-mail sound)? They stay local and are never
-   bundled. Do you want any original sounds generated for the repo
-   (chime, thunk, klaxon)?
-8. Should snooze and Suspicious mirror to Gmail labels by default, or be
-   local-only by default?
-9. Should the brand list for lookalike checks start with banks, PayPal,
-   Amazon, Microsoft, Google and Apple, plus your employer?
+Stephen settled these on 2026-10-03. The sections above reflect them.
+
+1. **OAuth publishing:** **In production, unverified** (personal use). That
+   avoids the 7-day Testing-mode refresh-token expiry, at the cost of the
+   one-time "unverified app" click-through (§2.1, §3).
+2. **Scope:** **`gmail.modify` only.** No full-mail scope
+   (`https://mail.google.com/`), so no permanent delete (Trash only) and no
+   IMAP IDLE (§2).
+3. **Polling:** **every 30 s**, plus on window focus. It's configurable,
+   with a minimum of 15 s (§2).
+4. **Spell check:** **share the Hunspell personal dictionary with zwriter**
+   (`~/.local/share/sbj-ee/zwriter/user-dictionary.txt`) (§4.6).
+5. **QtWebEngine:** about **150 MB of dependencies is acceptable** for the
+   sandboxed HTML viewer (§4.4).
+6. **Sender service:** the `.deb` **installs `zmail-sender` (systemd --user)
+   disabled**. It's **opt-in from Settings** (§4.12).
+7. **Gmail label mirrors:** **on by default** for snooze (`zmail/Snoozed`,
+   INBOX removed while snoozed) and Suspicious (`zmail/Suspicious`). Both
+   can be switched off (§4.8, §4.13).
+8. **Sounds:** **bundled defaults are original or CC0 only**, plus
+   user-supplied WAV/OGG/MP3 for any rule. Copyrighted clips are never
+   bundled (§4.9).
+
+### Still open
+
+1. **Lookalike brand list:** not answered yet. zmail ships the proposed
+   default in §4.8 (major banks, PayPal, Venmo, Amazon, Apple, Google,
+   Microsoft, DocuSign, Dropbox, the shipping carriers, IRS/SSA), editable
+   in Settings → Security. Stephen can confirm or trim the list, and supply
+   his employer's domain if he wants it added.
 
 ## 9. Sources
 

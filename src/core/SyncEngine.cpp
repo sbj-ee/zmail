@@ -461,4 +461,31 @@ void SyncEngine::markRead(const QString &id)
     });
 }
 
+void SyncEngine::trash(const QString &id)
+{
+    const CachedMessage m = m_cache->message(id);
+    if (m.id.isEmpty()) {
+        return;
+    }
+    const QStringList before = m.labels;
+    m_cache->modifyLabels(id, {QStringLiteral("TRASH")}, {QStringLiteral("INBOX")}); // optimistic
+    emit messagesChanged();
+    m_api->trashMessage(id, [this, id, before](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            m_cache->setLabels(id, before);
+            reportError(err, tr("Moving to Trash"));
+            emit messagesChanged();
+            return;
+        }
+        QStringList labels;
+        for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+            labels.append(l.toString());
+        }
+        if (!labels.isEmpty()) {
+            m_cache->setLabels(id, labels);
+            emit messagesChanged();
+        }
+    });
+}
+
 } // namespace zmail

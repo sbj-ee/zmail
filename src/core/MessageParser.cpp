@@ -106,6 +106,10 @@ CachedMessage fromMetadata(const QJsonObject &msg)
     m.fromName = from.first;
     m.fromAddr = from.second;
     m.to = header(headers, QStringLiteral("To"));
+    m.cc = header(headers, QStringLiteral("Cc"));
+    m.replyTo = header(headers, QStringLiteral("Reply-To"));
+    m.messageIdHeader = header(headers, QStringLiteral("Message-ID")).trimmed();
+    m.references = header(headers, QStringLiteral("References")).simplified();
     m.subject = header(headers, QStringLiteral("Subject"));
     if (m.internalDateMs == 0) {
         m.internalDateMs = QDateTime::fromString(header(headers, QStringLiteral("Date")), Qt::RFC2822Date).toMSecsSinceEpoch();

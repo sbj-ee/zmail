@@ -9,6 +9,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QSet>
 #include <QUuid>
 
 namespace zmail {
@@ -33,10 +34,15 @@ CachedMessage fromRow(const QSqlQuery &q)
     m.bodyText = q.value(13).toString();
     m.bodyHtml = q.value(14).toString();
     m.attachments = q.value(15).toString().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    m.cc = q.value(16).toString();
+    m.replyTo = q.value(17).toString();
+    m.messageIdHeader = q.value(18).toString();
+    m.references = q.value(19).toString();
     return m;
 }
 const char *kCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
-                    "size, labels, has_attachment, has_body, body_text, body_html, attachments";
+                    "size, labels, has_attachment, has_body, body_text, body_html, attachments, cc_addr, reply_to, "
+                    "message_id_hdr, references_hdr";
 } // namespace
 
 MailCache::MailCache()
@@ -111,6 +117,7 @@ bool MailCache::open(const QString &path)
             "thread_id TEXT, history_id INTEGER, internal_date INTEGER, from_name TEXT, from_addr TEXT, "
             "to_addr TEXT, subject TEXT, snippet TEXT, size INTEGER, labels TEXT, has_attachment INTEGER DEFAULT 0, "
             "has_body INTEGER DEFAULT 0, body_text TEXT, body_html TEXT, attachments TEXT)")) &&
+        migrate() &&
         exec(QStringLiteral("CREATE INDEX IF NOT EXISTS messages_date ON messages(internal_date DESC)")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS message_labels (message_id TEXT NOT NULL "
                             "REFERENCES messages(id) ON DELETE CASCADE, label_id TEXT NOT NULL, "
@@ -144,6 +151,24 @@ bool MailCache::open(const QString &path)
         qCWarning(lcSync) << "SQLite has no FTS5; search falls back to LIKE";
     }
     exec(QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', '1')"));
+    return true;
+}
+
+bool MailCache::migrate()
+{
+    // v0.3.0 columns for replies; 0.2.0 caches get them added in place.
+    QSet<QString> have;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.exec(QStringLiteral("PRAGMA table_info(messages)"));
+    while (q.next()) {
+        have.insert(q.value(1).toString());
+    }
+    for (const char *col : {"cc_addr", "reply_to", "message_id_hdr", "references_hdr"}) {
+        if (!have.contains(QLatin1String(col)) &&
+            !exec(QStringLiteral("ALTER TABLE messages ADD COLUMN %1 TEXT").arg(QLatin1String(col)))) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -215,11 +240,15 @@ void MailCache::upsert(const CachedMessage &m)
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
         "INSERT INTO messages(id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, "
-        "snippet, size, labels, has_attachment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) "
+        "snippet, size, labels, has_attachment, cc_addr, reply_to, message_id_hdr, references_hdr) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET thread_id=excluded.thread_id, history_id=excluded.history_id, "
         "internal_date=excluded.internal_date, from_name=excluded.from_name, from_addr=excluded.from_addr, "
         "to_addr=excluded.to_addr, subject=excluded.subject, snippet=excluded.snippet, size=excluded.size, "
-        "labels=excluded.labels, has_attachment=MAX(has_attachment, excluded.has_attachment)"));
+        "labels=excluded.labels, has_attachment=MAX(has_attachment, excluded.has_attachment), "
+        "cc_addr=excluded.cc_addr, reply_to=excluded.reply_to, "
+        "message_id_hdr=COALESCE(NULLIF(excluded.message_id_hdr, ''), message_id_hdr), "
+        "references_hdr=COALESCE(NULLIF(excluded.references_hdr, ''), references_hdr)"));
     q.addBindValue(m.id);
     q.addBindValue(m.threadId);
     q.addBindValue(m.historyId);
@@ -232,6 +261,10 @@ void MailCache::upsert(const CachedMessage &m)
     q.addBindValue(m.size);
     q.addBindValue(m.labels.join(QLatin1Char(' ')));
     q.addBindValue(m.hasAttachment ? 1 : 0);
+    q.addBindValue(m.cc);
+    q.addBindValue(m.replyTo);
+    q.addBindValue(m.messageIdHeader);
+    q.addBindValue(m.references);
     if (!q.exec()) {
         m_error = q.lastError().text();
         qCWarning(lcSync) << "upsert failed:" << m_error;

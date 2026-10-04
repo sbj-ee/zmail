@@ -31,6 +31,7 @@ public:
         QStringList labels;
         QString from;     // "Name <addr>"
         QString to;
+        QString cc;
         QString subject;
         QDateTime date;
         QString snippet;
@@ -98,6 +99,7 @@ public:
     QString lastVerifierChecked;
     bool pkceVerified = false;
     QStringList modifyCalls;   // "id:-UNREAD"
+    QStringList trashCalls;    // message ids sent to users.messages.trash
     int tokensIssued = 0;
 
 private:

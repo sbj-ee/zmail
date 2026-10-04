@@ -47,6 +47,9 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QUrl>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QStyle>
 
 using namespace zmail::ui;
 
@@ -787,6 +790,7 @@ void MainWindow::setSession(zmail::MailSession *session)
         sessionStateChanged();
     });
     connect(session, &zmail::MailSession::stateChanged, this, &MainWindow::sessionStateChanged);
+    installSignInBanner();
     connect(session, &zmail::MailSession::reauthRequired, this,
             [this](const QString &reason) { showConnectDialog(reason); });
     sessionStateChanged();
@@ -1017,6 +1021,78 @@ ConnectDialog *MainWindow::showConnectDialog(const QString &notice)
     m_connect->raise();
     m_connect->activateWindow();
     return m_connect;
+}
+
+void MainWindow::installSignInBanner()
+{
+    using State = zmail::MailSession::State;
+    connect(m_session, &zmail::MailSession::signInFailed, this, &MainWindow::showSignInBanner);
+    connect(m_session, &zmail::MailSession::reauthRequired, this, &MainWindow::showSignInBanner);
+    connect(m_session, &zmail::MailSession::stateChanged, this, [this](State s) {
+        if (s == State::SigningIn || s == State::SignedIn) {
+            hideSignInBanner();
+        }
+    });
+}
+
+void MainWindow::showSignInBanner(const QString &reason)
+{
+    if (!m_signInBanner) {
+        // Its own toolbar row under the main toolbar; not movable or
+        // closable from the context menu, hidden until needed.
+        addToolBarBreak(Qt::TopToolBarArea);
+        m_signInBanner = new QToolBar(tr("Sign-in"), this);
+        m_signInBanner->setObjectName(QStringLiteral("signInBanner"));
+        m_signInBanner->setMovable(false);
+        m_signInBanner->setFloatable(false);
+        m_signInBanner->toggleViewAction()->setVisible(false);
+        m_signInBanner->setContextMenuPolicy(Qt::PreventContextMenu);
+        auto *row = new QWidget(m_signInBanner);
+        auto *h = new QHBoxLayout(row);
+        h->setContentsMargins(8, 4, 8, 4);
+        h->setSpacing(8);
+        auto *ic = new QLabel(row);
+        const int px = style()->pixelMetric(QStyle::PM_SmallIconSize);
+        ic->setPixmap(style()->standardIcon(QStyle::SP_MessageBoxWarning).pixmap(px, px));
+        m_signInBannerText = new QLabel(row);
+        m_signInBannerText->setObjectName(QStringLiteral("signInBannerText"));
+        m_signInBannerText->setWordWrap(true);
+        m_signInBannerText->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        auto *retry = new QPushButton(icon(QStringLiteral("refresh-cw")), tr("&Retry"), row);
+        retry->setObjectName(QStringLiteral("signInRetry"));
+        retry->setToolTip(tr("Open the Google sign-in page in your browser again"));
+        connect(retry, &QPushButton::clicked, this, [this]() {
+            hideSignInBanner();
+            if (m_session->state() == zmail::MailSession::State::NeedsClient) {
+                showConnectDialog();
+            } else {
+                m_session->signIn();
+            }
+        });
+        auto *dismiss = new QPushButton(tr("Dismiss"), row);
+        dismiss->setObjectName(QStringLiteral("signInDismiss"));
+        connect(dismiss, &QPushButton::clicked, this, &MainWindow::hideSignInBanner);
+        h->addWidget(ic);
+        h->addWidget(m_signInBannerText, 1);
+        h->addWidget(retry);
+        h->addWidget(dismiss);
+        m_signInBanner->addWidget(row);
+        addToolBar(Qt::TopToolBarArea, m_signInBanner);
+    }
+    m_signInBannerText->setText(reason);
+    m_signInBanner->show();
+    statusBar()->showMessage(reason, 15000);
+    // Taskbar/dock attention where the platform has it (Wayland: an
+    // activation request, never a forced raise). zmail has no desktop
+    // notifications, so none is added for this.
+    QApplication::alert(this);
+}
+
+void MainWindow::hideSignInBanner()
+{
+    if (m_signInBanner) {
+        m_signInBanner->hide();
+    }
 }
 
 bool MainWindow::previewRight() const

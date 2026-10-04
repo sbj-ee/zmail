@@ -66,15 +66,22 @@ void AuthManager::startSignIn(const QString &loginHint)
         return;
     }
     m_loopback = new LoopbackServer(this);
+    m_loopback->setTimeoutMs(signInTimeoutMs());
     if (!m_loopback->listen()) {
         delete m_loopback;
         emit signInFailed(tr("Couldn't open a local port for the sign-in redirect."));
         return;
     }
+    m_listenPort = m_loopback->port();
     connect(m_loopback, &LoopbackServer::callbackReceived, this, &AuthManager::onCallback);
     connect(m_loopback, &LoopbackServer::timedOut, this, [this]() {
+        const int ms = m_loopback->timeoutMs();
         m_loopback->deleteLater();
-        emit signInFailed(tr("Sign-in timed out. Nothing came back from the browser within 5 minutes."));
+        m_loopback = nullptr;
+        qCWarning(lcAuth).noquote() << "Sign-in: timed out after" << describeTimeout(ms)
+                                    << "; stopped listening on port" << m_listenPort;
+        emit signInFailed(tr("Sign-in timed out: nothing came back from the browser within %1. "
+                             "Choose Retry to open the Google sign-in page again.").arg(describeTimeout(ms)));
     });
 
     m_verifier = pkce::makeVerifier();
@@ -97,9 +104,11 @@ void AuthManager::startSignIn(const QString &loginHint)
     QUrl url = m_config.authUri;
     url.setQuery(q);
     m_lastAuthUrl = url;
-    qCInfo(lcAuth) << "Sign-in: waiting for the browser redirect on port" << m_loopback->port();
+    qCInfo(lcAuth).noquote() << "Sign-in: waiting for the browser redirect on port" << m_listenPort << "(for up to"
+                             << describeTimeout(m_loopback->timeoutMs()) + ')';
     emit signInStarted(url);
     if (!m_open(url)) {
+        cancelSignIn(); // nothing will come back; don't leave the port open
         emit signInFailed(tr("Couldn't open the web browser for Google sign-in."));
     }
 }
@@ -110,7 +119,24 @@ void AuthManager::cancelSignIn()
         m_loopback->close();
         m_loopback->deleteLater();
         m_loopback = nullptr;
+        qCInfo(lcAuth) << "Sign-in: cancelled; stopped listening on port" << m_listenPort;
     }
+}
+
+int AuthManager::signInTimeoutMs() const
+{
+    return m_signInTimeoutMs > 0 ? m_signInTimeoutMs : LoopbackServer::kDefaultTimeoutMs;
+}
+
+QString AuthManager::describeTimeout(int ms)
+{
+    // Spelled out: there's no English .qm to resolve "%n minute(s)".
+    if (ms >= 60 * 1000) {
+        const int n = (ms + 30 * 1000) / (60 * 1000);
+        return n == 1 ? tr("1 minute") : tr("%1 minutes").arg(n);
+    }
+    const int n = std::max(1, (ms + 500) / 1000);
+    return n == 1 ? tr("1 second") : tr("%1 seconds").arg(n);
 }
 
 void AuthManager::onCallback(const QString &code, const QString &state, const QString &error)
@@ -119,6 +145,7 @@ void AuthManager::onCallback(const QString &code, const QString &state, const QS
         m_loopback->deleteLater();
         m_loopback = nullptr;
     }
+    qCInfo(lcAuth) << "Sign-in: browser redirect received; stopped listening on port" << m_listenPort;
     if (!constantTimeEquals(state.toLatin1(), m_state)) {
         qCWarning(lcAuth) << "Sign-in: state mismatch; ignoring the redirect";
         emit signInFailed(tr("The sign-in response didn't match this request (state mismatch). Please try again."));

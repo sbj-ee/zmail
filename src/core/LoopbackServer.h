@@ -23,7 +23,13 @@ public:
     void close();
     quint16 port() const;
     QUrl redirectUri() const;   // http://127.0.0.1:<port>
-    void setTimeoutMs(int ms);  // default 5 minutes
+    // How long to wait for the browser to come back. Long enough for a
+    // slow login (2FA on a phone, account chooser, consent screen) and
+    // for finding the browser again on desktops (Wayland) where zmail
+    // can't raise its own window.
+    static constexpr int kDefaultTimeoutMs = 15 * 60 * 1000;
+    void setTimeoutMs(int ms);  // default kDefaultTimeoutMs
+    int timeoutMs() const;
 
 signals:
     // Exactly one of code / error is non-empty. Query values are passed through

@@ -14,7 +14,7 @@ LoopbackServer::LoopbackServer(QObject *parent)
     , m_timeout(new QTimer(this))
 {
     m_timeout->setSingleShot(true);
-    m_timeout->setInterval(5 * 60 * 1000);
+    m_timeout->setInterval(kDefaultTimeoutMs);
     connect(m_timeout, &QTimer::timeout, this, [this]() {
         close();
         emit timedOut();
@@ -53,6 +53,11 @@ QUrl LoopbackServer::redirectUri() const
 void LoopbackServer::setTimeoutMs(int ms)
 {
     m_timeout->setInterval(ms);
+}
+
+int LoopbackServer::timeoutMs() const
+{
+    return m_timeout->interval();
 }
 
 void LoopbackServer::onConnection()

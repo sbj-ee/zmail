@@ -11,6 +11,7 @@ class QSplitter;
 class QTextBrowser;
 class QTimer;
 class QAction;
+class QToolBar;
 class QTreeView;
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -129,6 +130,14 @@ private:
     QPointer<zmail::ui::ConnectDialog> m_connect;
     QAction *m_signInAction = nullptr;
     QAction *m_signOutAction = nullptr;
+    // Sign-in problems (timeout, browser error, revoked token) as a banner
+    // across the top of the main window with Retry: it doesn't depend on
+    // raising a dialog over the browser, which Wayland compositors refuse.
+    void installSignInBanner();
+    void showSignInBanner(const QString &reason);
+    void hideSignInBanner();
+    QToolBar *m_signInBanner = nullptr;
+    QLabel *m_signInBannerText = nullptr;
     bool m_live = false;
     int m_stripes = 40;
     void applyStripes();

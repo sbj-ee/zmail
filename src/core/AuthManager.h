@@ -44,6 +44,12 @@ public:
     // Interactive sign-in. Emits signedIn() or signInFailed().
     void startSignIn(const QString &loginHint = {});
     void cancelSignIn();
+    // How long startSignIn() waits for the browser (0 = the default,
+    // LoopbackServer::kDefaultTimeoutMs, 15 minutes). For tests.
+    void setSignInTimeoutMs(int ms) { m_signInTimeoutMs = ms; }
+    int signInTimeoutMs() const;
+    // "15 minutes", "30 seconds": for the timeout message.
+    static QString describeTimeout(int ms);
     // Load a saved refresh token for `account` from the keyring.
     void restore(const QString &account, std::function<void(bool ok, const QString &error)> done);
     // A valid access token, refreshing if it expires within 60 s.
@@ -82,6 +88,8 @@ private:
     QByteArray m_state;
     QUrl m_redirect;
     QUrl m_lastAuthUrl;
+    int m_signInTimeoutMs = 0;
+    quint16 m_listenPort = 0; // for the log once the listener is gone
 
     QString m_account;
     QString m_refreshToken;

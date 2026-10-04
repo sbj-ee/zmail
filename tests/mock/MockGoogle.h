@@ -124,6 +124,7 @@ public:
     QString lastVerifierChecked;
     bool pkceVerified = false;
     QStringList modifyCalls;   // "id:-UNREAD"
+    QStringList trashCalls;    // message ids sent to users.messages.trash
     int tokensIssued = 0;
 
 private:

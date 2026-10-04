@@ -604,6 +604,10 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
         if (modify) {
             id.chop(7);
         }
+        const bool trash = id.endsWith(QLatin1String("/trash"));
+        if (trash) {
+            id.chop(6);
+        }
         if (!m_messages.contains(id)) {
             replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Requested entity was not found.")));
             return;
@@ -616,6 +620,13 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
             for (const QString &r : remove) modifyCalls << id + QStringLiteral(":-") + r;
             for (const QString &a : add) modifyCalls << id + QStringLiteral(":+") + a;
             setMessageLabels(id, add, remove);
+            replyJson(s, 200, {{QStringLiteral("id"), id},
+                               {QStringLiteral("labelIds"), QJsonArray::fromStringList(m_messages.value(id).labels)}});
+            return;
+        }
+        if (trash && method == "POST") {
+            trashCalls << id;
+            setMessageLabels(id, {QStringLiteral("TRASH")}, {QStringLiteral("INBOX"), QStringLiteral("UNREAD")});
             replyJson(s, 200, {{QStringLiteral("id"), id},
                                {QStringLiteral("labelIds"), QJsonArray::fromStringList(m_messages.value(id).labels)}});
             return;

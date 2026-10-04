@@ -1,6 +1,7 @@
 #include "AboutDialog.hpp"
 #include "MainWindow.hpp"
 #include "ui/MessageListModel.h"
+#include "ui/MessageView.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
@@ -96,7 +97,8 @@ private slots:
         QVERIFY(split);
         QCOMPARE(split->orientation(), Qt::Vertical);
         QVERIFY(qobject_cast<QTreeView *>(split->widget(0)));
-        QVERIFY(qobject_cast<QTextBrowser *>(split->widget(1)));
+        QVERIFY(qobject_cast<zmail::ui::MessageView *>(split->widget(1)));
+        QVERIFY(split->widget(1)->findChild<QTextBrowser *>(QStringLiteral("previewPane")));
     }
 
     void eudoraColumnsAndSorting()

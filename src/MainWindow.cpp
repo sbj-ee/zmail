@@ -13,6 +13,8 @@
 #include "ui/NewMailSound.h"
 #include "ui/SafeHtmlView.h"
 #include "ui/SignaturesDialog.h"
+#include "ui/MessageView.h"
+#include "ui/MessageWindow.h"
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
 #include "ui/Theme.h"
@@ -22,6 +24,8 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QCloseEvent>
+#include <QSettings>
 #include <QGuiApplication>
 #include <QPointer>
 #include <QScrollBar>
@@ -48,6 +52,31 @@ namespace {
 QString esc(const QString &s)
 {
     return s.toHtmlEscaped();
+}
+
+ViewMessage liveViewMessage(const zmail::CachedMessage &c, bool loading, const QString &error)
+{
+    ViewMessage v;
+    v.id = c.id;
+    v.from = c.fromName.isEmpty() ? c.fromAddr
+                                  : (c.fromAddr.isEmpty() ? c.fromName
+                                                          : QStringLiteral("%1 <%2>").arg(c.fromName, c.fromAddr));
+    v.to = c.to;
+    v.cc = c.cc;
+    v.subject = c.subject;
+    v.date = c.date();
+    v.attachments = c.attachments;
+    v.snippet = c.snippet;
+    v.bodyHtml = c.bodyHtml;
+    v.bodyText = c.bodyText;
+    v.loading = loading;
+    v.error = error;
+    if (c.labels.contains(QStringLiteral("SPAM"))) {
+        v.warning = QStringLiteral("<b>\u26a0 %1</b> %2")
+                        .arg(esc(QObject::tr("Gmail put this message in Spam.")),
+                             esc(QObject::tr("Links and remote images are blocked; check the sender before replying.")));
+    }
+    return v;
 }
 } // namespace
 
@@ -95,6 +124,8 @@ MainWindow::MainWindow(QWidget *parent)
     buildToolbar();
     buildPanes();
     buildStatusBar();
+    findChild<QAction *>(QString::fromLatin1(previewRight() ? "actionPreviewRight" : "actionPreviewBelow"))->setChecked(true);
+    findChild<QAction *>(QStringLiteral("actionDarkMail"))->setChecked(m_view->darkMail());
     selectMailbox(QStringLiteral("In"));
 
     // Poll on window focus as well as on the 30 s timer.
@@ -162,6 +193,32 @@ void MainWindow::buildMenus()
 
     QMenu *view = addMenu("menuView", tr("&View"));
     later(view, tr("View as &Plain Text"));
+    QMenu *pane = view->addMenu(tr("&Preview Pane"));
+    pane->setObjectName(QStringLiteral("menuPreviewPane"));
+    auto *paneGroup = new QActionGroup(this);
+    QAction *below = pane->addAction(tr("&Below the List"), this, [this]() { setPreviewRight(false); });
+    below->setObjectName(QStringLiteral("actionPreviewBelow"));
+    QAction *right = pane->addAction(tr("&Right of the List"), this, [this]() { setPreviewRight(true); });
+    right->setObjectName(QStringLiteral("actionPreviewRight"));
+    for (QAction *a : {below, right}) {
+        a->setCheckable(true);
+        paneGroup->addAction(a);
+    }
+    view->addSeparator();
+    QAction *zin = view->addAction(tr("Zoom &In"), this, [this]() { m_view->zoomIn(); });
+    zin->setObjectName(QStringLiteral("actionZoomIn"));
+    zin->setShortcuts({QKeySequence::ZoomIn, QKeySequence(Qt::CTRL | Qt::Key_Equal)});
+    QAction *zout = view->addAction(tr("Zoom &Out"), this, [this]() { m_view->zoomOut(); });
+    zout->setObjectName(QStringLiteral("actionZoomOut"));
+    zout->setShortcuts({QKeySequence::ZoomOut});
+    QAction *zreset = view->addAction(tr("&Actual Size"), this, [this]() { m_view->resetZoom(); });
+    zreset->setObjectName(QStringLiteral("actionZoomReset"));
+    zreset->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_0));
+    QAction *dark = view->addAction(tr("&Dark Background for Messages"));
+    dark->setObjectName(QStringLiteral("actionDarkMail"));
+    dark->setCheckable(true);
+    connect(dark, &QAction::toggled, this, [this](bool on) { m_view->setDarkMail(on); });
+    view->addSeparator();
     QMenu *theme = view->addMenu(tr("&Theme"));
     theme->setObjectName(QStringLiteral("menuTheme"));
     m_themeGroup = new QActionGroup(this);
@@ -179,6 +236,12 @@ void MainWindow::buildMenus()
     }
 
     QMenu *message = addMenu("menuMessage", tr("&Message"));
+    QAction *openWin = message->addAction(tr("&Open in New Window"), this, [this]() {
+        openMessageWindow(m_list->currentIndex());
+    });
+    openWin->setObjectName(QStringLiteral("actionOpenMessage"));
+    openWin->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_O));
+    message->addSeparator();
     using Kind = zmail::ReplyBuilder::Kind;
     QAction *mr = message->addAction(tr("&Reply"), this, [this]() { composeReply(int(Kind::Reply)); });
     mr->setObjectName(QStringLiteral("menuActionReply"));
@@ -250,6 +313,8 @@ void MainWindow::buildToolbar()
     });
     connect(findChild<QAction *>(QStringLiteral("actionCheckMail")), &QAction::triggered, this,
             &MainWindow::checkMail);
+    connect(findChild<QAction *>(QStringLiteral("actionDelete")), &QAction::triggered, this,
+            [this]() { trashMessage(m_shownId); });
 
     auto *spacer = new QWidget(tb);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -320,9 +385,10 @@ void MainWindow::buildPanes()
     connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &cur) { showMessage(cur); });
 
-    m_preview = new SafeHtmlView(m_listSplitter);
-    m_preview->setObjectName(QStringLiteral("previewPane"));
-    m_preview->setOpenLinks(false);
+    m_view = new MessageView(m_listSplitter);
+    m_view->setObjectName(QStringLiteral("messageView"));
+    m_view->body()->setObjectName(QStringLiteral("previewPane"));
+    connect(m_list, &QTreeView::doubleClicked, this, [this](const QModelIndex &i) { openMessageWindow(i); });
 
     populateMailboxes();
     connect(m_mailboxes, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *it) {
@@ -336,7 +402,7 @@ void MainWindow::buildPanes()
             if (!m_live && m_proxy->rowCount() > 0) {
                 m_list->setCurrentIndex(m_proxy->index(0, 0));
             } else {
-                m_preview->clear();
+                m_view->clear();
                 m_shownId.clear();
                 updateMessageActions();
             }
@@ -353,10 +419,22 @@ void MainWindow::buildPanes()
 
     m_listSplitter->setStretchFactor(0, 3);
     m_listSplitter->setStretchFactor(1, 2);
-    m_listSplitter->setSizes({370, 300});
+    m_listSplitter->setChildrenCollapsible(false);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setSizes({210, 970});
+    {
+        QSettings st;
+        const QByteArray main = st.value(QStringLiteral("ui/mainSplitter")).toByteArray();
+        if (!main.isEmpty()) {
+            m_splitter->restoreState(main);
+        }
+        m_listSplitter->setOrientation(st.value(QStringLiteral("ui/previewRight"), false).toBool() ? Qt::Horizontal
+                                                                                               : Qt::Vertical);
+    }
+    restoreListSplitter();
+    connect(m_listSplitter, &QSplitter::splitterMoved, this, &MainWindow::saveSplitters);
+    connect(m_splitter, &QSplitter::splitterMoved, this, &MainWindow::saveSplitters);
     setCentralWidget(m_splitter);
 }
 
@@ -538,7 +616,7 @@ void MainWindow::selectMailbox(const QString &key)
 void MainWindow::showMessage(const QModelIndex &proxyIndex)
 {
     if (!proxyIndex.isValid()) {
-        m_preview->clear();
+        m_view->clear();
         m_shownId.clear();
         updateMessageActions();
         return;
@@ -547,46 +625,34 @@ void MainWindow::showMessage(const QModelIndex &proxyIndex)
         showLiveMessage(m_proxy->mapToSource(proxyIndex).row());
         return;
     }
-    const MailItem &m = m_model->item(m_proxy->mapToSource(proxyIndex).row());
-    const QPalette pal = QApplication::palette();
-    const QString dim = pal.color(QPalette::PlaceholderText).name();
-    const QString hdrBg = pal.color(QPalette::AlternateBase).name();
-    const QString text = pal.color(QPalette::Text).name();
+    m_view->setMessage(sampleViewMessage(m_proxy->mapToSource(proxyIndex).row()));
+}
 
-    QString html = QStringLiteral("<html><body style='color:%1'>").arg(text);
-    if (m.suspicious) {
-        html += QStringLiteral(
-                    "<table width='100%' cellpadding='8' style='background:%1; color:%2'><tr><td>"
-                    "<b>\u26a0 This message looks suspicious.</b><br>"
-                    "\u2022 The sender's domain <i>contoso-secure-login.example</i> isn't Contoso Bank's.<br>"
-                    "\u2022 The link text doesn't match where the link really goes.<br>"
-                    "\u2022 Urgent account-verification wording.<br>"
-                    "<small>Remote images are blocked. zmail never deletes mail on its own.</small>"
-                    "</td></tr></table><p></p>")
-                    .arg(suspiciousBackground(pal).name(), suspiciousForeground(pal).name());
-    }
-    html += QStringLiteral("<table width='100%' cellpadding='3' cellspacing='0' style='background:%1'>").arg(hdrBg);
-    auto row = [&](const QString &k, const QString &v) {
-        html += QStringLiteral("<tr><td width='76' align='right' style='color:%1'><b>%2</b></td><td>%3</td></tr>")
-                    .arg(dim, k, v);
-    };
+ViewMessage MainWindow::sampleViewMessage(int row) const
+{
+    const MailItem &m = m_model->item(row);
+    ViewMessage v;
+    v.id = QStringLiteral("sample-%1").arg(row);
     const bool outgoing = m.mailboxes.contains(QStringLiteral("Out"));
-    row(outgoing ? tr("To:") : tr("From:"), QStringLiteral("%1 &lt;%2&gt;").arg(esc(m.who), esc(m.address)));
-    row(outgoing ? tr("From:") : tr("To:"), QStringLiteral("Alex Morgan &lt;alex.morgan@example.com&gt;"));
-    row(tr("Subject:"), QStringLiteral("<b>%1</b>").arg(esc(m.subject)));
-    row(tr("Date:"), esc(QLocale(QLocale::English, QLocale::UnitedStates)
-                             .toString(m.date, QStringLiteral("dddd, MMMM d, yyyy h:mm AP")))
-                         + QStringLiteral(" CT"));
-    if (!m.label.isEmpty()) {
-        row(tr("Label:"), QStringLiteral("<span style='color:%1'>\u25a0</span> %2").arg(m.labelColor.name(), esc(m.label)));
+    const QString who = QStringLiteral("%1 <%2>").arg(m.who, m.address);
+    const QString me = QStringLiteral("Alex Morgan <alex.morgan@example.com>");
+    v.from = outgoing ? me : who;
+    v.to = outgoing ? who : me;
+    v.subject = m.subject;
+    v.date = m.date;
+    v.label = m.label;
+    v.labelColor = m.labelColor;
+    v.attachments = m.attachments;
+    v.bodyText = m.preview;
+    if (m.suspicious) {
+        v.warning = QStringLiteral(
+                        "<b>\u26a0 This message looks suspicious.</b><br>"
+                        "\u2022 The sender's domain <i>contoso-secure-login.example</i> isn't Contoso Bank's.<br>"
+                        "\u2022 The link text doesn't match where the link really goes.<br>"
+                        "\u2022 Urgent account-verification wording.<br>"
+                        "<small>Remote images are blocked. zmail never deletes mail on its own.</small>");
     }
-    if (!m.attachments.isEmpty()) {
-        row(tr("Attached:"), esc(m.attachments.join(QStringLiteral(",  "))));
-    }
-    html += QStringLiteral("</table><div style='margin:10px 6px'>");
-    html += esc(m.preview).replace(QLatin1Char('\n'), QStringLiteral("<br>"));
-    html += QStringLiteral("</div></body></html>");
-    m_preview->setHtml(html);
+    return v;
 }
 
 void MainWindow::refreshIcons()
@@ -637,13 +703,13 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
     return c;
 }
 
-ComposeWindow *MainWindow::composeReply(int kindInt)
+ComposeWindow *MainWindow::composeReply(int kindInt, const QString &forId)
 {
     const auto kind = zmail::ReplyBuilder::Kind(kindInt);
     if (!m_live) {
         return openCompose(true);
     }
-    const QString id = m_shownId;
+    const QString id = forId.isEmpty() ? m_shownId : forId;
     if (id.isEmpty() || !m_session || !m_session->sync()) {
         return nullptr;
     }
@@ -857,55 +923,7 @@ void MainWindow::showLiveMessage(int row)
         return;
     }
     auto render = [this](const zmail::CachedMessage &c, bool loading, const QString &error) {
-        const QPalette pal = QApplication::palette();
-        const QString dim = pal.color(QPalette::PlaceholderText).name();
-        QString html = QStringLiteral("<html><body style='color:%1'>").arg(pal.color(QPalette::Text).name());
-        if (c.labels.contains(QStringLiteral("SPAM"))) {
-            html += QStringLiteral("<table width='100%' cellpadding='8' style='background:%1; color:%2'><tr><td>"
-                                   "<b>\u26a0 Gmail put this message in Spam.</b> Links and remote images are "
-                                   "blocked; check the sender before replying.</td></tr></table><p></p>")
-                        .arg(suspiciousBackground(pal).name(), suspiciousForeground(pal).name());
-        }
-        html += QStringLiteral("<table width='100%' cellpadding='3' cellspacing='0' style='background:%1'>")
-                    .arg(pal.color(QPalette::AlternateBase).name());
-        auto row = [&](const QString &k, const QString &v) {
-            html += QStringLiteral("<tr><td width='76' align='right' style='color:%1'><b>%2</b></td><td>%3</td></tr>")
-                        .arg(dim, k, v);
-        };
-        row(tr("From:"), QStringLiteral("%1 &lt;%2&gt;").arg(esc(c.fromName), esc(c.fromAddr)));
-        if (!c.to.isEmpty()) {
-            row(tr("To:"), esc(c.to));
-        }
-        row(tr("Subject:"), QStringLiteral("<b>%1</b>").arg(esc(c.subject.isEmpty() ? tr("(no subject)") : c.subject)));
-        const QDateTime dt = c.date().toLocalTime();
-        row(tr("Date:"), esc(QLocale(QLocale::English, QLocale::UnitedStates)
-                                 .toString(dt, QStringLiteral("dddd, MMMM d, yyyy h:mm AP"))
-                             + QLatin1Char(' ') + dt.timeZoneAbbreviation()));
-        if (!c.attachments.isEmpty()) {
-            row(tr("Attached:"), esc(c.attachments.join(QStringLiteral(",  "))));
-        }
-        html += QStringLiteral("</table>");
-        int blocked = 0;
-        QString body;
-        if (loading) {
-            body = QStringLiteral("<p>%1</p><p style='color:%2'><i>%3</i></p>")
-                       .arg(esc(c.snippet), dim, tr("Loading message\u2026"));
-        } else if (!c.bodyHtml.isEmpty()) {
-            body = SafeHtmlView::sanitize(c.bodyHtml, &blocked);
-        } else {
-            body = QStringLiteral("<div style='white-space:pre-wrap'>%1</div>")
-                       .arg(esc(c.bodyText.isEmpty() ? c.snippet : c.bodyText));
-        }
-        if (blocked > 0) {
-            html += QStringLiteral("<p style='color:%1'><small>%2</small></p>")
-                        .arg(dim, tr("%n remote image(s) blocked.", nullptr, blocked));
-        }
-        if (!error.isEmpty()) {
-            html += QStringLiteral("<p style='color:#b3261e'>%1</p>").arg(esc(tr("Couldn't load the message: %1").arg(error)));
-        }
-        html += QStringLiteral("<div style='margin:10px 6px'>") + body + QStringLiteral("</div></body></html>");
-        m_preview->resetBlocked();
-        m_preview->setHtml(html);
+        m_view->setMessage(liveViewMessage(c, loading, error));
     };
 
     const zmail::CachedMessage c = cache->message(id);
@@ -989,4 +1007,121 @@ ConnectDialog *MainWindow::showConnectDialog(const QString &notice)
     m_connect->raise();
     m_connect->activateWindow();
     return m_connect;
+}
+
+bool MainWindow::previewRight() const
+{
+    return m_listSplitter && m_listSplitter->orientation() == Qt::Horizontal;
+}
+
+void MainWindow::setPreviewRight(bool right)
+{
+    if (right != previewRight()) {
+        saveSplitters();
+        m_listSplitter->setOrientation(right ? Qt::Horizontal : Qt::Vertical);
+        restoreListSplitter();
+    }
+    QSettings().setValue(QStringLiteral("ui/previewRight"), right);
+    if (QAction *a = findChild<QAction *>(QString::fromLatin1(right ? "actionPreviewRight" : "actionPreviewBelow"))) {
+        a->setChecked(true);
+    }
+}
+
+void MainWindow::restoreListSplitter()
+{
+    // One remembered layout per orientation, so flipping back restores it.
+    const bool right = previewRight();
+    const QByteArray st =
+        QSettings().value(right ? QStringLiteral("ui/listSplitterRight") : QStringLiteral("ui/listSplitterBelow"))
+            .toByteArray();
+    if (st.isEmpty() || !m_listSplitter->restoreState(st)) {
+        m_listSplitter->setSizes(right ? QList<int>{520, 450} : QList<int>{370, 300});
+    }
+    // restoreState() also restores orientation; keep the chosen one.
+    m_listSplitter->setOrientation(right ? Qt::Horizontal : Qt::Vertical);
+}
+
+void MainWindow::saveSplitters()
+{
+    QSettings st;
+    st.setValue(previewRight() ? QStringLiteral("ui/listSplitterRight") : QStringLiteral("ui/listSplitterBelow"),
+                m_listSplitter->saveState());
+    st.setValue(QStringLiteral("ui/mainSplitter"), m_splitter->saveState());
+}
+
+void MainWindow::closeEvent(QCloseEvent *ev)
+{
+    saveSplitters();
+    QMainWindow::closeEvent(ev);
+}
+
+QList<MessageWindow *> MainWindow::messageWindows() const
+{
+    QList<MessageWindow *> out;
+    for (const auto &w : m_messageWindows) {
+        if (w) {
+            out.append(w);
+        }
+    }
+    return out;
+}
+
+MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex)
+{
+    if (!proxyIndex.isValid()) {
+        return nullptr;
+    }
+    const int row = m_proxy->mapToSource(proxyIndex).row();
+    auto *w = new MessageWindow(this);
+    m_messageWindows.removeAll(nullptr);
+    m_messageWindows.append(w);
+    connect(w, &MessageWindow::composeRequested, this,
+            [this](const QString &id, int kind) { composeReply(kind, id); });
+    connect(w, &MessageWindow::deleteRequested, this, [this, w](const QString &id) {
+        trashMessage(id);
+        w->close();
+    });
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    zmail::MailCache *cache = m_live && m_session ? m_session->cache() : nullptr;
+    if (sync && cache) {
+        const MailItem &item = m_model->item(row);
+        const QString id = item.id;
+        const zmail::CachedMessage c = cache->message(id);
+        w->setMessage(liveViewMessage(c, !c.hasBody, {}));
+        if (!c.hasBody) {
+            QPointer<MessageWindow> guard(w);
+            sync->fetchBody(id, [guard](const zmail::CachedMessage &full, const QString &err) {
+                if (guard) {
+                    guard->setMessage(liveViewMessage(full, false, err));
+                }
+            });
+        }
+        if (c.unread()) {
+            sync->markRead(id);
+            m_model->setStatus(row, MailStatus::Read);
+            updateCounts();
+        }
+    } else {
+        w->setMessage(sampleViewMessage(row));
+        w->deleteAction()->setEnabled(false);
+        w->deleteAction()->setToolTip(tr("Sign in to Gmail to delete mail"));
+    }
+    w->show();
+    return w;
+}
+
+void MainWindow::trashMessage(const QString &id)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || id.isEmpty()) {
+        statusBar()->showMessage(m_live ? tr("Select a message to delete.") : tr("Sign in to Gmail to delete mail."),
+                                 5000);
+        return;
+    }
+    sync->trash(id); // optimistic; rolled back with an error if Gmail refuses
+    if (m_shownId == id) {
+        m_view->clear();
+        m_shownId.clear();
+    }
+    statusBar()->showMessage(tr("Moved to Trash."), 5000);
 }

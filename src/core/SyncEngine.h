@@ -49,6 +49,9 @@ public:
     using MessageCb = std::function<void(const CachedMessage &m, const QString &error)>;
     void fetchBody(const QString &id, MessageCb cb);
     void markRead(const QString &id);
+    // Move to Gmail's Trash (users.messages.trash): optimistic cache update,
+    // rolled back if the call fails.
+    void trash(const QString &id);
 
     int fullSyncs() const { return m_fullSyncs; }
 

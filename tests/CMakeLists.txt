@@ -12,7 +12,7 @@ function(zmail_add_test name)
   add_test(NAME ${name} COMMAND ${name})
   # Headless: no display needed in CI. Never touch the real keyring/config.
   set_tests_properties(${name} PROPERTIES ENVIRONMENT
-    "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json")
+    "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config")
 endfunction()
 
 zmail_add_test(tst_version)
@@ -24,6 +24,8 @@ zmail_add_test(tst_auth)
 zmail_add_test(tst_sync)
 zmail_add_test(tst_connect)
 zmail_add_test(tst_send)
+zmail_add_test(tst_viewer)
+target_compile_definitions(tst_viewer PRIVATE ZMAIL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 # Offline screenshot driver: zmail against the mock server.
 add_executable(zmail_mockshot mockshot.cpp)

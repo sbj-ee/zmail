@@ -96,6 +96,12 @@ add_library(zmail_app STATIC
   src/ui/MessageListModel.h
   src/ui/NewMailSound.cpp
   src/ui/NewMailSound.h
+  src/ui/HtmlFit.cpp
+  src/ui/HtmlFit.h
+  src/ui/MessageView.cpp
+  src/ui/MessageView.h
+  src/ui/MessageWindow.cpp
+  src/ui/MessageWindow.h
   src/ui/SafeHtmlView.cpp
   src/ui/SafeHtmlView.h
   src/ui/SignaturesDialog.cpp

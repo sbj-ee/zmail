@@ -469,13 +469,24 @@ void SyncEngine::trash(const QString &id)
         return;
     }
     const QStringList before = m.labels;
+    m_labelsBeforeTrash.insert(id, before);
+    m_trashInFlight.insert(id);
     m_cache->modifyLabels(id, {QStringLiteral("TRASH")}, {QStringLiteral("INBOX")}); // optimistic
     emit messagesChanged();
     m_api->trashMessage(id, [this, id, before](const QJsonObject &json, const ApiError &err) {
+        m_trashInFlight.remove(id);
+        const bool undone = m_untrashQueued.remove(id); // Undo pressed before Gmail answered
         if (err.isError) {
             m_cache->setLabels(id, before);
-            reportError(err, tr("Moving to Trash"));
+            m_labelsBeforeTrash.remove(id);
+            if (!undone) {
+                reportError(err, tr("Moving to Trash"));
+            }
             emit messagesChanged();
+            return;
+        }
+        if (undone) {
+            sendUntrash(id, before, json);
             return;
         }
         QStringList labels;
@@ -485,6 +496,100 @@ void SyncEngine::trash(const QString &id)
         if (!labels.isEmpty()) {
             m_cache->setLabels(id, labels);
             emit messagesChanged();
+        }
+    });
+}
+
+bool SyncEngine::untrash(const QString &id)
+{
+    if (!m_labelsBeforeTrash.contains(id)) {
+        return false;
+    }
+    const QStringList before = m_labelsBeforeTrash.take(id);
+    const QJsonObject trashedJson{{QStringLiteral("labelIds"), QJsonArray::fromStringList(m_cache->message(id).labels)}};
+    m_cache->setLabels(id, before); // optimistic: back where it was
+    emit messagesChanged();
+    if (m_trashInFlight.contains(id)) {
+        // The trash call hasn't come back; untrash once it has, so the two
+        // can't cross on the wire.
+        m_untrashQueued.insert(id);
+        return true;
+    }
+    sendUntrash(id, before, trashedJson);
+    return true;
+}
+
+void SyncEngine::sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson)
+{
+    QStringList trashed;
+    for (const auto &l : trashedJson.value(QStringLiteral("labelIds")).toArray()) {
+        trashed.append(l.toString());
+    }
+    m_api->untrashMessage(id, [this, id, before, trashed](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            m_cache->setLabels(id, trashed);
+            m_labelsBeforeTrash.insert(id, before);
+            reportError(err, tr("Undoing the move to Trash"));
+            emit messagesChanged();
+            return;
+        }
+        // untrash only removes TRASH; INBOX (and UNREAD, user labels) may
+        // need putting back.
+        QStringList now;
+        for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+            now.append(l.toString());
+        }
+        QStringList missing;
+        for (const QString &l : before) {
+            if (!now.contains(l) && l != QLatin1String("TRASH")) {
+                missing << l;
+            }
+        }
+        if (missing.isEmpty()) {
+            if (!now.isEmpty()) {
+                m_cache->setLabels(id, now);
+                emit messagesChanged();
+            }
+            return;
+        }
+        m_api->modifyLabels(id, missing, {}, [this, id](const QJsonObject &json2, const ApiError &err2) {
+            if (err2.isError) {
+                reportError(err2, tr("Undoing the move to Trash"));
+                return;
+            }
+            QStringList labels;
+            for (const auto &l : json2.value(QStringLiteral("labelIds")).toArray()) {
+                labels.append(l.toString());
+            }
+            if (!labels.isEmpty()) {
+                m_cache->setLabels(id, labels);
+                emit messagesChanged();
+            }
+        });
+    });
+}
+
+void SyncEngine::markUnread(const QString &id)
+{
+    const CachedMessage m = m_cache->message(id);
+    if (m.id.isEmpty() || m.unread()) {
+        return;
+    }
+    m_cache->modifyLabels(id, {QStringLiteral("UNREAD")}, {}); // optimistic
+    emit messagesChanged();
+    m_api->modifyLabels(id, {QStringLiteral("UNREAD")}, {}, [this, id](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            m_cache->modifyLabels(id, {}, {QStringLiteral("UNREAD")});
+            reportError(err, tr("Marking as unread"));
+            emit messagesChanged();
+            return;
+        }
+        QStringList labels;
+        for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+            labels.append(l.toString());
+        }
+        if (!labels.isEmpty()) {
+            m_cache->setLabels(id, labels);
         }
     });
 }

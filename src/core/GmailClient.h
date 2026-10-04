@@ -73,6 +73,7 @@ public:
     void getMessageFull(const QString &id, JsonCb cb);
     void modifyLabels(const QString &id, const QStringList &add, const QStringList &remove, JsonCb cb);
     void trashMessage(const QString &id, JsonCb cb); // users.messages.trash
+    void untrashMessage(const QString &id, JsonCb cb); // users.messages.untrash
     void listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb);
     void listSendAs(JsonCb cb);
     void getAttachment(const QString &messageId, const QString &attachmentId, JsonCb cb);

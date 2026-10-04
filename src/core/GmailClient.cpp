@@ -98,6 +98,11 @@ void GmailClient::trashMessage(const QString &id, JsonCb cb)
     call("POST", QStringLiteral("/messages/%1/trash").arg(id), {}, {}, 5, std::move(cb));
 }
 
+void GmailClient::untrashMessage(const QString &id, JsonCb cb)
+{
+    call("POST", QStringLiteral("/messages/%1/untrash").arg(id), {}, {}, 5, std::move(cb));
+}
+
 void GmailClient::listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb)
 {
     QUrlQuery q;

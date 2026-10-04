@@ -31,6 +31,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -39,7 +40,9 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QTextCharFormat>
 #include <QStatusBar>
 #include <QTextBlock>
 #include <QTextBrowser>
@@ -114,6 +117,18 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     m_body->document()->setDocumentMargin(14);
     m_body->setContextMenuPolicy(Qt::CustomContextMenu);
     m_body->viewport()->installEventFilter(this);
+    m_body->installEventFilter(this); // lets Ctrl+K reach Insert link (see eventFilter)
+    // Keep B/I/U (format bar, built above) showing the format under the
+    // cursor, so Ctrl+B/I/U toggle from the right state.
+    connect(m_body, &QTextEdit::currentCharFormatChanged, this, [this](const QTextCharFormat &f) {
+        QAction *bold = findChild<QAction *>(QStringLiteral("actionBold"));
+        QAction *italic = findChild<QAction *>(QStringLiteral("actionItalic"));
+        QAction *underline = findChild<QAction *>(QStringLiteral("actionUnderline"));
+        const QSignalBlocker b1(bold), b2(italic), b3(underline);
+        bold->setChecked(f.fontWeight() >= QFont::Bold);
+        italic->setChecked(f.fontItalic());
+        underline->setChecked(f.fontUnderline());
+    });
     m_preview = new QTextBrowser(m_stack);
     m_preview->setObjectName(QStringLiteral("markdownPreview"));
     m_preview->setFrameShape(QFrame::NoFrame);
@@ -291,6 +306,17 @@ void ComposeWindow::buildFormatBar()
     fb->addSeparator();
     QAction *link = add("actionLink", "link", tr("Insert link"));
     QAction *quote = add("actionQuote", "quote", tr("Quote"));
+
+    // The usual editor keys; the tooltip names the key ("Bold (Ctrl+B)").
+    const auto key = [](QAction *a, const QKeySequence &k) {
+        a->setShortcut(k);
+        a->setShortcutContext(Qt::WindowShortcut);
+        a->setToolTip(QStringLiteral("%1 (%2)").arg(a->toolTip(), k.toString(QKeySequence::NativeText)));
+    };
+    key(bold, QKeySequence::Bold);
+    key(italic, QKeySequence::Italic);
+    key(underline, QKeySequence::Underline);
+    key(link, QKeySequence(Qt::CTRL | Qt::Key_K));
 
     connect(font, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) { m_body->setCurrentFont(f); });
     connect(size, &QComboBox::textActivated, this, [this](const QString &s) { m_body->setFontPointSize(s.toDouble()); });
@@ -541,6 +567,15 @@ void ComposeWindow::dropEvent(QDropEvent *e)
 
 bool ComposeWindow::eventFilter(QObject *obj, QEvent *ev)
 {
+    // QTextEdit claims Ctrl+K (delete to end of line) before shortcuts see
+    // it; here it means Insert link, as in most mail and word processors.
+    if (obj == m_body && ev->type() == QEvent::ShortcutOverride) {
+        auto *ke = static_cast<QKeyEvent *>(ev);
+        if (ke->key() == Qt::Key_K && ke->modifiers() == Qt::ControlModifier) {
+            ev->ignore();
+            return true;
+        }
+    }
     // Files dropped on the body attach rather than insert a file:// link.
     if (obj == m_body->viewport() && (ev->type() == QEvent::DragEnter || ev->type() == QEvent::Drop)) {
         auto *de = static_cast<QDropEvent *>(ev);

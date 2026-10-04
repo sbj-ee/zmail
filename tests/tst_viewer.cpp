@@ -239,7 +239,11 @@ private slots:
         QVERIFY(h.contains(QStringLiteral("From: Maple Grove Animal Hospital <reminders@maplegrove-vet.example>")));
         QVERIFY(h.contains(QStringLiteral("To: Jordan Example <jordan@example.com>")));
         QVERIFY(h.contains(QStringLiteral("Cc: Sam Example <sam@example.com>")));
-        QVERIFY(h.contains(QStringLiteral("Date: Friday, October 2, 2026 at 11:12 AM")));
+        // Shown in the viewer's local zone (CT on Stephen's desktop, UTC in CI).
+        const QDateTime local = vetMessage().date.toLocalTime();
+        QVERIFY(h.contains(QStringLiteral("Date: ") +
+                           QLocale(QLocale::English, QLocale::UnitedStates)
+                               .toString(local, QStringLiteral("dddd, MMMM d, yyyy 'at' h:mm AP"))));
         auto *att = v.findChild<QLabel *>(QStringLiteral("messageAttachments"));
         QVERIFY(att && !att->isHidden());
         QVERIFY(att->text().contains(QStringLiteral("2 attachments")));

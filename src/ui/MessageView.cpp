@@ -14,7 +14,9 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QScopedValueRollback>
 #include <QSettings>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -151,7 +153,8 @@ MessageView::MessageView(QWidget *parent)
     // anything that still can't fit.
     m_body->setWordWrapMode(QTextOption::WordWrap);
     m_body->document()->setDocumentMargin(kMargin);
-    m_body->viewport()->installEventFilter(this);
+    m_body->viewport()->installEventFilter(this); // Ctrl+wheel zoom
+    m_body->installEventFilter(this);             // pane resizes -> relayout
     lay->addWidget(m_body, 1);
     applyBodyPalette();
 
@@ -306,7 +309,15 @@ void MessageView::renderHeader()
 
 int MessageView::bodyWidth() const
 {
-    return m_body->viewport()->width();
+    // The pane's width with room for the vertical scroll bar always set
+    // aside, whether or not it's showing. Using the viewport width fed back:
+    // each render's setHtml() briefly emptied the document, the scroll bar
+    // hid, the viewport widened, that resize queued another render, the
+    // scroll bar came back... so a long mail re-rendered ~10x a second,
+    // forever, pinning a core while idle (0.3.1). Lines are wrapped at this
+    // fixed width too, so the scroll bar coming and going never reflows.
+    const int extent = m_body->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_body->verticalScrollBar());
+    return std::max(1, m_body->contentsRect().width() - extent);
 }
 
 void MessageView::render()
@@ -314,6 +325,10 @@ void MessageView::render()
     if (m_empty) {
         return;
     }
+    // Anything render() itself causes (scroll bars, resizes) must not queue
+    // another render.
+    const QScopedValueRollback<bool> busy(m_rendering, true);
+    ++m_renders;
     QScrollBar *vs = m_body->verticalScrollBar();
     const double ratio = vs->maximum() > 0 ? double(vs->value()) / vs->maximum() : 0.0;
     const int vw = bodyWidth();
@@ -334,7 +349,8 @@ void MessageView::render()
     m_effectiveZoom = m_zoom;
 
     if (!m_msg.loading && !m_msg.bodyHtml.isEmpty()) {
-        m_body->setLineWrapMode(QTextEdit::WidgetWidth);
+        m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
+        m_body->setLineWrapColumnOrWidth(vw);
         QString html = SafeHtmlView::sanitize(m_msg.bodyHtml, &m_blocked, m_showImages);
         html = prefix + HtmlFit::prepare(html);
         qreal z = m_zoom;
@@ -368,7 +384,8 @@ void MessageView::render()
             m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
             m_body->setLineWrapColumnOrWidth(measure);
         } else {
-            m_body->setLineWrapMode(QTextEdit::WidgetWidth);
+            m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
+            m_body->setLineWrapColumnOrWidth(vw);
         }
         m_body->setHtml(html);
     }
@@ -435,10 +452,12 @@ void MessageView::setDarkMail(bool on)
 
 bool MessageView::eventFilter(QObject *obj, QEvent *ev)
 {
-    if (obj == m_body->viewport()) {
-        if (ev->type() == QEvent::Resize && !m_empty && std::abs(bodyWidth() - m_renderedWidth) > 4) {
+    if (obj == m_body) {
+        if (ev->type() == QEvent::Resize && !m_empty && !m_rendering && std::abs(bodyWidth() - m_renderedWidth) > 4) {
             m_relayout->start();
-        } else if (ev->type() == QEvent::Wheel) {
+        }
+    } else if (obj == m_body->viewport()) {
+        if (ev->type() == QEvent::Wheel) {
             auto *we = static_cast<QWheelEvent *>(ev);
             if (we->modifiers() & Qt::ControlModifier) {
                 const int dy = we->angleDelta().y();
@@ -457,7 +476,7 @@ bool MessageView::eventFilter(QObject *obj, QEvent *ev)
 void MessageView::changeEvent(QEvent *ev)
 {
     QWidget::changeEvent(ev);
-    if (ev->type() == QEvent::FontChange && !m_empty) {
+    if (ev->type() == QEvent::FontChange && !m_empty && !m_rendering) {
         m_relayout->start();
     }
 }

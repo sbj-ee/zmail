@@ -37,6 +37,9 @@ Libraries (all available as Ubuntu 24.04 packages, all MIT-compatible):
 | HTML view | **QtWebEngine**, sandboxed, JS off | LGPL-3 | §4.4 |
 | Spell check | **Hunspell** + `hunspell-en-us`, reusing zwriter's wrapper | LGPL/MPL | §4.6 |
 | Sound | Qt Multimedia (`QSoundEffect` for WAV, `QMediaPlayer` for OGG) | LGPL-3 | |
+| Markdown compose | **md4c** + md4c-html (`libmd4c-dev`, `libmd4c-html0-dev`) | MIT | A fast, CommonMark-compliant C parser with GitHub tables and strikethrough. Renders Markdown to HTML for sending (§4.5). |
+| Zip attachments | **libzip** (`libzip-dev`) | BSD-3-Clause | Standard deflate `.zip` with UTF-8 names, used only after the user agrees (§4.5.1). minizip-ng (zlib license) is the fallback if libzip is a problem. |
+| Icons | **Lucide** SVG set, bundled, rendered with QtSvg (`qt6-svg-dev`) | ISC (a few icons MIT, from Feather) | Each file is listed in `assets/icons/LICENSES` and checked in CI (§4.15). |
 
 ## 2. Gmail API vs IMAP: the decision
 
@@ -236,8 +239,8 @@ For a mail client that has to show real HTML mail, that's worth it.
 **Decided:** Stephen accepts the size.
 
 ### 4.5 Compose and send
-- **Plain text or HTML**, with a toggle per message. The default is set in
-  Settings. HTML compose uses QTextEdit's rich text (bold, italic, lists,
+- **Plain text, HTML or Markdown**, with a mode switch per message (the
+  compose toolbar's **Format** box). The default is set in Settings. HTML compose uses QTextEdit's rich text (bold, italic, lists,
   links, inline images). Plain text uses the same widget with
   `setAcceptRichText(false)`.
 - **HTML mail** goes out as `multipart/alternative`: a `text/plain` part
@@ -246,6 +249,25 @@ For a mail client that has to show real HTML mail, that's worth it.
   `multipart/related`, and attachments `multipart/mixed`. GMime builds the
   message, and `messages.send` sends it (with `threadId` for replies,
   plus `In-Reply-To`/`References`).
+- **Markdown mode:** you write Markdown in a plain-text editor, with
+  monospace for code and lightly styled headings, emphasis and list
+  markers. A **live preview** toggle shows a side-by-side rendered pane,
+  updated about 150 ms after typing stops. On send, **md4c** renders the
+  source to HTML (CommonMark plus tables, strikethrough and autolinks; raw
+  HTML is disabled, so pasted `<script>` text stays text). The message goes
+  out as `multipart/alternative`:
+  - `text/html` is the rendering, with zmail's minimal inline CSS for code
+    blocks and quotes
+  - `text/plain` is the Markdown source, lightly cleaned: reference links
+    are expanded to `text <url>`, image syntax becomes `[image: alt]`, and
+    HTML entities are decoded
+
+  **Recipients never see raw Markdown as markup.** HTML clients show the
+  rendering, and text clients get source that's readable as is. Markdown
+  messages use the **HTML version of the signature**, appended after
+  rendering. **Spell check** skips code spans, fenced or indented code
+  blocks, link URLs and the signature. The **size meter** counts the
+  rendered output (HTML part, text part and attachments, encoded).
 - **Signatures:** several named signatures, each with a plain and an HTML
   version. One is the default and is inserted into new messages and replies.
   The plain version gets the standard `"-- \n"` delimiter. In replies, the
@@ -292,7 +314,28 @@ binds. Rules:
   amber from 80%, and red above the limit.
 - **Block sending** when the total is over `kSendLimitBytes`. Send is
   disabled with "Message is 26.1 MB after encoding; Gmail's limit is
-  25 MB. Remove attachments" (Drive links come later). The same check runs
+  25 MB", and the zip offer below is shown.
+- **Offer to zip, never zip silently.** When attachments push a message over
+  the limit, zmail runs a quick **deflate probe** first. It compresses up to
+  the first 1 MB of each file at level 6 on a worker thread, which takes
+  well under a second, and extrapolates the ratio. A dialog then shows the
+  estimated savings: "Zipping could bring this message from 31.4 MB to about
+  22.9 MB (encoded)." The choices are **Zip attachments** and **Cancel**,
+  plus a **Remember my choice** checkbox. Settings → Composing →
+  "When attachments are too large" offers **Ask** (default), **Always zip**
+  and **Never** (block only).
+  - The archive is a standard **`.zip` (deflate, UTF-8 filenames, flag bit
+    11)** built with **libzip**, which Windows Explorer and macOS Finder
+    open natively. It's named `attachments.zip`, or `<subject>.zip` when
+    the subject is short. The originals stay listed in the chip bar, and
+    one action reverts the zip. There's no encryption or ZIP64 in v1.
+  - After zipping, zmail **recomputes the encoded size with the same
+    `Limits.h` math** (`base64MimeSize` of the real archive bytes). If it
+    still doesn't fit, the message says so plainly: "Still 27.8 MB after
+    zipping. PDFs, JPEG/PNG photos, video, audio and existing archives are
+    already compressed and barely shrink. Share large files with a Google
+    Drive link, or split them across several messages." The probe flags
+    those types up front, so the estimate isn't overly hopeful. The same check runs
   again in `MessageBuilder` on the final bytes, before `messages.send`
   and before the outbox (§4.12) accepts a scheduled message.
 - **Large received messages:** messages can't exceed the receive limit, but
@@ -453,7 +496,7 @@ our own script, as zwriter's `gen_typewriter_sounds.py` does) or CC0 only.
 Users can pick their own files for any rule, including the default sound.**
 The proposed original set is chime (default), thunk and klaxon. Each bundled file has an
 entry in `assets/sounds/LICENSES` (file name, source/author, license,
-URL). A CI step (`tools/check-sound-licenses.sh`, in this PR) fails the
+URL). A CI step (`tools/check-asset-licenses.sh`, which also checks icons) fails the
 build if any `assets/sounds/*.{wav,ogg,mp3}` lacks an entry, or if an entry's
 license isn't `CC0-1.0` or `original-MIT`.
 
@@ -570,14 +613,81 @@ custom **accent color** and palette (window, base, text, highlight), applied
 through a Fusion `QPalette`. Rule colors are re-contrasted when the palette
 changes.
 
-### 4.15 UI and update checker
-The main window has a three-pane layout: labels, then the message list
-(sender, subject, date, ⚠, 📎, color), then the preview. The menu bar is
-File/Edit/View/Message/Settings/Help, with `setNativeMenuBar(false)` because
-Fildem hid zterminal's menus. The title is `zmail <PROJECT_VERSION>`.
-**Help → About** and **Help → Check for Updates** use zwriter's
-`UpdateChecker`, ported in this PR: GitHub `releases/latest`, a 5 s timeout,
-soft failure, semver comparison, and a rate-limit message.
+### 4.15 UI: Eudora-inspired layout (in this PR)
+The look follows classic **Eudora 5–7**: dense, utilitarian and fast to
+scan, rendered with Qt's **Fusion** style and tuned light and dark palettes,
+so it looks the same on every desktop. Screenshots are in
+`docs/screenshots/` (`eudora-main.png`, `eudora-main-dark.png`,
+`eudora-compose.png`).
+
+**Main window**
+- **Menu bar:** File/Edit/View/Message/Settings/Help, kept in the window
+  with `setNativeMenuBar(false)` because Fildem hid zterminal's menus. View →
+  Theme offers Light, Dark and Follow System. The title is
+  `zmail <PROJECT_VERSION>`.
+- **Toolbar** (icons with text labels underneath): **Check Mail, New
+  Message | Reply, Reply All, Forward | Delete, Attach**, then a
+  right-aligned **search box** (`from:`, `subject:`, `has:attachment`… →
+  §4.3).
+- **Mailbox tree** on the left: **In, Out** (queued and sent), **Junk /
+  Suspicious** (always in the warning color), **Trash**, then **Gmail
+  Labels** as mailboxes, each with its label-color swatch. Unread counts
+  are shown bold, right-aligned.
+- **Message list** (top right): a dense, sortable `QTreeView` with
+  movable columns, in Eudora order:
+  1. status glyph: `•` unread, blank read, `R` replied, `F` forwarded,
+     `Q` queued, `S` sent, plus a shield for suspicious mail
+  2. priority (`!` high, `↓` low)
+  3. attachment paperclip
+  4. label-color swatch
+  5. **Who**
+  6. **Date** (`M/d/yy h:mm AP`)
+  7. **K** (size, right-aligned)
+  8. **Subject**
+
+  Unread rows are bold. **Rule colors tint the row**: a subtle background
+  mixed with the base color, and the foreground pushed to at least 4.5:1
+  WCAG contrast. Suspicious rows always use the fixed warning colors, which
+  rules can't override.
+- **Preview pane** (below the list): a shaded Eudora-style header block
+  (From/To/Subject/Date/Label/Attached), then the body. Suspicious mail
+  shows the warning banner with its reasons above the headers (§4.8). The
+  scaffold uses `QTextBrowser` for sample data. The real viewer is the
+  sandboxed QtWebEngine view (§4.4).
+- **Status bar:** sync state on the left (for example "● Synced 8:52 PM",
+  or offline or error), and counts on the right ("In: 12 messages, 4 unread,
+  3,840 K · 1 queued").
+
+**Compose window**
+- **Toolbar:** Send, Send Later…, Attach, Spelling (toggle), Signature box,
+  Format box (**HTML / Plain text / Markdown**), Priority.
+- **Formatting toolbar:** font, size, bold/italic/underline, text color,
+  bulleted and numbered lists, alignment, link, quote. It's disabled in
+  plain-text mode, and in Markdown mode it inserts Markdown syntax.
+- **Eudora header block:** right-aligned bold labels **To / From / Subject
+  / Cc / Bcc / Attached** over a shaded panel. Attached shows one chip per
+  file with a paperclip and its size in K.
+- **Status bar:** format, spell-check and signature state, plus the
+  **size meter** ("2.2 MB of 25 MB (encoded)"), green, amber from 80%, red
+  over the limit. Send is disabled when red (§4.5.1).
+
+**Icons:** **Lucide** SVGs bundled under `assets/icons/lucide/` (ISC; six
+are MIT from Feather) and compiled into the binary as Qt resources. They're
+recolored from the palette at runtime (`stroke="currentColor"` becomes the
+button-text color), so they stay crisp in light and dark themes and dim
+when disabled. Every file has an entry in `assets/icons/LICENSES`.
+`tools/check-asset-licenses.sh` (renamed from `check-sound-licenses.sh`)
+checks sounds (CC0-1.0 or original-MIT) and icons (ISC, MIT, CC0-1.0 or
+original-MIT) in CI.
+
+**Sample data:** until sign-in lands, the scaffold shows fictional mail.
+The people are made up, the addresses are `example.*`, and the brands are
+Microsoft's fictional Contoso, Fabrikam, Northwind and Tailspin. No real
+people appear.
+
+**Update checker:** **Help → About** and **Help → Check for Updates** use
+zwriter's `UpdateChecker`: GitHub `releases/latest`, a 5 s timeout, soft
+failure, semver comparison, and a rate-limit message.
 
 ## 5. v1 features vs later
 
@@ -587,7 +697,7 @@ soft failure, semver comparison, and a rate-limit message.
   cache and an offline action queue
 - FTS5 search with operators, under 100 ms
 - Safe HTML viewer, Load images, per-sender always-allow, View as plain text
-- Compose in plain text or HTML, reply/forward, signatures, spell check,
+- Compose in plain text, HTML or Markdown (md4c, live preview), reply/forward, signatures, spell check,
   attachments with a size meter
 - Received attachments: list, open safely, save, inline image preview,
   risky-type warnings
@@ -601,7 +711,8 @@ soft failure, semver comparison, and a rate-limit message.
   Google sync
 - Schedule send (local outbox, optional user service, optional draft mirror)
   and snooze
-- Themes (light/dark/system, accent)
+- Themes (light/dark/system, accent); Eudora-style three-pane UI with Lucide icons
+- Confirm-to-zip when attachments exceed the send limit (libzip, with a savings estimate)
 - About, Check for Updates, the version in the title, a `.deb`
 
 **Later**
@@ -641,7 +752,29 @@ soft failure, semver comparison, and a rate-limit message.
     a mock socket and the EICAR string)
   - sound import (copy to `~/.local/share/zmail/sounds/`, de-dup names,
     missing-file fallback) and WAV/OGG/MP3 playback through `QMediaPlayer`
-  - bundled-sound license check (`tools/check-sound-licenses.sh`)
+  - bundled-asset license check (`tools/check-asset-licenses.sh`: sounds and icons)
+  - Eudora UI (in this PR: `tst_mainwindow`, `tst_compose`, `tst_theme`):
+    - toolbar buttons and labels, mailbox tree, list above preview
+    - column headers, and sorting by size
+    - rule tints, and the suspicious override
+    - status-bar counts
+    - the compose header-block order, formatting actions and the
+      HTML/Plain/Markdown modes
+    - the size meter levels, with Send disabled when over the limit
+    - dark-mode contrast of at least 4.5:1, Fusion style
+  - Markdown mode:
+    - md4c rendering fixtures (tables, code, autolinks; raw HTML is escaped)
+    - the cleaned text/plain part
+    - the HTML signature appended after rendering
+    - spell check skipping code spans and blocks
+    - the meter counting rendered bytes
+  - zip offer:
+    - the probe estimate stays within 15% of the real archive on mixed
+      fixtures
+    - the dialog never zips without consent, and Remember/Ask/Always/Never
+      work
+    - the archive opens with `unzip -l`, and Python `zipfile` sees UTF-8 names
+    - the still-too-large message for JPEG/PDF fixtures
   - rule engine (first match wins, quiet hours across midnight, contact
     implicit rules, suspicious override)
   - contrast adjustment

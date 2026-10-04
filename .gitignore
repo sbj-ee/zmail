@@ -22,6 +22,7 @@ zmail.ini
 # local scratch
 /ref/
 /screenshot-*.png
+/eudora-*.png
 *.swp
 .DS_Store
 

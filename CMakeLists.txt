@@ -18,7 +18,7 @@ endif()
 option(ZMAIL_BUILD_TESTS "Build the Qt Test suite" ON)
 
 # Ubuntu 24.04 ships Qt 6.4.2; that is the floor.
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Svg)
 
 set(ZMAIL_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
@@ -35,11 +35,26 @@ add_library(zmail_app STATIC
   src/UpdateChecker.cpp
   src/UpdateChecker.hpp
   src/core/Limits.h
+  src/ui/ComposeWindow.cpp
+  src/ui/ComposeWindow.h
+  src/ui/Icons.cpp
+  src/ui/Icons.h
+  src/ui/MessageListModel.cpp
+  src/ui/MessageListModel.h
+  src/ui/Theme.cpp
+  src/ui/Theme.h
 )
+
+# Bundled Lucide icons (ISC/MIT; see assets/icons/LICENSES) as :/icons/lucide/*.svg
+file(GLOB ZMAIL_ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/lucide/*.svg")
+qt_add_resources(zmail_app "zmail_icons"
+  PREFIX "/"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  FILES ${ZMAIL_ICON_FILES})
 target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${ZMAIL_GENERATED_DIR}")
-target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network)
+target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(zmail_app PRIVATE -Wall -Wextra -Wpedantic)
 endif()

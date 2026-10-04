@@ -1,0 +1,91 @@
+#pragma once
+
+#include <QAbstractTableModel>
+#include <QColor>
+#include <QDateTime>
+#include <QList>
+#include <QSortFilterProxyModel>
+#include <QStringList>
+
+namespace zmail::ui {
+
+enum class MailStatus { Unread, Read, Replied, Forwarded, Queued, Sent };
+enum class MailPriority { Low = 0, Normal = 1, High = 2 };
+
+struct MailItem
+{
+    MailStatus status = MailStatus::Read;
+    MailPriority priority = MailPriority::Normal;
+    bool hasAttachment = false;
+    QString label;          // Gmail label shown as a colour swatch ("" = none)
+    QColor labelColor;
+    QString who;            // sender (or recipient in Out)
+    QString address;
+    QDateTime date;
+    qint64 sizeBytes = 0;
+    QString subject;
+    QColor ruleColor;       // colour from the first matching rule (invalid = none)
+    bool suspicious = false;
+    QStringList mailboxes;  // "In", "Out", "Junk", "Trash"
+    QString preview;        // plain-text body for the preview pane
+    QStringList attachments;
+};
+
+// Eudora-style columns.
+class MessageListModel : public QAbstractTableModel
+{
+    Q_OBJECT
+
+public:
+    enum Column { Status, Priority, Attachment, Label, Who, Date, Size, Subject, ColumnCount };
+    static constexpr int SortRole = Qt::UserRole + 1;
+    static constexpr int SuspiciousRole = Qt::UserRole + 2;
+    static constexpr int MailboxesRole = Qt::UserRole + 3;
+    static constexpr int LabelRole = Qt::UserRole + 4;
+    static constexpr int SearchTextRole = Qt::UserRole + 5;
+
+    explicit MessageListModel(QObject *parent = nullptr);
+
+    void setItems(QList<MailItem> items);
+    const QList<MailItem> &items() const { return m_items; }
+    const MailItem &item(int row) const { return m_items.at(row); }
+
+    int rowCount(const QModelIndex &parent = {}) const override;
+    int columnCount(const QModelIndex &parent = {}) const override;
+    QVariant data(const QModelIndex &index, int role) const override;
+    QVariant headerData(int section, Qt::Orientation o, int role) const override;
+
+    static QString statusGlyph(MailStatus s);
+    static QString formatDate(const QDateTime &dt);
+    static QString formatSizeK(qint64 bytes);
+
+    // Call after a palette change so colours are recomputed.
+    void paletteChanged();
+
+private:
+    QList<MailItem> m_items;
+};
+
+// Mailbox ("In", "Out", ..., or "label:<name>") + search filter.
+class MessageFilterProxy : public QSortFilterProxyModel
+{
+    Q_OBJECT
+
+public:
+    explicit MessageFilterProxy(QObject *parent = nullptr);
+    void setMailbox(const QString &mailbox);
+    QString mailbox() const { return m_mailbox; }
+    void setSearchText(const QString &text);
+
+protected:
+    bool filterAcceptsRow(int row, const QModelIndex &parent) const override;
+
+private:
+    QString m_mailbox = QStringLiteral("In");
+    QString m_search;
+};
+
+// Fake, realistic-looking sample data (fictional people and companies only).
+QList<MailItem> sampleMail();
+
+} // namespace zmail::ui

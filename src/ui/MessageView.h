@@ -70,7 +70,12 @@ public:
 
     int blockedImages() const { return m_blocked; }
     bool imagesLoaded() const { return m_showImages; }
+    int trackersBlocked() const { return m_trackers; } // tracking pixels dropped from the last render
     void loadImages();
+    // Ask mode: allow-list the sender (Settings > Privacy) and load images.
+    void alwaysLoadForSender();
+    // Re-read Settings > Privacy > Remote images for the open message.
+    void reloadImagePolicy();
 
 signals:
     void zoomChanged(qreal zoom);
@@ -94,6 +99,7 @@ private:
     QFrame *m_imagesBar = nullptr;
     QLabel *m_imagesText = nullptr;
     QPushButton *m_loadImages = nullptr;
+    QPushButton *m_alwaysForSender = nullptr;
     SafeHtmlView *m_body = nullptr;
     QTimer *m_relayout = nullptr;
     qreal m_zoom = 1.0;
@@ -101,6 +107,7 @@ private:
     bool m_dark = false;
     bool m_showImages = false;
     int m_blocked = 0;
+    int m_trackers = 0;
     int m_renderedWidth = 0;
     bool m_empty = true;
 };

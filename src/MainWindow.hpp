@@ -30,6 +30,7 @@ class MessageWindow;
 struct ViewMessage;
 class ConnectDialog;
 enum class ThemeMode;
+class PrivacyDialog;
 class StripesDialog;
 } // namespace zmail::ui
 
@@ -68,6 +69,7 @@ public:
     void setStripeStrength(int strength);
     int stripeStrength() const { return m_stripes; }
     zmail::ui::StripesDialog *showStripesDialog(); // non-modal; returned for tests
+    zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
 
     // Preview pane under the list (Eudora) or to its right; remembered.
     void setPreviewRight(bool right);

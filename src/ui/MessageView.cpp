@@ -1,6 +1,7 @@
 #include "MessageView.h"
 
 #include "HtmlFit.h"
+#include "RemoteImages.h"
 #include "SafeHtmlView.h"
 #include "Theme.h"
 
@@ -132,6 +133,12 @@ MessageView::MessageView(QWidget *parent)
     m_loadImages->setObjectName(QStringLiteral("loadImagesButton"));
     m_loadImages->setToolTip(tr("Download this message's remote images. The sender can see that you opened it."));
     ib->addWidget(m_loadImages);
+    m_alwaysForSender = new QPushButton(tr("Always for this sender"), m_imagesBar);
+    m_alwaysForSender->setObjectName(QStringLiteral("alwaysForSenderButton"));
+    m_alwaysForSender->setToolTip(
+        tr("Load remote images now and in future mail from this address. Edit the list in Settings \u203a Privacy."));
+    ib->addWidget(m_alwaysForSender);
+    connect(m_alwaysForSender, &QPushButton::clicked, this, &MessageView::alwaysLoadForSender);
     m_imagesBar->hide();
     lay->addWidget(m_imagesBar);
     connect(m_loadImages, &QPushButton::clicked, this, &MessageView::loadImages);
@@ -203,8 +210,11 @@ void MessageView::setMessage(const ViewMessage &m)
 {
     const bool same = !m_empty && !m.id.isEmpty() && m.id == m_msg.id;
     if (!same) {
-        m_showImages = false;
-        m_body->setRemoteImagesAllowed(false);
+        // Settings > Privacy > Remote images: Always (default), Ask (the bar,
+        // or a sender on the allow list), Never.
+        m_showImages = RemoteImages::shouldLoadFor(m.from);
+        m_body->clearRemoteImages();
+        m_body->setRemoteImagesAllowed(m_showImages);
     }
     m_msg = m;
     m_empty = false;
@@ -330,6 +340,7 @@ void MessageView::render()
                           esc(tr("Couldn't load the message: %1").arg(m_msg.error)));
     }
     m_blocked = 0;
+    m_trackers = 0;
     m_body->resetBlocked();
     m_effectiveZoom = m_zoom;
 
@@ -337,6 +348,9 @@ void MessageView::render()
         m_body->setLineWrapMode(QTextEdit::WidgetWidth);
         QString html = SafeHtmlView::sanitize(m_msg.bodyHtml, &m_blocked, m_showImages);
         html = prefix + HtmlFit::prepare(html);
+        if (m_showImages && RemoteImages::blockTrackers()) {
+            html = SafeHtmlView::dropTrackers(html, &m_trackers); // even in "Always load"
+        }
         qreal z = m_zoom;
         for (int pass = 0; pass < 2; ++pass) {
             doc->setDefaultFont(zoomed(base, z));
@@ -373,7 +387,9 @@ void MessageView::render()
         m_body->setHtml(html);
     }
 
-    if (m_blocked > 0 && !m_showImages && !m_msg.loading) {
+    const RemoteImageMode mode = RemoteImages::mode();
+    if (m_blocked > 0 && !m_showImages && !m_msg.loading && mode != RemoteImageMode::Never) {
+        m_alwaysForSender->setVisible(mode == RemoteImageMode::Ask && !RemoteImages::senderAddress(m_msg.from).isEmpty());
         m_imagesText->setText(m_blocked == 1 ? tr("1 remote image blocked to protect your privacy.")
                                              : tr("%1 remote images blocked to protect your privacy.").arg(m_blocked));
         m_imagesBar->show();
@@ -382,6 +398,31 @@ void MessageView::render()
     }
     if (ratio > 0) {
         vs->setValue(int(std::round(ratio * vs->maximum())));
+    }
+}
+
+void MessageView::alwaysLoadForSender()
+{
+    RemoteImages::allowSender(m_msg.from);
+    loadImages();
+}
+
+void MessageView::reloadImagePolicy()
+{
+    if (m_empty) {
+        return;
+    }
+    const bool want = RemoteImages::shouldLoadFor(m_msg.from);
+    // Turning the setting up shows images now; turning it down applies
+    // from the next message, except Never, which blocks straight away.
+    if (want && !m_showImages) {
+        loadImages();
+    } else if (!want && m_showImages && RemoteImages::mode() == RemoteImageMode::Never) {
+        m_showImages = false;
+        m_body->setRemoteImagesAllowed(false);
+        render();
+    } else {
+        render(); // bar contents (mode, tracker setting)
     }
 }
 

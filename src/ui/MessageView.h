@@ -58,6 +58,8 @@ public:
     // Zoom actually applied to the last HTML render: zoom() times any
     // zoom-to-fit reduction for mail too wide for the pane.
     qreal effectiveZoom() const { return m_effectiveZoom; }
+    // Body renders so far (tests: an idle view must not keep re-rendering).
+    int renderCount() const { return m_renders; }
     void setZoom(qreal z);
     void zoomIn();
     void zoomOut();
@@ -102,6 +104,8 @@ private:
     bool m_showImages = false;
     int m_blocked = 0;
     int m_renderedWidth = 0;
+    int m_renders = 0;
+    bool m_rendering = false;
     bool m_empty = true;
 };
 

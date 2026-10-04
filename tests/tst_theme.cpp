@@ -43,6 +43,54 @@ private slots:
         }
     }
 
+    void rowStripesVisibleAndReadable_data()
+    {
+        QTest::addColumn<bool>("dark");
+        QTest::newRow("light") << false;
+        QTest::newRow("dark") << true;
+    }
+    void rowStripesVisibleAndReadable()
+    {
+        QFETCH(bool, dark);
+        const QPalette p = dark ? darkPalette() : lightPalette();
+        const QColor base = p.color(QPalette::Base);
+        QCOMPARE(stripeColor(p, 0), base);
+        double last = 1.0;
+        for (int v = 5; v <= kStripeMax; v += 5) {
+            const QColor c = stripeColor(p, v);
+            const double vs = contrastRatio(c, base);
+            QVERIFY2(qAbs(vs - stripeTargetContrast(v)) < 0.01, qPrintable(QStringLiteral("%1: %2").arg(v).arg(vs)));
+            QVERIFY(vs > last); // monotonic slider
+            last = vs;
+            // Text stays readable on the stripe at any strength (WCAG AAA 7:1),
+            // dimmed text (K and priority columns) keeps 3:1 up to Strong,
+            // and the selection still stands out.
+            QVERIFY2(contrastRatio(p.color(QPalette::Text), c) >= 7.0, qPrintable(c.name()));
+            if (v <= stripePreset(StripeStrength::Strong)) {
+                QVERIFY2(contrastRatio(p.color(QPalette::PlaceholderText), c) >= 3.0, qPrintable(QString::number(v)));
+            }
+            QVERIFY(contrastRatio(p.color(QPalette::Highlight), c) >= 1.5);
+        }
+        // Default (Normal) is clearly visible; 0.2.x's dark stripe was ~1.08:1.
+        QVERIFY(contrastRatio(stripeColor(p, kStripeDefault), base) >= 1.19);
+        QVERIFY(contrastRatio(p.color(QPalette::AlternateBase), base) < 1.19);
+    }
+
+    void stripeSettingValues()
+    {
+        QCOMPARE(stripeStrengthFromSetting(QVariant()), kStripeDefault);
+        QCOMPARE(stripeStrengthFromSetting(QVariant(65)), 65);
+        QCOMPARE(stripeStrengthFromSetting(QVariant(QStringLiteral("65"))), 65);
+        QCOMPARE(stripeStrengthFromSetting(QVariant(250)), kStripeMax);
+        QCOMPARE(stripeStrengthFromSetting(QVariant(-3)), 0);
+        QCOMPARE(stripeStrengthFromSetting(QVariant(QStringLiteral("subtle"))), stripePreset(StripeStrength::Subtle));
+        QCOMPARE(stripeStrengthFromSetting(QVariant(QStringLiteral("bogus"))), kStripeDefault);
+        QVERIFY(stripePreset(StripeStrength::Off) < stripePreset(StripeStrength::Subtle));
+        QVERIFY(stripePreset(StripeStrength::Subtle) < stripePreset(StripeStrength::Normal));
+        QVERIFY(stripePreset(StripeStrength::Normal) < stripePreset(StripeStrength::Strong));
+        QCOMPARE(stripePreset(StripeStrength::Normal), kStripeDefault);
+    }
+
     void applyThemeSwitchesPalette()
     {
         applyTheme(ThemeMode::Dark);

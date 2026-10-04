@@ -30,6 +30,7 @@ class MessageWindow;
 struct ViewMessage;
 class ConnectDialog;
 enum class ThemeMode;
+class StripesDialog;
 } // namespace zmail::ui
 
 // Eudora-inspired main window: mailbox tree on the left, a dense sortable
@@ -63,6 +64,10 @@ public:
     QList<ComposeWindow *> composers() const { return m_composers; }
     void selectMailbox(const QString &key);
     void setTheme(zmail::ui::ThemeMode mode);
+    // Message-list row stripes, 0..100 (Settings > Row Stripes), remembered.
+    void setStripeStrength(int strength);
+    int stripeStrength() const { return m_stripes; }
+    zmail::ui::StripesDialog *showStripesDialog(); // non-modal; returned for tests
 
     // Preview pane under the list (Eudora) or to its right; remembered.
     void setPreviewRight(bool right);
@@ -78,6 +83,7 @@ public slots:
 
 protected:
     void closeEvent(QCloseEvent *ev) override;
+    void changeEvent(QEvent *ev) override;
 
 private:
     void buildMenus();
@@ -122,6 +128,8 @@ private:
     QAction *m_signInAction = nullptr;
     QAction *m_signOutAction = nullptr;
     bool m_live = false;
+    int m_stripes = 40;
+    void applyStripes();
     QString m_lastSync;     // "8:45 AM"
     QString m_shownId;      // message currently in the preview
     QTimer *m_reloadTimer = nullptr;

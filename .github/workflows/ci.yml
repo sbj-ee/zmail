@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check bundled sound licenses
+        run: ./tools/check-sound-licenses.sh
+
       - name: Install Qt 6 + build tools
         run: |
           sudo apt-get update -qq

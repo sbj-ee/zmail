@@ -24,3 +24,6 @@ zmail.ini
 /screenshot-*.png
 *.swp
 .DS_Store
+
+# Personal sound clips (often copyrighted): never commit.
+/sounds-local/

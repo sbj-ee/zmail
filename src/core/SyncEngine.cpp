@@ -419,7 +419,8 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
 void SyncEngine::fetchBody(const QString &id, MessageCb cb)
 {
     const CachedMessage cached = m_cache->message(id);
-    if (cached.hasBody) {
+    // Bodies cached by 0.2.0 lack Message-ID/References; refetch for replies.
+    if (cached.hasBody && !cached.messageIdHeader.isEmpty()) {
         cb(cached, {});
         return;
     }

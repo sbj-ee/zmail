@@ -55,6 +55,12 @@ public:
     static QString baseTitle();
 
     ComposeWindow *openCompose(bool sampleReply = false);
+    // Live mode: Reply / Reply All / Forward the message in the preview pane
+    // (sample mode opens the sample reply).
+    // zmail::ReplyBuilder::Kind; id "" = the message in the preview pane.
+    ComposeWindow *composeReply(int kind, const QString &id = {});
+    QString shownMessageId() const { return m_shownId; }
+    QList<ComposeWindow *> composers() const { return m_composers; }
     void selectMailbox(const QString &key);
     void setTheme(zmail::ui::ThemeMode mode);
 
@@ -89,6 +95,8 @@ private:
     void updateSyncLabel(const QString &status = {});
     QString labelForMailbox(const QString &key) const;
     void showLiveMessage(int row);
+    void updateMessageActions();
+    void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
     void trashMessage(const QString &id);
     void saveSplitters();

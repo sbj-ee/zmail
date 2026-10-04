@@ -280,8 +280,8 @@ its right (`ui/previewRight`). Double-click (or Message → Open in New
 Window, Ctrl+O) opens a message in its own window with Reply / Reply All /
 Forward / Delete. Delete is `users.messages.trash` with an optimistic cache
 update that is rolled back on failure. Several windows can be open; they
-cascade from the last saved geometry (`messageWindow/geometry`). Reply All
-and Forward wait for sending (0.3.0).
+cascade from the last saved geometry (`messageWindow/geometry`). Since 0.3.0
+Reply, Reply All and Forward there open the composer for that message.
 
 ### 4.5 Compose and send
 - **Plain text, HTML or Markdown**, with a mode switch per message (the
@@ -790,6 +790,61 @@ failure, semver comparison, and a rate-limit message.
 - Not yet: sending (next PR), attachments download, batch requests, the
   WebEngine viewer, the background fetch of older mail beyond scroll paging.
 
+### 4.17 PR #4 (v0.3.0): sending, what's implemented
+
+- **Compose from the Eudora UI.** New, Reply, Reply All and Forward (toolbar,
+  Message menu, Ctrl+R / Ctrl+Shift+R / Ctrl+Shift+F) open `ComposeWindow`
+  wired to the signed-in `MailSession`. Reply goes to Reply-To or From; Reply
+  All adds the original To and Cc minus your own address, deduplicated.
+  Forward re-fetches the original (`format=full`) and pulls each attachment
+  with `users.messages.attachments.get`. From is the default send-as identity
+  (`users.settings.sendAs`).
+- **Formats.** HTML (rich editor; `RichText::toPlainText` makes the text part),
+  Plain (text/plain only) and Markdown (md4c, raw HTML disabled, inline CSS;
+  the source is the text part). HTML and Markdown go out as
+  `multipart/alternative`; attachments wrap that in `multipart/mixed`.
+- **MIME (`core/MimeBuilder`).** CRLF throughout, headers folded at 78
+  columns, RFC 2047 encoded-words for non-ASCII header text, RFC 2231
+  `filename*` for non-ASCII attachment names, bodies 7bit when they're
+  short-line ASCII and base64 (76-column lines) otherwise. Bcc is in the raw
+  message; Gmail delivers to it and strips the header.
+- **Threading.** `In-Reply-To` = the parent's Message-ID, `References` = the
+  parent's References + Message-ID (trimmed to 20, keeping the root), and the
+  Gmail `threadId`. Gmail only honours threadId when the headers and subject
+  match, and the mock enforces the same rule. The cache gained `cc_addr`,
+  `reply_to`, `message_id_hdr` and `references_hdr` (added in place to 0.2.0
+  caches); bodies cached by 0.2.0 are re-fetched once for the headers.
+- **Upload (`core/Sender`).** Under `kSimpleUploadMaxBytes` (5 MB):
+  `POST /messages/send` with JSON `{raw, threadId}`. JSON `raw` is used rather
+  than `uploadType=media` because a media upload has nowhere to carry the
+  threadId. At 5 MB and up: the resumable protocol
+  (`/upload/gmail/v1/users/me/messages/send?uploadType=resumable`, metadata
+  `{threadId}`, then a PUT of the bytes to the session URI). An interrupted PUT
+  is resumed: `Content-Range: bytes */N` returns 308 with a Range header, and
+  the rest is sent. Anything over `kSendLimitBytes` (25 MB, inside the 35 MiB
+  API cap) is refused before any request is made.
+- **Drafts.** Save Draft (Ctrl+S) uses `users.drafts.create`, then
+  `users.drafts.update` for the same draft; sending deletes it. Closing a dirty
+  window asks Save / Discard / Cancel.
+- **Sent.** After a send, `MailSession::syncSoon()` runs a history poll, so
+  the message appears under Out (SENT) on the next sync.
+- **Attachments.** File picker, drag and drop, removable chips, and the size
+  meter. Over the limit: a red banner, Send disabled, and the §4.5.1 zip offer.
+  zmail probes with deflate (first 1 MB per file; already-compressed types
+  counted at full size). If zipping would fit, it asks first (Zip / Cancel plus
+  "Remember my choice", stored as the Ask/Always/Never policy in
+  `compose/zipPolicy`). It builds `attachments.zip` with libzip and re-checks
+  the size. "Undo zip" restores the originals.
+- **Signatures.** Settings → Signatures… stores named rich and plain versions
+  plus a default in QSettings. The signature sits above the quote behind a
+  `-- ` delimiter, and switching it in the combo replaces it in place.
+- **Spell check.** Optional at build time (Hunspell + `hunspell-en-us`). It's a
+  port of zwriter's SpellChecker and shares its personal dictionary
+  (`~/.local/share/sbj-ee/zwriter/user-dictionary.txt`). The context menu
+  offers suggestions, Add to Dictionary and Ignore.
+- **Not yet:** Send Later and the outbox service (M7), contacts autocomplete
+  (M6).
+
 ## 5. v1 features vs later
 
 **v1**
@@ -913,8 +968,9 @@ failure, semver comparison, and a rate-limit message.
 - **M3:** MIME parse, safe viewer, attachments (receiving), security scanner
 - **M4:** rules (sound, color, notification), notifications, DND, quiet hours,
   themes
-- **M5:** compose (plain/HTML), send, signatures, spell check, attachments
-  (sending)
+- **M5 (PR #4, v0.3.0, done):** compose (plain/HTML/Markdown), send, drafts,
+  reply/forward threading, signatures, spell check, attachments (sending,
+  size block, zip offer). Scheduled send and the outbox stay in M7.
 - **M6:** contacts (address book, autocomplete, vCard, groups, People sync)
 - **M7:** schedule send, snooze, `zmail-sender` user service
 - **M8:** polish, a performance pass, the v1.0.0 release `.deb`

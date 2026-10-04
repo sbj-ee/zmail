@@ -6,6 +6,7 @@
 #include <QCryptographicHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QUrlQuery>
@@ -23,6 +24,8 @@ QByteArray statusText(int s)
     case 200: return "OK";
     case 204: return "No Content";
     case 302: return "Found";
+    case 308: return "Resume Incomplete";
+    case 413: return "Request Entity Too Large";
     case 400: return "Bad Request";
     case 401: return "Unauthorized";
     case 403: return "Forbidden";
@@ -100,6 +103,9 @@ QString MockGoogle::addMessage(Message m, bool recordHistory)
     }
     if (m.snippet.isEmpty()) {
         m.snippet = m.text.left(120);
+    }
+    if (m.messageIdHeader.isEmpty()) {
+        m.messageIdHeader = QStringLiteral("<%1@mock.example>").arg(m.id);
     }
     ++m_historyId;
     if (recordHistory) {
@@ -305,10 +311,18 @@ QJsonObject MockGoogle::messageJson(const Message &m, const QString &format) con
                        QJsonObject{{QStringLiteral("name"), QStringLiteral("To")}, {QStringLiteral("value"), m.to}},
                        QJsonObject{{QStringLiteral("name"), QStringLiteral("Subject")}, {QStringLiteral("value"), m.subject}},
                        QJsonObject{{QStringLiteral("name"), QStringLiteral("Date")},
-                                   {QStringLiteral("value"), m.date.toString(Qt::RFC2822Date)}}};
-    if (!m.cc.isEmpty()) {
-        headers.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("Cc")}, {QStringLiteral("value"), m.cc}});
-    }
+                                   {QStringLiteral("value"), m.date.toString(Qt::RFC2822Date)}},
+                       QJsonObject{{QStringLiteral("name"), QStringLiteral("Message-ID")},
+                                   {QStringLiteral("value"), m.messageIdHeader}}};
+    auto opt = [&headers](const char *name, const QString &v) {
+        if (!v.isEmpty()) {
+            headers.append(QJsonObject{{QStringLiteral("name"), QString::fromLatin1(name)}, {QStringLiteral("value"), v}});
+        }
+    };
+    opt("Cc", m.cc);
+    opt("Reply-To", m.replyTo);
+    opt("References", m.references);
+    opt("In-Reply-To", m.inReplyTo);
     const bool mixed = !m.attachments.isEmpty();
     headers.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("Content-Type")},
                                {QStringLiteral("value"), mixed ? QStringLiteral("multipart/mixed; boundary=x")
@@ -333,11 +347,12 @@ QJsonObject MockGoogle::messageJson(const Message &m, const QString &format) con
         if (mixed) {
             parts.append(QJsonObject{{QStringLiteral("mimeType"), QStringLiteral("multipart/alternative")},
                                      {QStringLiteral("parts"), alt}});
-            for (const QString &a : m.attachments) {
+            for (int i = 0; i < m.attachments.size(); ++i) {
+                const qint64 size = i < m.attachmentData.size() ? m.attachmentData[i].size() : 1000;
                 parts.append(QJsonObject{{QStringLiteral("mimeType"), QStringLiteral("application/octet-stream")},
-                                         {QStringLiteral("filename"), a.section(QStringLiteral(" ("), 0, 0)},
-                                         {QStringLiteral("body"), QJsonObject{{QStringLiteral("attachmentId"), QStringLiteral("att1")},
-                                                                              {QStringLiteral("size"), 1000}}}});
+                                         {QStringLiteral("filename"), m.attachments[i].section(QStringLiteral(" ("), 0, 0)},
+                                         {QStringLiteral("body"), QJsonObject{{QStringLiteral("attachmentId"), QStringLiteral("att-%1").arg(i)},
+                                                                              {QStringLiteral("size"), size}}}});
             }
         } else {
             parts = alt;
@@ -453,6 +468,15 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
 
     // --- Gmail ---------------------------------------------------------------
     const QString api = QStringLiteral("/gmail/v1/users/me");
+    const QString uploadApi = QStringLiteral("/upload") + api;
+    if (path.startsWith(uploadApi)) {
+        if (!authorized(headers)) {
+            replyJson(s, 401, gerror(401, QStringLiteral("UNAUTHENTICATED"), QStringLiteral("Invalid Credentials")));
+            return;
+        }
+        handleUpload(s, method, path.mid(uploadApi.size()), q, headers, body);
+        return;
+    }
     if (!path.startsWith(api)) {
         reply(s, 404, "not found", "text/plain");
         return;
@@ -509,6 +533,69 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
             o.insert(QStringLiteral("nextPageToken"), QString::number(offset + max));
         }
         replyJson(s, 200, o);
+        return;
+    }
+    if (rest == QLatin1String("/settings/sendAs")) {
+        replyJson(s, 200, {{QStringLiteral("sendAs"),
+                            QJsonArray{QJsonObject{{QStringLiteral("sendAsEmail"), email},
+                                                   {QStringLiteral("displayName"), displayName},
+                                                   {QStringLiteral("isPrimary"), true},
+                                                   {QStringLiteral("isDefault"), true}}}}});
+        return;
+    }
+    if (rest == QLatin1String("/messages/send") && method == "POST") {
+        const QJsonObject o = QJsonDocument::fromJson(body).object();
+        const QByteArray raw = QByteArray::fromBase64(o.value(QStringLiteral("raw")).toString().toLatin1(),
+                                                      QByteArray::Base64UrlEncoding);
+        lastSendPath = QStringLiteral("simple");
+        int status = 200;
+        const QJsonObject r = acceptSend(raw, o.value(QStringLiteral("threadId")).toString(), &status);
+        replyJson(s, status, r);
+        return;
+    }
+    if (rest == QLatin1String("/drafts") && method == "POST") {
+        const QJsonObject m = QJsonDocument::fromJson(body).object().value(QStringLiteral("message")).toObject();
+        const QByteArray raw = QByteArray::fromBase64(m.value(QStringLiteral("raw")).toString().toLatin1(),
+                                                      QByteArray::Base64UrlEncoding);
+        int status = 200;
+        replyJson(s, status, acceptDraft(raw, m.value(QStringLiteral("threadId")).toString(), {}, &status));
+        return;
+    }
+    if (rest.startsWith(QLatin1String("/drafts/"))) {
+        const QString did = rest.mid(8);
+        if (!m_drafts.contains(did)) {
+            replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Requested entity was not found.")));
+            return;
+        }
+        if (method == "DELETE") {
+            m_messages.remove(m_drafts.take(did).messageId);
+            reply(s, 204, {});
+            return;
+        }
+        if (method == "PUT") {
+            const QJsonObject m = QJsonDocument::fromJson(body).object().value(QStringLiteral("message")).toObject();
+            const QByteArray raw = QByteArray::fromBase64(m.value(QStringLiteral("raw")).toString().toLatin1(),
+                                                          QByteArray::Base64UrlEncoding);
+            int status = 200;
+            replyJson(s, status, acceptDraft(raw, m.value(QStringLiteral("threadId")).toString(), did, &status));
+            return;
+        }
+        const Draft d = m_drafts.value(did);
+        replyJson(s, 200, {{QStringLiteral("id"), d.id}, {QStringLiteral("message"), messageJson(m_messages.value(d.messageId), QStringLiteral("full"))}});
+        return;
+    }
+    if (rest.startsWith(QLatin1String("/messages/")) && rest.contains(QLatin1String("/attachments/"))) {
+        const QStringList parts = rest.mid(10).split(QLatin1Char('/'));
+        const Message m = m_messages.value(parts.value(0));
+        const int idx = parts.value(2).mid(4).toInt();
+        if (m.id.isEmpty() || !parts.value(2).startsWith(QLatin1String("att-")) || idx >= m.attachments.size()) {
+            replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Requested entity was not found.")));
+            return;
+        }
+        const QByteArray data = idx < m.attachmentData.size()
+                                    ? m.attachmentData[idx]
+                                    : QByteArray("mock attachment ") + m.attachments[idx].toUtf8() + QByteArray(980, 'x');
+        replyJson(s, 200, {{QStringLiteral("size"), int(data.size())}, {QStringLiteral("data"), QString::fromLatin1(b64url(data))}});
         return;
     }
     if (rest.startsWith(QLatin1String("/messages/"))) {
@@ -586,6 +673,226 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
         return;
     }
     replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("no such endpoint")));
+}
+
+namespace {
+// Minimal RFC 2047 decoder for the mock (UTF-8 B and Q words).
+QString decodeWords(const QString &v)
+{
+    static const QRegularExpression re(QStringLiteral("=\\?([^?]+)\\?([bBqQ])\\?([^?]*)\\?=(\\s+(?==\\?))?"));
+    QString out;
+    qsizetype last = 0;
+    for (auto it = re.globalMatch(v); it.hasNext();) {
+        const auto m = it.next();
+        out += v.mid(last, m.capturedStart() - last);
+        QByteArray bytes;
+        if (m.captured(2).compare(QLatin1String("b"), Qt::CaseInsensitive) == 0) {
+            bytes = QByteArray::fromBase64(m.captured(3).toLatin1());
+        } else {
+            bytes = QByteArray::fromPercentEncoding(m.captured(3).toLatin1().replace('_', ' '), '=');
+        }
+        out += QString::fromUtf8(bytes);
+        last = m.capturedEnd();
+    }
+    return out + v.mid(last);
+}
+
+QString normSubject(QString s)
+{
+    static const QRegularExpression re(QStringLiteral("^\\s*((re|fwd?|aw)\\s*:\\s*)+"), QRegularExpression::CaseInsensitiveOption);
+    return s.remove(re).trimmed();
+}
+} // namespace
+
+MockGoogle::Message MockGoogle::messageFromRaw(const QByteArray &raw, const QString &) const
+{
+    Message m;
+    m.raw = raw;
+    const qsizetype end = raw.indexOf("\r\n\r\n");
+    const QByteArray head = raw.left(end < 0 ? raw.size() : end);
+    QHash<QString, QString> h;
+    QString cur;
+    for (const QByteArray &line : head.split('\n')) {
+        const QString l = QString::fromUtf8(line).remove(QLatin1Char('\r'));
+        if (!l.isEmpty() && (l[0] == QLatin1Char(' ') || l[0] == QLatin1Char('\t'))) {
+            if (!cur.isEmpty()) {
+                h[cur] += QLatin1Char(' ') + l.trimmed();
+            }
+            continue;
+        }
+        const qsizetype c = l.indexOf(QLatin1Char(':'));
+        if (c > 0) {
+            cur = l.left(c).trimmed().toLower();
+            h[cur] = l.mid(c + 1).trimmed();
+        }
+    }
+    m.from = decodeWords(h.value(QStringLiteral("from")));
+    m.to = decodeWords(h.value(QStringLiteral("to")));
+    m.cc = decodeWords(h.value(QStringLiteral("cc")));
+    m.subject = decodeWords(h.value(QStringLiteral("subject")));
+    m.messageIdHeader = h.value(QStringLiteral("message-id"));
+    m.references = h.value(QStringLiteral("references"));
+    m.inReplyTo = h.value(QStringLiteral("in-reply-to"));
+    m.date = QDateTime::currentDateTimeUtc();
+    m.size = raw.size();
+    m.text = QStringLiteral("(sent via mock)");
+    return m;
+}
+
+QJsonObject MockGoogle::acceptSend(const QByteArray &raw, const QString &threadId, int *status)
+{
+    ++sendCalls;
+    lastRaw = raw;
+    if (raw.size() > kUploadMaxBytes) {
+        *status = 413;
+        return gerror(413, QStringLiteral("FAILED_PRECONDITION"), QStringLiteral("Request Entity Too Large"));
+    }
+    if (!raw.contains("\r\n\r\n") || (!raw.contains("\nTo:") && !raw.startsWith("To:"))) {
+        *status = 400;
+        return gerror(400, QStringLiteral("INVALID_ARGUMENT"), QStringLiteral("Invalid To header"));
+    }
+    Message m = messageFromRaw(raw, threadId);
+    m.labels = {QStringLiteral("SENT")};
+    // Like Gmail: the requested thread is honoured only when the message
+    // references a message in it and the subject (minus Re:/Fwd:) matches.
+    bool join = false;
+    if (!threadId.isEmpty()) {
+        for (const Message &o : std::as_const(m_messages)) {
+            if (o.threadId == threadId && (m.references.contains(o.messageIdHeader) || m.inReplyTo == o.messageIdHeader) &&
+                normSubject(o.subject) == normSubject(m.subject)) {
+                join = true;
+                break;
+            }
+        }
+    }
+    if (join) {
+        m.threadId = threadId;
+    }
+    const QString id = addMessage(m, true);
+    const Message &stored = m_messages[id];
+    return {{QStringLiteral("id"), id},
+            {QStringLiteral("threadId"), stored.threadId},
+            {QStringLiteral("labelIds"), QJsonArray{QStringLiteral("SENT")}}};
+}
+
+QJsonObject MockGoogle::acceptDraft(const QByteArray &raw, const QString &threadId, const QString &draftId, int *status)
+{
+    lastRaw = raw;
+    if (raw.size() > kUploadMaxBytes) {
+        *status = 413;
+        return gerror(413, QStringLiteral("FAILED_PRECONDITION"), QStringLiteral("Request Entity Too Large"));
+    }
+    Message m = messageFromRaw(raw, threadId);
+    m.labels = {QStringLiteral("DRAFT")};
+    if (!threadId.isEmpty()) {
+        m.threadId = threadId;
+    }
+    QString did = draftId;
+    if (did.isEmpty()) {
+        did = QStringLiteral("r-%1").arg(m_nextDraft++);
+    } else {
+        m_messages.remove(m_drafts.value(did).messageId);
+    }
+    const QString id = addMessage(m, false);
+    m_drafts.insert(did, {did, id});
+    return {{QStringLiteral("id"), did},
+            {QStringLiteral("message"), QJsonObject{{QStringLiteral("id"), id},
+                                                    {QStringLiteral("threadId"), m_messages[id].threadId},
+                                                    {QStringLiteral("labelIds"), QJsonArray{QStringLiteral("DRAFT")}}}}};
+}
+
+void MockGoogle::handleUpload(QTcpSocket *s, const QByteArray &method, const QString &rest, const QUrlQuery &q,
+                              const QHash<QByteArray, QByteArray> &headers, const QByteArray &body)
+{
+    const QString uploadId = q.queryItemValue(QStringLiteral("upload_id"));
+    if (uploadId.isEmpty()) {
+        // Session start: metadata only.
+        if (q.queryItemValue(QStringLiteral("uploadType")) != QLatin1String("resumable") ||
+            headers.value("x-upload-content-type") != "message/rfc822") {
+            replyJson(s, 400, gerror(400, QStringLiteral("INVALID_ARGUMENT"), QStringLiteral("bad upload request")));
+            return;
+        }
+        Upload u;
+        if (rest == QLatin1String("/messages/send") && method == "POST") {
+            u.kind = QStringLiteral("send");
+        } else if (rest == QLatin1String("/drafts") && method == "POST") {
+            u.kind = QStringLiteral("draftCreate");
+        } else if (rest.startsWith(QLatin1String("/drafts/")) && method == "PUT") {
+            u.kind = QStringLiteral("draftUpdate");
+            u.draftId = rest.mid(8);
+        } else {
+            replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("no such upload endpoint")));
+            return;
+        }
+        u.meta = QJsonDocument::fromJson(body).object();
+        u.expected = headers.value("x-upload-content-length").toLongLong();
+        if (u.expected > kUploadMaxBytes) {
+            replyJson(s, 413, gerror(413, QStringLiteral("FAILED_PRECONDITION"), QStringLiteral("Request Entity Too Large")));
+            return;
+        }
+        ++uploadSessions;
+        const QString sid = QStringLiteral("mock-upload-%1").arg(uploadSessions);
+        lastUploadId = sid;
+        m_uploads.insert(sid, u);
+        QUrl loc = baseUrl().resolved(QUrl(QStringLiteral("/upload/gmail/v1/users/me") + rest));
+        QUrlQuery lq;
+        lq.addQueryItem(QStringLiteral("uploadType"), QStringLiteral("resumable"));
+        lq.addQueryItem(QStringLiteral("upload_id"), sid);
+        loc.setQuery(lq);
+        reply(s, 200, {}, "text/plain", {{"Location", loc.toEncoded()}});
+        return;
+    }
+    if (!m_uploads.contains(uploadId) || method != "PUT") {
+        replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("upload session not found")));
+        return;
+    }
+    Upload &u = m_uploads[uploadId];
+    auto finish = [&]() {
+        int status = 200;
+        lastSendPath = QStringLiteral("resumable");
+        const QString threadId = u.kind == QLatin1String("send")
+                                     ? u.meta.value(QStringLiteral("threadId")).toString()
+                                     : u.meta.value(QStringLiteral("message")).toObject().value(QStringLiteral("threadId")).toString();
+        u.result = u.kind == QLatin1String("send") ? acceptSend(u.data, threadId, &status)
+                                                   : acceptDraft(u.data, threadId, u.draftId, &status);
+        u.done = status == 200;
+        replyJson(s, status, u.result);
+    };
+    const QByteArray range = headers.value("content-range");
+    if (range.startsWith("bytes */")) {
+        ++statusQueries;
+        if (u.done) {
+            replyJson(s, 200, u.result);
+            return;
+        }
+        QList<QPair<QByteArray, QByteArray>> extra;
+        if (!u.data.isEmpty()) {
+            extra.append({"Range", "bytes=0-" + QByteArray::number(u.data.size() - 1)});
+        }
+        reply(s, 308, {}, "text/plain", extra);
+        return;
+    }
+    ++uploadPuts;
+    qint64 start = 0;
+    if (range.startsWith("bytes ")) {
+        start = range.mid(6, range.indexOf('-') - 6).toLongLong();
+    }
+    if (start != u.data.size()) {
+        replyJson(s, 400, gerror(400, QStringLiteral("INVALID_ARGUMENT"), QStringLiteral("non-contiguous upload")));
+        return;
+    }
+    if (failUploadAfterBytes >= 0) {
+        u.data += body.left(failUploadAfterBytes);
+        failUploadAfterBytes = -1;
+        replyJson(s, 503, gerror(503, QStringLiteral("UNAVAILABLE"), QStringLiteral("injected upload interruption")));
+        return;
+    }
+    u.data += body;
+    if (u.data.size() < u.expected) {
+        reply(s, 308, {}, "text/plain", {{"Range", "bytes=0-" + QByteArray::number(u.data.size() - 1)}});
+        return;
+    }
+    finish();
 }
 
 } // namespace zmail::test

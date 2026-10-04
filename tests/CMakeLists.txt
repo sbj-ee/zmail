@@ -23,6 +23,7 @@ zmail_add_test(tst_theme)
 zmail_add_test(tst_auth)
 zmail_add_test(tst_sync)
 zmail_add_test(tst_connect)
+zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)
 target_compile_definitions(tst_viewer PRIVATE ZMAIL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 

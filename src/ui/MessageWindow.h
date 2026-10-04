@@ -29,7 +29,8 @@ public:
     QAction *deleteAction() const { return m_delete; }
 
 signals:
-    void replyRequested(const QString &id);
+    // kind is zmail::ReplyBuilder::Kind (Reply, ReplyAll, Forward).
+    void composeRequested(const QString &id, int kind);
     void deleteRequested(const QString &id);
 
 protected:

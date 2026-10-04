@@ -1,6 +1,7 @@
 // Message viewer: layout of builder-made HTML mail, light page, header block,
 // blocked remote images, zoom, splitter/layout memory, message windows.
 #include "MainWindow.hpp"
+#include "ui/ComposeWindow.h"
 #include "ui/HtmlFit.h"
 #include "ui/MessageView.h"
 #include "ui/MessageWindow.h"
@@ -376,7 +377,11 @@ private slots:
         QVERIFY(mw->view()->headerText().contains(QStringLiteral("From: ")));
         QVERIFY(mw->replyAction()->isEnabled());
         QVERIFY(!mw->deleteAction()->isEnabled()); // sample data: nothing to delete at Google
-        QVERIFY(!mw->forwardAction()->isEnabled());
+        QVERIFY(mw->replyAllAction()->isEnabled());
+        QVERIFY(mw->forwardAction()->isEnabled());
+        mw->forwardAction()->trigger(); // sample data: opens the composer
+        QTRY_COMPARE(w.composers().size(), 1);
+        w.composers().first()->setConfirmOnClose(false);
 
         QVERIFY(QTest::qWaitForWindowExposed(mw));
         MessageWindow *second = w.openMessageWindow(list->model()->index(1, 0));

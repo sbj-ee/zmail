@@ -56,6 +56,15 @@ void walk(const QJsonObject &part, Body &out, int depth)
     }
     if (attachment) {
         out.attachments.append(filename.isEmpty() ? QStringLiteral("(unnamed)") : filename);
+        AttachmentRef ref;
+        ref.fileName = out.attachments.last();
+        ref.mimeType = mime;
+        ref.attachmentId = body.value(QStringLiteral("attachmentId")).toString();
+        ref.size = body.value(QStringLiteral("size")).toInteger();
+        if (ref.attachmentId.isEmpty()) {
+            ref.inlineData = decodeBase64Url(body.value(QStringLiteral("data")).toString());
+        }
+        out.attachmentRefs.append(ref);
         return;
     }
     const QString data = body.value(QStringLiteral("data")).toString();

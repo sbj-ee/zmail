@@ -1,5 +1,7 @@
 #include "MailSession.h"
 
+#include "Sender.h"
+
 #include "GmailClient.h"
 #include "Log.h"
 #include "MailCache.h"
@@ -7,6 +9,7 @@
 #include "TokenStore.h"
 
 #include <QNetworkAccessManager>
+#include <QJsonArray>
 #include <QSettings>
 
 namespace zmail {
@@ -167,9 +170,40 @@ void MailSession::startAccount(const QString &account)
     m_sync = std::make_unique<SyncEngine>(m_api.get(), m_cache.get());
     m_sync->setPollInterval(m_opts.pollIntervalMs);
     m_sync->setInitialCount(m_opts.initialCount);
+    m_sender = std::make_unique<Sender>(m_api.get());
+    m_displayName.clear();
+    m_api->listSendAs([this](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            return;
+        }
+        for (const auto &v : json.value(QStringLiteral("sendAs")).toArray()) {
+            const QJsonObject o = v.toObject();
+            if (o.value(QStringLiteral("isDefault")).toBool() || o.value(QStringLiteral("isPrimary")).toBool()) {
+                m_displayName = o.value(QStringLiteral("displayName")).toString();
+                emit identityChanged();
+                return;
+            }
+        }
+    });
     setState(State::SignedIn);
     emit ready();
     m_sync->start();
+}
+
+QString MailSession::fromHeader() const
+{
+    const QString addr = account();
+    if (m_displayName.isEmpty() || addr.isEmpty()) {
+        return addr;
+    }
+    return QStringLiteral("%1 <%2>").arg(m_displayName, addr);
+}
+
+void MailSession::syncSoon()
+{
+    if (m_sync) {
+        m_sync->pollNow(true);
+    }
 }
 
 void MailSession::stopAccount()
@@ -178,6 +212,7 @@ void MailSession::stopAccount()
         m_sync->stop();
     }
     m_sync.reset();
+    m_sender.reset();
     m_api.reset();
     m_cache.reset();
 }

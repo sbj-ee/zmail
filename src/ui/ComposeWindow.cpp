@@ -1,33 +1,97 @@
 #include "ComposeWindow.h"
 
 #include "Icons.h"
+#include "SpellHighlighter.h"
 #include "Theme.h"
+#include "core/GmailClient.h"
+#include "core/Log.h"
+#include "core/MailSession.h"
+#include "core/Markdown.h"
+#include "core/MessageParser.h"
+#include "core/RichText.h"
+#include "core/Sender.h"
+#include "core/Signatures.h"
+#include "core/SpellChecker.h"
 #include "version.hpp"
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QCloseEvent>
+#include <QColorDialog>
 #include <QComboBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFontComboBox>
+#include <QFontDatabase>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
 #include <QProgressBar>
+#include <QPushButton>
+#include <QSettings>
+#include <QStackedWidget>
 #include <QStatusBar>
+#include <QTextBlock>
+#include <QTextBrowser>
+#include <QTextDocumentFragment>
 #include <QTextEdit>
 #include <QTextList>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 using zmail::ui::icon;
 namespace limits = zmail::limits;
+using namespace zmail;
+
+namespace {
+// Block properties that tag the signature and the quoted original, so the
+// signature can be swapped and the format switched without touching them.
+constexpr int kSigProp = QTextFormat::UserProperty + 1;
+constexpr int kQuoteProp = QTextFormat::UserProperty + 2;
+
+SpellChecker *sharedSpellChecker()
+{
+    static QPointer<SpellChecker> s;
+    if (!s) {
+        s = new SpellChecker(qApp);
+    }
+    return s;
+}
+
+QString formatBytes(qint64 n)
+{
+    return n >= 1'000'000 ? QStringLiteral("%1 MB").arg(double(n) / 1e6, 0, 'f', 1)
+                          : QStringLiteral("%1 K").arg(QLocale(QLocale::English).toString((n + 1023) / 1024));
+}
+
+QString plainToHtml(const QString &text)
+{
+    QString out;
+    for (const QString &para : text.split(QLatin1Char('\n'))) {
+        out += QStringLiteral("<p>") + (para.isEmpty() ? QStringLiteral("<br>") : para.toHtmlEscaped()) +
+               QStringLiteral("</p>");
+    }
+    return out;
+}
+} // namespace
 
 ComposeWindow::ComposeWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setObjectName(QStringLiteral("composeWindow"));
     setAttribute(Qt::WA_DeleteOnClose, false);
+    setAcceptDrops(true);
 
     buildToolbar();
     addToolBarBreak();
@@ -39,13 +103,25 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     v->setSpacing(0);
     buildHeaderBlock(central);
     v->addWidget(m_headerBlock);
+    buildBanner(central);
+    v->addWidget(m_banner);
 
-    m_body = new QTextEdit(central);
+    m_stack = new QStackedWidget(central);
+    m_body = new QTextEdit(m_stack);
     m_body->setObjectName(QStringLiteral("composeBody"));
     m_body->setFrameShape(QFrame::NoFrame);
     m_body->setAcceptRichText(true);
     m_body->document()->setDocumentMargin(14);
-    v->addWidget(m_body, 1);
+    m_body->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_body->viewport()->installEventFilter(this);
+    m_preview = new QTextBrowser(m_stack);
+    m_preview->setObjectName(QStringLiteral("markdownPreview"));
+    m_preview->setFrameShape(QFrame::NoFrame);
+    m_preview->setOpenLinks(false);
+    m_preview->document()->setDocumentMargin(14);
+    m_stack->addWidget(m_body);
+    m_stack->addWidget(m_preview);
+    v->addWidget(m_stack, 1);
     setCentralWidget(central);
 
     m_sizeMeter = new QProgressBar(this);
@@ -54,17 +130,56 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     m_sizeMeter->setTextVisible(true);
     m_sizeMeter->setFixedWidth(300);
     m_sizeMeter->setMaximumHeight(16);
-    m_modeLabel = new QLabel(tr("HTML \u00b7 Spell check on \u00b7 Signature: Work"), this);
+    m_modeLabel = new QLabel(this);
+    m_modeLabel->setObjectName(QStringLiteral("composeModeLabel"));
     statusBar()->addWidget(m_modeLabel, 1);
     statusBar()->addPermanentWidget(new QLabel(tr("Size:"), this));
     statusBar()->addPermanentWidget(m_sizeMeter);
 
+    m_spell = sharedSpellChecker();
+    m_highlighter = new SpellHighlighter(m_spell, m_body->document());
+    m_spellAction->setEnabled(m_spell->isAvailable());
+    m_spellAction->setChecked(m_spell->isAvailable() && QSettings().value(QStringLiteral("compose/spellCheck"), true).toBool());
+    if (!m_spell->isAvailable()) {
+        m_spellAction->setToolTip(tr("Spell check needs Hunspell and an en_US dictionary (hunspell-en-us)"));
+    }
+    m_highlighter->setDocument(m_spellAction->isChecked() ? m_body->document() : nullptr);
+    connect(m_spellAction, &QAction::toggled, this, [this](bool on) {
+        QSettings().setValue(QStringLiteral("compose/spellCheck"), on);
+        m_highlighter->setDocument(on ? m_body->document() : nullptr);
+        updateModeLabel();
+    });
+    connect(m_body, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        QMenu *menu = m_body->createStandardContextMenu(pos);
+        if (m_spellAction->isChecked()) {
+            SpellHighlighter::addSuggestions(menu, m_body, m_spell, pos);
+        }
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(m_body->viewport()->mapToGlobal(pos));
+    });
+
     connect(m_subject, &QLineEdit::textChanged, this, &ComposeWindow::updateTitle);
     connect(m_body, &QTextEdit::textChanged, this, &ComposeWindow::updateSizeMeter);
+    connect(m_format, qOverload<int>(&QComboBox::activated), this, [this](int i) { setFormat(Format(i)); });
+    connect(m_signature, qOverload<int>(&QComboBox::activated), this, [this](int) {
+        applySignature();
+        updateModeLabel();
+    });
+
+    reloadSignatures();
+    refreshChips();
     updateTitle();
     updateSizeMeter();
+    updateModeLabel();
     resize(860, 640);
 }
+
+ComposeWindow::~ComposeWindow()
+{
+    delete m_ownSigStore;
+}
+
+// ---- construction -----------------------------------------------------------
 
 void ComposeWindow::buildToolbar()
 {
@@ -76,20 +191,47 @@ void ComposeWindow::buildToolbar()
 
     m_send = tb->addAction(icon(QStringLiteral("send")), tr("Send"));
     m_send->setObjectName(QStringLiteral("actionSend"));
+    m_send->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
+    m_send->setToolTip(tr("Send now (Ctrl+Enter)"));
+    connect(m_send, &QAction::triggered, this, &ComposeWindow::send);
     QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later\u2026"));
     later->setObjectName(QStringLiteral("actionSendLater"));
+    later->setEnabled(false);
+    later->setToolTip(tr("Scheduled send arrives in a later release"));
+    m_saveDraft = tb->addAction(icon(QStringLiteral("save")), tr("Save Draft"));
+    m_saveDraft->setObjectName(QStringLiteral("actionSaveDraft"));
+    m_saveDraft->setShortcut(QKeySequence::Save);
+    m_saveDraft->setToolTip(tr("Save to Gmail Drafts (Ctrl+S)"));
+    connect(m_saveDraft, &QAction::triggered, this, &ComposeWindow::saveDraft);
     tb->addSeparator();
     QAction *attach = tb->addAction(icon(QStringLiteral("paperclip")), tr("Attach"));
     attach->setObjectName(QStringLiteral("actionComposeAttach"));
-    QAction *spell = tb->addAction(icon(QStringLiteral("spell-check")), tr("Spelling"));
-    spell->setCheckable(true);
-    spell->setChecked(true);
+    connect(attach, &QAction::triggered, this, [this] {
+        const QStringList files = QFileDialog::getOpenFileNames(this, tr("Attach files"));
+        if (!files.isEmpty()) {
+            addFiles(files);
+        }
+    });
+    m_spellAction = tb->addAction(icon(QStringLiteral("spell-check")), tr("Spelling"));
+    m_spellAction->setObjectName(QStringLiteral("actionSpelling"));
+    m_spellAction->setCheckable(true);
+    m_previewAction = tb->addAction(icon(QStringLiteral("eye")), tr("Preview"));
+    m_previewAction->setObjectName(QStringLiteral("actionMarkdownPreview"));
+    m_previewAction->setCheckable(true);
+    m_previewAction->setToolTip(tr("Show the rendered Markdown"));
+    m_previewAction->setVisible(false);
+    connect(m_previewAction, &QAction::toggled, this, [this](bool on) {
+        if (on) {
+            m_preview->setHtml(markdown::toEmailHtml(m_body->toPlainText()));
+        }
+        m_stack->setCurrentWidget(on ? static_cast<QWidget *>(m_preview) : m_body);
+    });
     tb->addSeparator();
 
     tb->addWidget(new QLabel(tr(" Signature "), tb));
     m_signature = new QComboBox(tb);
     m_signature->setObjectName(QStringLiteral("signatureCombo"));
-    m_signature->addItems({tr("Work"), tr("Personal"), tr("None")});
+    m_signature->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     tb->addWidget(m_signature);
     tb->addWidget(new QLabel(tr("  Format "), tb));
     m_format = new QComboBox(tb);
@@ -97,10 +239,10 @@ void ComposeWindow::buildToolbar()
     m_format->addItems({tr("HTML"), tr("Plain text"), tr("Markdown")});
     tb->addWidget(m_format);
     tb->addWidget(new QLabel(tr("  Priority "), tb));
-    auto *prio = new QComboBox(tb);
-    prio->setObjectName(QStringLiteral("priorityCombo"));
-    prio->addItems({tr("Normal"), tr("High"), tr("Low")});
-    tb->addWidget(prio);
+    m_priority = new QComboBox(tb);
+    m_priority->setObjectName(QStringLiteral("priorityCombo"));
+    m_priority->addItems({tr("Normal"), tr("High"), tr("Low")});
+    tb->addWidget(m_priority);
 }
 
 void ComposeWindow::buildFormatBar()
@@ -109,6 +251,7 @@ void ComposeWindow::buildFormatBar()
     fb->setObjectName(QStringLiteral("formatToolBar"));
     fb->setMovable(false);
     fb->setIconSize(QSize(16, 16));
+    m_formatBar = fb;
 
     auto *font = new QFontComboBox(fb);
     font->setObjectName(QStringLiteral("fontCombo"));
@@ -132,7 +275,7 @@ void ComposeWindow::buildFormatBar()
     QAction *bold = add("actionBold", "bold", tr("Bold"), true);
     QAction *italic = add("actionItalic", "italic", tr("Italic"), true);
     QAction *underline = add("actionUnderline", "underline", tr("Underline"), true);
-    add("actionTextColor", "baseline", tr("Text colour"));
+    QAction *color = add("actionTextColor", "baseline", tr("Text colour"));
     fb->addSeparator();
     QAction *bullets = add("actionBullets", "list", tr("Bulleted list"));
     QAction *numbers = add("actionNumbers", "list-ordered", tr("Numbered list"));
@@ -141,17 +284,54 @@ void ComposeWindow::buildFormatBar()
     QAction *center = add("actionAlignCenter", "text-align-center", tr("Centre"));
     QAction *right = add("actionAlignRight", "text-align-end", tr("Align right"));
     fb->addSeparator();
-    add("actionLink", "link", tr("Insert link"));
-    add("actionQuote", "quote", tr("Quote"));
+    QAction *link = add("actionLink", "link", tr("Insert link"));
+    QAction *quote = add("actionQuote", "quote", tr("Quote"));
 
+    connect(font, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) { m_body->setCurrentFont(f); });
+    connect(size, &QComboBox::textActivated, this, [this](const QString &s) { m_body->setFontPointSize(s.toDouble()); });
     connect(bold, &QAction::toggled, this, [this](bool on) { m_body->setFontWeight(on ? QFont::Bold : QFont::Normal); });
     connect(italic, &QAction::toggled, this, [this](bool on) { m_body->setFontItalic(on); });
     connect(underline, &QAction::toggled, this, [this](bool on) { m_body->setFontUnderline(on); });
+    connect(color, &QAction::triggered, this, [this] {
+        const QColor c = QColorDialog::getColor(m_body->textColor(), this, tr("Text colour"));
+        if (c.isValid()) {
+            m_body->setTextColor(c);
+        }
+    });
     connect(bullets, &QAction::triggered, this, [this]() { m_body->textCursor().createList(QTextListFormat::ListDisc); });
     connect(numbers, &QAction::triggered, this, [this]() { m_body->textCursor().createList(QTextListFormat::ListDecimal); });
     connect(left, &QAction::triggered, this, [this]() { m_body->setAlignment(Qt::AlignLeft); });
     connect(center, &QAction::triggered, this, [this]() { m_body->setAlignment(Qt::AlignHCenter); });
     connect(right, &QAction::triggered, this, [this]() { m_body->setAlignment(Qt::AlignRight); });
+    connect(link, &QAction::triggered, this, [this] {
+        bool ok = false;
+        const QString url = QInputDialog::getText(this, tr("Insert link"), tr("Address:"), QLineEdit::Normal,
+                                                  QStringLiteral("https://"), &ok).trimmed();
+        const QUrl u(url, QUrl::StrictMode);
+        if (!ok || !u.isValid() || !(u.scheme() == QLatin1String("https") || u.scheme() == QLatin1String("http") ||
+                                     u.scheme() == QLatin1String("mailto"))) {
+            return;
+        }
+        QTextCursor c = m_body->textCursor();
+        QTextCharFormat f;
+        f.setAnchor(true);
+        f.setAnchorHref(u.toString());
+        f.setForeground(QApplication::palette().color(QPalette::Link));
+        f.setFontUnderline(true);
+        if (c.hasSelection()) {
+            c.mergeCharFormat(f);
+        } else {
+            c.insertText(u.toString(), f);
+        }
+    });
+    connect(quote, &QAction::triggered, this, [this] {
+        QTextCursor c = m_body->textCursor();
+        QTextBlockFormat f = c.blockFormat();
+        const int level = f.property(QTextFormat::BlockQuoteLevel).toInt() + 1;
+        f.setProperty(QTextFormat::BlockQuoteLevel, level);
+        f.setLeftMargin(24.0 * level);
+        c.mergeBlockFormat(f);
+    });
 }
 
 void ComposeWindow::buildHeaderBlock(QWidget *host)
@@ -188,6 +368,7 @@ void ComposeWindow::buildHeaderBlock(QWidget *host)
     };
     m_to = field(tr("To:"), "fieldTo");
     m_from = field(tr("From:"), "fieldFrom");
+    m_from->setReadOnly(true);
     m_subject = field(tr("Subject:"), "fieldSubject");
     m_cc = field(tr("Cc:"), "fieldCc");
     m_bcc = field(tr("Bcc:"), "fieldBcc");
@@ -207,6 +388,29 @@ void ComposeWindow::buildHeaderBlock(QWidget *host)
     g->setColumnStretch(1, 1);
 }
 
+void ComposeWindow::buildBanner(QWidget *host)
+{
+    m_banner = new QFrame(host);
+    m_banner->setObjectName(QStringLiteral("composeBanner"));
+    m_banner->setFrameShape(QFrame::StyledPanel);
+    m_banner->setAutoFillBackground(true);
+    auto *h = new QHBoxLayout(m_banner);
+    h->setContentsMargins(12, 6, 12, 6);
+    m_bannerText = new QLabel(m_banner);
+    m_bannerText->setObjectName(QStringLiteral("composeBannerText"));
+    m_bannerText->setWordWrap(true);
+    h->addWidget(m_bannerText, 1);
+    m_bannerZip = new QPushButton(icon(QStringLiteral("file-archive")), tr("Zip attachments\u2026"), m_banner);
+    m_bannerZip->setObjectName(QStringLiteral("bannerZip"));
+    m_bannerUndo = new QPushButton(tr("Undo zip"), m_banner);
+    m_bannerUndo->setObjectName(QStringLiteral("bannerUndoZip"));
+    h->addWidget(m_bannerZip);
+    h->addWidget(m_bannerUndo);
+    connect(m_bannerZip, &QPushButton::clicked, this, [this] { offerZip(); });
+    connect(m_bannerUndo, &QPushButton::clicked, this, &ComposeWindow::revertZip);
+    m_banner->hide();
+}
+
 QStringList ComposeWindow::headerFieldOrder() const
 {
     QStringList out;
@@ -219,45 +423,290 @@ QStringList ComposeWindow::headerFieldOrder() const
     return out;
 }
 
+// ---- attachments ------------------------------------------------------------
+
 void ComposeWindow::setAttachments(const QList<Attachment> &list)
 {
     m_attachments = list;
+    m_unzipped.clear();
+    refreshChips();
+    updateSizeMeter();
+}
+
+void ComposeWindow::addAttachment(const Attachment &a)
+{
+    m_attachments << a;
+    refreshChips();
+    updateSizeMeter();
+}
+
+void ComposeWindow::addFiles(const QStringList &paths)
+{
+    for (const QString &p : paths) {
+        const QFileInfo fi(p);
+        if (!fi.isFile() || !fi.isReadable()) {
+            fail(tr("Can't read %1").arg(p));
+            continue;
+        }
+        Attachment a;
+        a.name = fi.fileName();
+        a.path = fi.absoluteFilePath();
+        a.bytes = fi.size();
+        m_attachments << a;
+    }
+    refreshChips();
+    updateSizeMeter();
+    if (sizeLevel() == limits::SizeLevel::Blocked && !isZipped()) {
+        // Ask after the event that added them has finished.
+        QMetaObject::invokeMethod(this, [this] { offerZip(); }, Qt::QueuedConnection);
+    }
+}
+
+void ComposeWindow::removeAttachment(int index)
+{
+    if (index < 0 || index >= m_attachments.size()) {
+        return;
+    }
+    m_attachments.removeAt(index);
+    if (m_attachments.isEmpty()) {
+        m_unzipped.clear();
+    }
+    refreshChips();
+    updateSizeMeter();
+}
+
+void ComposeWindow::refreshChips()
+{
     auto *h = static_cast<QHBoxLayout *>(m_attached->layout());
     while (QLayoutItem *it = h->takeAt(0)) {
         delete it->widget();
         delete it;
     }
     const QString dim = QApplication::palette().color(QPalette::PlaceholderText).name();
-    if (list.isEmpty()) {
+    if (m_attachments.isEmpty()) {
         h->addWidget(new QLabel(tr("<span style='color:%1'>(none)</span>").arg(dim), m_attached));
     }
-    for (const Attachment &a : list) {
+    for (int i = 0; i < m_attachments.size(); ++i) {
+        const Attachment &a = m_attachments[i];
         auto *chip = new QFrame(m_attached);
         chip->setObjectName(QStringLiteral("attachmentChip"));
         chip->setFrameShape(QFrame::StyledPanel);
         auto *ch = new QHBoxLayout(chip);
-        ch->setContentsMargins(6, 1, 8, 1);
+        ch->setContentsMargins(6, 1, 2, 1);
         ch->setSpacing(4);
         auto *ic = new QLabel(chip);
         ic->setPixmap(icon(QStringLiteral("paperclip")).pixmap(14, 14));
         ch->addWidget(ic);
-        ch->addWidget(new QLabel(QStringLiteral("%1 <span style='color:%2'>(%3 K)</span>")
-                                     .arg(a.name.toHtmlEscaped(), dim,
-                                          QLocale(QLocale::English).toString((a.bytes + 1023) / 1024)),
+        ch->addWidget(new QLabel(QStringLiteral("%1 <span style='color:%2'>(%3)</span>")
+                                     .arg(a.name.toHtmlEscaped(), dim, formatBytes(a.bytes)),
                                  chip));
+        auto *x = new QToolButton(chip);
+        x->setObjectName(QStringLiteral("removeAttachment"));
+        x->setIcon(icon(QStringLiteral("x")));
+        x->setIconSize(QSize(12, 12));
+        x->setAutoRaise(true);
+        x->setToolTip(tr("Remove %1").arg(a.name));
+        connect(x, &QToolButton::clicked, this, [this, i] { removeAttachment(i); });
+        ch->addWidget(x);
         h->addWidget(chip);
     }
     h->addStretch(1);
+}
+
+void ComposeWindow::dragEnterEvent(QDragEnterEvent *e)
+{
+    if (e->mimeData()->hasUrls()) {
+        e->acceptProposedAction();
+    }
+}
+
+void ComposeWindow::dropEvent(QDropEvent *e)
+{
+    QStringList files;
+    for (const QUrl &u : e->mimeData()->urls()) {
+        if (u.isLocalFile()) {
+            files << u.toLocalFile();
+        }
+    }
+    if (!files.isEmpty()) {
+        addFiles(files);
+        e->acceptProposedAction();
+    }
+}
+
+bool ComposeWindow::eventFilter(QObject *obj, QEvent *ev)
+{
+    // Files dropped on the body attach rather than insert a file:// link.
+    if (obj == m_body->viewport() && (ev->type() == QEvent::DragEnter || ev->type() == QEvent::Drop)) {
+        auto *de = static_cast<QDropEvent *>(ev);
+        if (de->mimeData()->hasUrls() && de->mimeData()->urls().value(0).isLocalFile()) {
+            if (ev->type() == QEvent::DragEnter) {
+                static_cast<QDragEnterEvent *>(ev)->acceptProposedAction();
+            } else {
+                dropEvent(de);
+            }
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(obj, ev);
+}
+
+// ---- zipping (PLAN §4.5.1) ---------------------------------------------------
+
+ComposeWindow::ZipPolicy ComposeWindow::zipPolicy()
+{
+    const QString v = QSettings().value(QStringLiteral("compose/zipPolicy"), QStringLiteral("ask")).toString();
+    return v == QLatin1String("always") ? ZipPolicy::Always : v == QLatin1String("never") ? ZipPolicy::Never : ZipPolicy::Ask;
+}
+
+void ComposeWindow::setZipPolicy(ZipPolicy p)
+{
+    QSettings().setValue(QStringLiteral("compose/zipPolicy"), p == ZipPolicy::Always ? QStringLiteral("always")
+                                                              : p == ZipPolicy::Never ? QStringLiteral("never")
+                                                                                      : QStringLiteral("ask"));
+}
+
+namespace {
+bool loadData(ComposeWindow::Attachment &a, QString *err)
+{
+    if (!a.data.isEmpty() || a.bytes == 0) {
+        return true;
+    }
+    QFile f(a.path);
+    if (a.path.isEmpty() || !f.open(QIODevice::ReadOnly)) {
+        *err = QObject::tr("Can't read %1").arg(a.name);
+        return false;
+    }
+    a.data = f.readAll();
+    a.bytes = a.data.size();
+    return true;
+}
+
+QList<OutgoingAttachment> toOutgoing(const QList<ComposeWindow::Attachment> &list, QString *err)
+{
+    QList<OutgoingAttachment> out;
+    for (ComposeWindow::Attachment a : list) {
+        if (!loadData(a, err)) {
+            return {};
+        }
+        out << OutgoingAttachment{a.name, a.mimeType, a.data};
+    }
+    return out;
+}
+} // namespace
+
+bool ComposeWindow::offerZip()
+{
+    if (m_attachments.isEmpty() || isZipped()) {
+        return false;
+    }
+    const ZipPolicy policy = zipPolicy();
+    if (policy == ZipPolicy::Never) {
+        updateBanner();
+        return false;
+    }
+    QString err;
+    const QList<OutgoingAttachment> out = toOutgoing(m_attachments, &err);
+    if (!err.isEmpty()) {
+        fail(err);
+        return false;
+    }
+    const zip::Probe probe = zip::probe(out);
+    qint64 attachEncoded = 0;
+    for (const Attachment &a : m_attachments) {
+        attachEncoded += 300 + limits::base64MimeSize(a.bytes);
+    }
+    const qint64 estimate = encodedSize() - attachEncoded + 300 + limits::base64MimeSize(probe.estimatedZipBytes);
+    if (!probe.worthwhile || limits::classifySendSize(estimate) == limits::SizeLevel::Blocked) {
+        m_lastError = tr("Zipping won't help: the attachments would still be about %1 once encoded, over "
+                         "Gmail's %2 MB limit. Remove some attachments or share them via Drive.")
+                          .arg(formatBytes(estimate))
+                          .arg(limits::kSendLimitBytes / 1'000'000);
+        updateBanner();
+        return false;
+    }
+    if (policy == ZipPolicy::Ask) {
+        bool remember = false;
+        ZipAnswer ans = ZipAnswer::Cancel;
+        if (m_zipPrompt) {
+            ans = m_zipPrompt(probe, &remember);
+        } else {
+            QMessageBox box(QMessageBox::Question, tr("Zip attachments?"),
+                            tr("This message is over Gmail's %1 MB limit once encoded.\n\nZipping the %2 attachments "
+                               "into attachments.zip should bring them from %3 to about %4, which fits. Zip them?")
+                                .arg(limits::kSendLimitBytes / 1'000'000)
+                                .arg(m_attachments.size())
+                                .arg(formatBytes(probe.rawBytes), formatBytes(probe.estimatedZipBytes)),
+                            QMessageBox::NoButton, this);
+            QPushButton *zipBtn = box.addButton(tr("Zip"), QMessageBox::AcceptRole);
+            box.addButton(QMessageBox::Cancel);
+            auto *rememberBox = new QCheckBox(tr("Remember my choice"), &box);
+            box.setCheckBox(rememberBox);
+            box.exec();
+            ans = box.clickedButton() == zipBtn ? ZipAnswer::Zip : ZipAnswer::Cancel;
+            remember = rememberBox->isChecked();
+        }
+        if (remember) {
+            setZipPolicy(ans == ZipAnswer::Zip ? ZipPolicy::Always : ZipPolicy::Never);
+        }
+        if (ans != ZipAnswer::Zip) {
+            updateBanner();
+            return false;
+        }
+    }
+    return zipAttachments();
+}
+
+bool ComposeWindow::zipAttachments()
+{
+    QString err;
+    const QList<OutgoingAttachment> out = toOutgoing(m_attachments, &err);
+    if (!err.isEmpty() || out.isEmpty()) {
+        fail(err.isEmpty() ? tr("Nothing to zip") : err);
+        return false;
+    }
+    const QByteArray zipData = zip::makeArchive(out, &err);
+    if (zipData.isEmpty()) {
+        fail(tr("Couldn't create attachments.zip: %1").arg(err));
+        return false;
+    }
+    m_unzipped = m_attachments;
+    Attachment z;
+    z.name = QStringLiteral("attachments.zip");
+    z.mimeType = QStringLiteral("application/zip");
+    z.data = zipData;
+    z.bytes = zipData.size();
+    m_attachments = {z};
+    m_lastError.clear();
+    qCInfo(lcGmail) << "zipped" << m_unzipped.size() << "attachments into" << z.bytes << "bytes";
+    refreshChips();
+    updateSizeMeter();
+    return true;
+}
+
+void ComposeWindow::revertZip()
+{
+    if (m_unzipped.isEmpty()) {
+        return;
+    }
+    m_attachments = m_unzipped;
+    m_unzipped.clear();
+    m_lastError.clear();
+    refreshChips();
     updateSizeMeter();
 }
+
+// ---- size ---------------------------------------------------------------------
 
 qint64 ComposeWindow::encodedSize() const
 {
     // Headers + HTML part + generated text/plain part, then base64 attachments.
     qint64 total = 2048;
     if (m_body) {
-        const qint64 html = m_body->toHtml().toUtf8().size();
         const qint64 text = m_body->toPlainText().toUtf8().size();
+        const qint64 html = m_currentFormat == Format::Plain ? 0
+                          : m_currentFormat == Format::Html  ? m_body->toHtml().toUtf8().size()
+                                                             : text * 2;
         total += limits::base64MimeSize(html) + limits::base64MimeSize(text);
     }
     for (const Attachment &a : m_attachments) {
@@ -290,10 +739,48 @@ void ComposeWindow::updateSizeMeter()
                                               "text-align:center;}"
                                               "QProgressBar::chunk{background:%1;border-radius:2px;}")
                                    .arg(chunk));
-    m_send->setEnabled(level != limits::SizeLevel::Blocked);
+    m_send->setEnabled(level != limits::SizeLevel::Blocked && !m_busy);
     m_sizeMeter->setToolTip(level == limits::SizeLevel::Blocked
                                 ? tr("Over Gmail's 25 MB limit after encoding. Remove attachments to send.")
                                 : tr("Encoded size, counting base64 overhead (about 37%)."));
+    updateBanner();
+}
+
+void ComposeWindow::updateBanner()
+{
+    if (!m_banner) {
+        return;
+    }
+    const bool blocked = limits::classifySendSize(encodedSize()) == limits::SizeLevel::Blocked;
+    QString text;
+    QColor bg;
+    const QPalette pal = QApplication::palette();
+    if (blocked) {
+        text = tr("<b>Too big to send.</b> This message is %1 once encoded; Gmail accepts up to %2 MB.")
+                   .arg(formatBytes(encodedSize()))
+                   .arg(limits::kSendLimitBytes / 1'000'000);
+        if (!m_lastError.isEmpty()) {
+            text += QStringLiteral(" ") + m_lastError.toHtmlEscaped();
+        }
+        bg = zmail::ui::suspiciousBackground(pal);
+    } else if (!m_lastError.isEmpty()) {
+        text = m_lastError.toHtmlEscaped();
+        bg = zmail::ui::suspiciousBackground(pal);
+    } else if (isZipped()) {
+        text = tr("Zipped %1 attachments into <b>attachments.zip</b> (%2).")
+                   .arg(m_unzipped.size())
+                   .arg(formatBytes(m_attachments.value(0).bytes));
+        bg = pal.color(QPalette::AlternateBase);
+    }
+    m_bannerZip->setVisible(blocked && !isZipped() && !m_attachments.isEmpty() && zipPolicy() != ZipPolicy::Never);
+    m_bannerUndo->setVisible(isZipped());
+    if (!text.isEmpty()) {
+        QPalette p = m_banner->palette();
+        p.setColor(QPalette::Window, bg);
+        m_banner->setPalette(p);
+        m_bannerText->setText(text);
+    }
+    m_banner->setVisible(!text.isEmpty());
 }
 
 void ComposeWindow::updateTitle()
@@ -304,6 +791,532 @@ void ComposeWindow::updateTitle()
                             QString::fromLatin1(zmail::kVersionString)));
 }
 
+void ComposeWindow::updateModeLabel()
+{
+    if (!m_modeLabel) {
+        return;
+    }
+    const QString fmt = m_format->currentText();
+    const QString spell = !m_spell || !m_spell->isAvailable() ? tr("Spell check unavailable")
+                        : m_spellAction->isChecked()          ? tr("Spell check on")
+                                                              : tr("Spell check off");
+    const QString sig = signatureName().isEmpty() ? tr("none") : signatureName();
+    m_modeLabel->setText(QStringLiteral("%1 \u00b7 %2 \u00b7 %3").arg(fmt, spell, tr("Signature: %1").arg(sig)));
+}
+
+// ---- format ---------------------------------------------------------------------
+
+ComposeWindow::Format ComposeWindow::format() const
+{
+    return m_currentFormat;
+}
+
+void ComposeWindow::setBodyText(const QString &text)
+{
+    if (m_currentFormat == Format::Html) {
+        m_body->setHtml(text);
+    } else {
+        m_body->setPlainText(text);
+    }
+    applySignature();
+    insertQuote();
+}
+
+void ComposeWindow::setFormat(Format f)
+{
+    m_format->setCurrentIndex(int(f));
+    if (f == m_currentFormat) {
+        updateModeLabel();
+        return;
+    }
+    // The part the user wrote: everything before the signature / quote.
+    QTextDocument *doc = m_body->document();
+    int end = doc->characterCount() - 1;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        if (b.blockFormat().hasProperty(kSigProp) || b.blockFormat().hasProperty(kQuoteProp)) {
+            end = std::max(0, b.position() - 1);
+            break;
+        }
+    }
+    QTextCursor sel(doc);
+    sel.setPosition(end, QTextCursor::KeepAnchor);
+    QTextDocument mine;
+    QTextCursor(&mine).insertFragment(sel.selection());
+
+    const Format from = m_currentFormat;
+    m_currentFormat = f;
+    m_previewAction->setChecked(false);
+    m_previewAction->setVisible(f == Format::Markdown);
+    m_formatBar->setEnabled(f == Format::Html);
+    m_body->setAcceptRichText(f == Format::Html);
+    m_body->clear();
+    m_body->setCurrentCharFormat(QTextCharFormat());
+    if (f == Format::Html) {
+        m_body->document()->setDefaultFont(QApplication::font());
+        m_body->setHtml(from == Format::Markdown ? markdown::toHtml(mine.toPlainText()) : plainToHtml(mine.toPlainText()));
+    } else {
+        m_body->document()->setDefaultFont(f == Format::Markdown ? QFontDatabase::systemFont(QFontDatabase::FixedFont)
+                                                                 : QApplication::font());
+        QString text;
+        if (from == Format::Html) {
+            text = f == Format::Markdown ? mine.toMarkdown(QTextDocument::MarkdownDialectCommonMark).trimmed()
+                                         : richtext::toPlainText(&mine);
+        } else {
+            text = mine.toPlainText();
+        }
+        m_body->setPlainText(text);
+    }
+    applySignature();
+    insertQuote();
+    QSettings().setValue(QStringLiteral("compose/format"), int(f));
+    updateModeLabel();
+    updateSizeMeter();
+}
+
+// ---- signatures -------------------------------------------------------------------
+
+void ComposeWindow::setSignatureStore(SignatureStore *store)
+{
+    m_sigStore = store;
+    m_signature->clear();
+    reloadSignatures();
+    applySignature();
+    updateModeLabel();
+}
+
+void ComposeWindow::reloadSignatures()
+{
+    if (!m_sigStore) {
+        m_ownSigStore = m_ownSigStore ? m_ownSigStore : new SignatureStore();
+        m_sigStore = m_ownSigStore;
+    }
+    const QString keep = m_signature->count() ? m_signature->currentData().toString() : m_sigStore->defaultName();
+    m_signature->clear();
+    for (const Signature &s : m_sigStore->all()) {
+        m_signature->addItem(s.name, s.name);
+    }
+    m_signature->addItem(tr("None"), QString());
+    const int idx = m_signature->findData(keep);
+    m_signature->setCurrentIndex(idx >= 0 ? idx : m_signature->count() - 1);
+}
+
+void ComposeWindow::setSignature(const QString &name)
+{
+    const int idx = m_signature->findData(name);
+    m_signature->setCurrentIndex(idx >= 0 ? idx : m_signature->count() - 1);
+    applySignature();
+    updateModeLabel();
+}
+
+QString ComposeWindow::signatureName() const
+{
+    return m_signature ? m_signature->currentData().toString() : QString();
+}
+
+void ComposeWindow::removeTaggedBlocks(int property)
+{
+    QTextDocument *doc = m_body->document();
+    QList<int> numbers;
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        if (b.blockFormat().hasProperty(property)) {
+            numbers << b.blockNumber();
+        }
+    }
+    QTextCursor c(doc);
+    c.beginEditBlock();
+    for (auto it = numbers.crbegin(); it != numbers.crend(); ++it) {
+        QTextBlock b = doc->findBlockByNumber(*it);
+        c.setPosition(b.position());
+        c.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+        c.removeSelectedText();
+        if (b.blockNumber() > 0) {
+            c.deletePreviousChar(); // the paragraph break before it
+        } else {
+            QTextBlockFormat f = c.blockFormat();
+            f.clearProperty(property);
+            c.setBlockFormat(f);
+        }
+    }
+    c.endEditBlock();
+}
+
+namespace {
+// Tags every block from `from` up to the cursor's block with `property`.
+void tagBlocks(QTextDocument *doc, int from, int to, int property, int clear)
+{
+    for (QTextBlock b = doc->findBlock(from); b.isValid() && b.position() <= to; b = b.next()) {
+        QTextCursor c(b);
+        QTextBlockFormat f = b.blockFormat();
+        f.setProperty(property, true);
+        f.clearProperty(clear);
+        c.setBlockFormat(f);
+    }
+}
+} // namespace
+
+void ComposeWindow::applySignature()
+{
+    if (!m_body) {
+        return;
+    }
+    removeTaggedBlocks(kSigProp);
+    const QString name = signatureName();
+    if (name.isEmpty() || !m_sigStore) {
+        return;
+    }
+    const Signature sig = m_sigStore->find(name);
+    QTextDocument *doc = m_body->document();
+    // Goes above the quoted original (top-posting, as Gmail does).
+    QTextBlock anchor = doc->lastBlock();
+    for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+        if (b.blockFormat().hasProperty(kQuoteProp)) {
+            anchor = b.previous().isValid() ? b.previous() : b;
+            break;
+        }
+    }
+    QTextCursor c(doc);
+    c.beginEditBlock();
+    c.setPosition(anchor.position() + anchor.length() - 1);
+    c.insertBlock(QTextBlockFormat(), QTextCharFormat()); // blank line before "-- "
+    const int start = c.position();
+    c.insertBlock(QTextBlockFormat(), QTextCharFormat());
+    QTextCharFormat dim;
+    if (m_currentFormat == Format::Html) {
+        dim.setForeground(QApplication::palette().color(QPalette::PlaceholderText));
+        c.insertText(QStringLiteral("-- "), dim);
+        c.insertBlock(QTextBlockFormat(), QTextCharFormat());
+        c.insertHtml(sig.richHtml());
+    } else {
+        // Markdown: two trailing spaces keep the lines apart when rendered.
+        const QString nl = m_currentFormat == Format::Markdown ? QStringLiteral("  ") : QString();
+        c.insertText(QStringLiteral("-- ") + nl);
+        for (const QString &line : sig.plain().split(QLatin1Char('\n'))) {
+            c.insertBlock(QTextBlockFormat(), QTextCharFormat());
+            c.insertText(line + nl);
+        }
+    }
+    tagBlocks(doc, start, c.position(), kSigProp, kQuoteProp);
+    c.endEditBlock();
+    doc->setModified(false);
+}
+
+void ComposeWindow::insertQuote()
+{
+    removeTaggedBlocks(kQuoteProp);
+    if (m_quotedText.isEmpty() && m_quotedHtml.isEmpty()) {
+        return;
+    }
+    QTextDocument *doc = m_body->document();
+    QTextCursor c(doc);
+    c.beginEditBlock();
+    c.movePosition(QTextCursor::End);
+    c.insertBlock(QTextBlockFormat(), QTextCharFormat()); // spacer, removed with the quote
+    const int start = c.position();
+    c.insertBlock(QTextBlockFormat(), QTextCharFormat());
+    if (m_currentFormat == Format::Html && !m_quotedHtml.isEmpty()) {
+        c.insertHtml(m_quotedHtml);
+    } else {
+        c.insertText(m_quotedText);
+    }
+    tagBlocks(doc, start, c.position(), kQuoteProp, kSigProp);
+    c.endEditBlock();
+    QTextCursor top(doc);
+    m_body->setTextCursor(top);
+    doc->setModified(false);
+}
+
+// ---- live mode ---------------------------------------------------------------------
+
+void ComposeWindow::setSession(MailSession *session)
+{
+    m_session = session;
+    if (session) {
+        m_from->setText(session->fromHeader());
+        connect(session, &MailSession::identityChanged, this,
+                [this] { if (m_session) m_from->setText(m_session->fromHeader()); });
+        const int fmt = QSettings().value(QStringLiteral("compose/format"), 0).toInt();
+        if (fmt != int(m_currentFormat) && fmt >= 0 && fmt <= 2) {
+            setFormat(Format(fmt));
+        }
+    }
+}
+
+void ComposeWindow::setDraft(const ComposeDraft &d)
+{
+    m_to->setText(d.to);
+    m_cc->setText(d.cc);
+    m_bcc->setText(d.bcc);
+    m_subject->setText(d.subject);
+    m_inReplyTo = d.inReplyTo;
+    m_references = d.references;
+    m_threadId = d.threadId;
+    m_quotedText = d.quotedText;
+    m_quotedHtml = d.quotedHtml;
+    m_body->clear();
+    applySignature();
+    insertQuote();
+    m_body->setFocus();
+    if (d.to.isEmpty()) {
+        m_to->setFocus();
+    }
+}
+
+void ComposeWindow::attachFromMessage(const QString &gmailMessageId)
+{
+    if (!m_session || !m_session->api()) {
+        return;
+    }
+    QPointer<ComposeWindow> self(this);
+    GmailClient *api = m_session->api();
+    statusBar()->showMessage(tr("Fetching attachments\u2026"));
+    api->getMessageFull(gmailMessageId, [self, api, gmailMessageId](const QJsonObject &json, const ApiError &err) {
+        if (!self) {
+            return;
+        }
+        if (err.isError) {
+            self->fail(tr("Couldn't fetch the original's attachments: %1").arg(err.message));
+            return;
+        }
+        const auto body = MessageParser::bodyFromFull(json);
+        for (const auto &ref : body.attachmentRefs) {
+            if (ref.attachmentId.isEmpty()) {
+                self->addAttachment({ref.fileName, ref.inlineData.size(), {}, ref.inlineData, ref.mimeType});
+                continue;
+            }
+            api->getAttachment(gmailMessageId, ref.attachmentId, [self, ref](const QJsonObject &a, const ApiError &e) {
+                if (!self) {
+                    return;
+                }
+                if (e.isError) {
+                    self->fail(tr("Couldn't fetch %1: %2").arg(ref.fileName, e.message));
+                    return;
+                }
+                const QByteArray data = MessageParser::decodeBase64Url(a.value(QStringLiteral("data")).toString());
+                self->addAttachment({ref.fileName, data.size(), {}, data, ref.mimeType});
+                self->statusBar()->showMessage(tr("Attached %1").arg(ref.fileName), 3000);
+            });
+        }
+        if (body.attachmentRefs.isEmpty()) {
+            self->statusBar()->clearMessage();
+        }
+    });
+}
+
+OutgoingMessage ComposeWindow::message() const
+{
+    OutgoingMessage m;
+    m.from = m_from->text().trimmed();
+    m.to = m_to->text().trimmed();
+    m.cc = m_cc->text().trimmed();
+    m.bcc = m_bcc->text().trimmed();
+    m.subject = m_subject->text();
+    m.inReplyTo = m_inReplyTo;
+    m.references = m_references;
+    m.threadId = m_threadId;
+    m.messageId = m_messageId;
+    m.priority = m_priority->currentIndex() == 1 ? OutgoingMessage::Priority::High
+               : m_priority->currentIndex() == 2 ? OutgoingMessage::Priority::Low
+                                                 : OutgoingMessage::Priority::Normal;
+    switch (m_currentFormat) {
+    case Format::Html:
+        m.text = richtext::toPlainText(m_body->document());
+        m.html = m_body->toHtml();
+        break;
+    case Format::Plain:
+        m.text = m_body->toPlainText();
+        break;
+    case Format::Markdown: {
+        const QString src = m_body->toPlainText();
+        m.html = markdown::toEmailHtml(src);
+        QStringList lines = markdown::toPlainText(src).split(QLatin1Char('\n'));
+        for (QString &l : lines) {
+            while (l.endsWith(QLatin1Char(' '))) {
+                l.chop(1);
+            }
+            if (l == QLatin1String("--")) {
+                l = QStringLiteral("-- "); // RFC 3676 signature delimiter
+            }
+        }
+        m.text = lines.join(QLatin1Char('\n'));
+        break;
+    }
+    }
+    QString err;
+    m.attachments = toOutgoing(m_attachments, &err);
+    return m;
+}
+
+QByteArray ComposeWindow::buildMime() const
+{
+    return MimeBuilder::build(message());
+}
+
+bool ComposeWindow::validate(QString *why) const
+{
+    const QStringList all = MimeBuilder::splitAddresses(m_to->text()) + MimeBuilder::splitAddresses(m_cc->text()) +
+                            MimeBuilder::splitAddresses(m_bcc->text());
+    if (all.isEmpty()) {
+        *why = tr("Add at least one recipient.");
+        return false;
+    }
+    for (const QString &a : all) {
+        const QString addr = MessageParser::splitAddress(a).second;
+        const int at = addr.indexOf(QLatin1Char('@'));
+        if (at <= 0 || at == addr.size() - 1 || addr.contains(QLatin1Char(' '))) {
+            *why = tr("\u201c%1\u201d doesn't look like an email address.").arg(a.trimmed());
+            return false;
+        }
+    }
+    return true;
+}
+
+void ComposeWindow::setBusy(bool busy, const QString &status)
+{
+    m_busy = busy;
+    m_saveDraft->setEnabled(!busy);
+    updateSizeMeter();
+    if (!status.isEmpty()) {
+        statusBar()->showMessage(status);
+    } else {
+        statusBar()->clearMessage();
+    }
+}
+
+void ComposeWindow::fail(const QString &message)
+{
+    m_lastError = message;
+    qCWarning(lcGmail) << "compose:" << message;
+    updateBanner();
+    emit sendFailed(message);
+}
+
+void ComposeWindow::send()
+{
+    if (m_busy) {
+        return;
+    }
+    m_lastError.clear();
+    QString why;
+    if (!validate(&why)) {
+        fail(why);
+        return;
+    }
+    if (sizeLevel() == limits::SizeLevel::Blocked) {
+        fail(tr("Remove attachments (or zip them) to send."));
+        return;
+    }
+    QString err;
+    toOutgoing(m_attachments, &err);
+    if (!err.isEmpty()) {
+        fail(err);
+        return;
+    }
+    const QByteArray mime = buildMime();
+    if (limits::classifySendSize(mime.size()) == limits::SizeLevel::Blocked) {
+        fail(tr("The message is %1 once encoded, over Gmail's %2 MB limit.")
+                 .arg(formatBytes(mime.size()))
+                 .arg(limits::kSendLimitBytes / 1'000'000));
+        return;
+    }
+    if (!m_session || !m_session->sender()) {
+        fail(tr("Sign in to Gmail to send."));
+        return;
+    }
+    setBusy(true, tr("Sending\u2026"));
+    Sender *sender = m_session->sender();
+    m_progressConn = connect(sender, &Sender::progress, this, [this](qint64 s, qint64 t) {
+        if (t > 0) {
+            statusBar()->showMessage(tr("Sending\u2026 %1%").arg(s * 100 / t));
+        }
+    });
+    QPointer<ComposeWindow> self(this);
+    sender->send(mime, m_threadId, [self, sender](const Sender::Result &r) {
+        if (!self) {
+            return;
+        }
+        disconnect(self->m_progressConn);
+        self->setBusy(false);
+        if (!r.ok) {
+            self->fail(r.blocked ? r.err.message
+                                 : tr("Gmail didn't accept the message: %1")
+                                       .arg(r.err.message.isEmpty() ? tr("HTTP %1").arg(r.err.httpStatus) : r.err.message));
+            return;
+        }
+        self->m_sent = true;
+        if (!self->m_draftId.isEmpty()) {
+            sender->deleteDraft(self->m_draftId, [](const Sender::Result &) {});
+        }
+        if (self->m_session) {
+            self->m_session->syncSoon();
+        }
+        emit self->sent(r.messageId, r.threadId);
+        self->close();
+    });
+}
+
+void ComposeWindow::saveDraft()
+{
+    if (m_busy) {
+        return;
+    }
+    if (!m_session || !m_session->sender()) {
+        fail(tr("Sign in to Gmail to save drafts."));
+        return;
+    }
+    m_lastError.clear();
+    const QByteArray mime = buildMime();
+    setBusy(true, tr("Saving draft\u2026"));
+    QPointer<ComposeWindow> self(this);
+    m_session->sender()->saveDraft(mime, m_threadId, m_draftId, [self](const Sender::Result &r) {
+        if (!self) {
+            return;
+        }
+        self->setBusy(false);
+        if (!r.ok) {
+            self->m_closeAfterSave = false;
+            self->fail(tr("Couldn't save the draft: %1").arg(r.err.message));
+            return;
+        }
+        self->m_draftId = r.draftId;
+        if (self->m_threadId.isEmpty()) {
+            self->m_threadId = r.threadId;
+        }
+        self->m_body->document()->setModified(false);
+        self->statusBar()->showMessage(tr("Draft saved"), 4000);
+        emit self->draftSaved(r.draftId);
+        if (self->m_closeAfterSave) {
+            self->m_closeAfterSave = false;
+            self->m_confirmClose = false;
+            self->close();
+        }
+    });
+}
+
+void ComposeWindow::closeEvent(QCloseEvent *e)
+{
+    const bool dirty = m_body->document()->isModified() || m_to->isModified() || m_subject->isModified() ||
+                       (!m_attachments.isEmpty() && m_draftId.isEmpty());
+    if (m_confirmClose && !m_sent && m_session && dirty) {
+        const auto ans = QMessageBox::question(this, tr("Save draft?"),
+                                               tr("Save this message to Drafts before closing?"),
+                                               QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+                                               QMessageBox::Save);
+        if (ans == QMessageBox::Cancel) {
+            e->ignore();
+            return;
+        }
+        if (ans == QMessageBox::Save) {
+            m_closeAfterSave = true;
+            saveDraft();
+            e->ignore();
+            return;
+        }
+    }
+    QMainWindow::closeEvent(e);
+}
+
+// ---- sample ----------------------------------------------------------------------
+
 void ComposeWindow::loadSampleReply()
 {
     m_to->setText(QStringLiteral("Priya Raman <priya.raman@example.com>"));
@@ -313,6 +1326,7 @@ void ComposeWindow::loadSampleReply()
     m_bcc->clear();
     const QPalette pal = QApplication::palette();
     const QString quote = pal.color(QPalette::PlaceholderText).name();
+    m_signature->setCurrentIndex(m_signature->count() - 1); // the sample has its own
     m_body->setHtml(QStringLiteral(
         "<p>Hi Priya,</p>"
         "<p>Thanks, this looks good. A few notes on the draft:</p>"
@@ -326,6 +1340,11 @@ void ComposeWindow::loadSampleReply()
         "Attached is the Q4 budget draft with the revised travel line. Can you look over tabs 2 and 3 "
         "before Monday's review?</blockquote>")
                          .arg(quote));
-    setAttachments({{QStringLiteral("site-estimate.pdf"), 1'184'512},
-                    {QStringLiteral("Q4-budget-draft.xlsx"), 421'880}});
+    Attachment a, b;
+    a.name = QStringLiteral("site-estimate.pdf");
+    a.bytes = 1'184'512;
+    b.name = QStringLiteral("Q4-budget-draft.xlsx");
+    b.bytes = 421'880;
+    setAttachments({a, b});
+    updateModeLabel();
 }

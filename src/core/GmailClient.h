@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
 #include <QJsonObject>
 #include <QObject>
 #include <QUrl>
@@ -33,6 +34,33 @@ class GmailClient : public QObject
 public:
     using JsonCb = std::function<void(const QJsonObject &json, const ApiError &err)>;
 
+    // Low-level request, for uploads and anything needing headers/status.
+    struct Request
+    {
+        QByteArray verb = "GET";        // GET, POST, PUT, DELETE
+        QString path;                   // relative to the API base...
+        bool upload = false;            // ...or to the /upload/ variant of it
+        QUrl absoluteUrl;               // ...or exactly this (resumable session URIs)
+        QUrlQuery query;
+        QByteArray body;
+        QByteArray contentType = "application/json";
+        QList<QPair<QByteArray, QByteArray>> headers;
+        int units = 5;
+        bool retryTransient = true;     // false: caller handles failures (resumable PUT)
+        int timeoutMs = 60000;
+        std::function<void(qint64 sent, qint64 total)> progress;
+    };
+    struct RawReply
+    {
+        int status = 0;
+        QByteArray body;
+        QJsonObject json;
+        QHash<QByteArray, QByteArray> headers; // lower-cased names
+        ApiError err;                          // set for anything outside 2xx
+    };
+    using RawCb = std::function<void(const RawReply &reply)>;
+    void request(Request rq, RawCb cb);
+
     static QUrl defaultBaseUrl() { return QUrl(QStringLiteral("https://gmail.googleapis.com/gmail/v1/users/me")); }
 
     GmailClient(AuthManager *auth, QNetworkAccessManager *nam, QUrl base = defaultBaseUrl(), QObject *parent = nullptr);
@@ -46,6 +74,12 @@ public:
     void modifyLabels(const QString &id, const QStringList &add, const QStringList &remove, JsonCb cb);
     void trashMessage(const QString &id, JsonCb cb); // users.messages.trash
     void listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb);
+    void listSendAs(JsonCb cb);
+    void getAttachment(const QString &messageId, const QString &attachmentId, JsonCb cb);
+    void deleteDraft(const QString &draftId, JsonCb cb);
+
+    QUrl baseUrl() const { return m_base; }
+    QUrl uploadBaseUrl() const; // https://host/upload/<base path>
 
     // Tuning (tests use tiny values).
     void setBackoffBaseMs(int ms) { m_backoffBaseMs = ms; }
@@ -58,15 +92,12 @@ public:
 private:
     struct Call
     {
-        QByteArray verb;
-        QString path;
-        QUrlQuery query;
-        QByteArray body;
-        int units = 5;
+        Request rq;
         int attempt = 0;
         bool reauthed = false;
-        JsonCb cb;
+        RawCb cb;
     };
+    void call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb);
     void enqueue(Call c);
     void pump();
     void send(Call c);

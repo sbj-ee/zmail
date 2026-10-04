@@ -2,6 +2,7 @@
 
 #include "Icons.h"
 #include "MessageView.h"
+#include "core/ReplyBuilder.h"
 
 #include <QAction>
 #include <QApplication>
@@ -43,10 +44,10 @@ MessageWindow::MessageWindow(QWidget *parent)
     tb->addSeparator();
     m_delete = add("actionDelete", "trash", tr("Delete"), QKeySequence::Delete);
     m_delete->setToolTip(tr("Move to Trash"));
-    for (QAction *a : {m_replyAll, m_forward}) {
-        a->setEnabled(false);
-        a->setToolTip(tr("Arrives with sending in zmail 0.3.0"));
-    }
+    m_reply->setToolTip(tr("Reply to sender"));
+    m_replyAll->setToolTip(tr("Reply to all recipients"));
+    m_forward->setToolTip(tr("Forward this message"));
+    m_forward->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
 
     m_view = new MessageView(this);
     m_view->setObjectName(QStringLiteral("messageView"));
@@ -67,7 +68,11 @@ MessageWindow::MessageWindow(QWidget *parent)
     connect(close, &QAction::triggered, this, &QWidget::close);
     addAction(close);
 
-    connect(m_reply, &QAction::triggered, this, [this]() { emit replyRequested(messageId()); });
+    using Kind = zmail::ReplyBuilder::Kind;
+    connect(m_reply, &QAction::triggered, this, [this]() { emit composeRequested(messageId(), int(Kind::Reply)); });
+    connect(m_replyAll, &QAction::triggered, this,
+            [this]() { emit composeRequested(messageId(), int(Kind::ReplyAll)); });
+    connect(m_forward, &QAction::triggered, this, [this]() { emit composeRequested(messageId(), int(Kind::Forward)); });
     connect(m_delete, &QAction::triggered, this, [this]() { emit deleteRequested(messageId()); });
 
     // Size/position: the last one closed, cascaded past any still open.

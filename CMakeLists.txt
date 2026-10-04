@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.2.0 LANGUAGES CXX)
+project(zmail VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,6 +22,16 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Svg Sql Multim
 # Refresh tokens live in the OS keyring (Secret Service / KWallet) via QtKeychain.
 # Ubuntu: qtkeychain-qt6-dev. The imported target is qt6keychain.
 find_package(Qt6Keychain REQUIRED)
+# Sending (0.3.0): md4c for Markdown -> HTML, libzip for "zip the attachments",
+# and optionally Hunspell for spell check (shares zwriter's user dictionary).
+# Ubuntu: libmd4c-dev libmd4c-html0-dev libzip-dev [libhunspell-dev hunspell-en-us]
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(MD4C_HTML REQUIRED IMPORTED_TARGET md4c-html)
+pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip)
+option(ZMAIL_WITH_HUNSPELL "Spell check in the compose window (Hunspell)" ON)
+if(ZMAIL_WITH_HUNSPELL)
+  pkg_check_modules(HUNSPELL IMPORTED_TARGET hunspell)
+endif()
 
 set(ZMAIL_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 configure_file(
@@ -52,14 +62,30 @@ add_library(zmail_app STATIC
   src/core/MailCache.h
   src/core/MailSession.cpp
   src/core/MailSession.h
+  src/core/Markdown.cpp
+  src/core/Markdown.h
   src/core/MessageParser.cpp
   src/core/MessageParser.h
+  src/core/MimeBuilder.cpp
+  src/core/MimeBuilder.h
   src/core/Pkce.cpp
   src/core/Pkce.h
+  src/core/ReplyBuilder.cpp
+  src/core/ReplyBuilder.h
+  src/core/RichText.cpp
+  src/core/RichText.h
+  src/core/Sender.cpp
+  src/core/Sender.h
+  src/core/Signatures.cpp
+  src/core/Signatures.h
+  src/core/SpellChecker.cpp
+  src/core/SpellChecker.h
   src/core/SyncEngine.cpp
   src/core/SyncEngine.h
   src/core/TokenStore.cpp
   src/core/TokenStore.h
+  src/core/Zip.cpp
+  src/core/Zip.h
   src/ui/ComposeWindow.cpp
   src/ui/ConnectDialog.cpp
   src/ui/ConnectDialog.h
@@ -72,6 +98,10 @@ add_library(zmail_app STATIC
   src/ui/NewMailSound.h
   src/ui/SafeHtmlView.cpp
   src/ui/SafeHtmlView.h
+  src/ui/SignaturesDialog.cpp
+  src/ui/SignaturesDialog.h
+  src/ui/SpellHighlighter.cpp
+  src/ui/SpellHighlighter.h
   src/ui/Theme.cpp
   src/ui/Theme.h
 )
@@ -91,7 +121,14 @@ target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${ZMAIL_GENERATED_DIR}")
 target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Sql Qt6::Multimedia
-  qt6keychain)
+  qt6keychain PkgConfig::MD4C_HTML PkgConfig::LIBZIP)
+if(HUNSPELL_FOUND)
+  target_link_libraries(zmail_app PUBLIC PkgConfig::HUNSPELL)
+  target_compile_definitions(zmail_app PUBLIC ZMAIL_HAVE_HUNSPELL)
+  message(STATUS "zmail: spell check enabled (hunspell ${HUNSPELL_VERSION})")
+else()
+  message(STATUS "zmail: spell check disabled (hunspell not found)")
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(zmail_app PRIVATE -Wall -Wextra -Wpedantic)
 endif()

@@ -10,6 +10,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QUrl>
+#include <QUrlQuery>
 
 class QTcpServer;
 class QTcpSocket;
@@ -38,6 +39,13 @@ public:
         QString html;
         QStringList attachments;
         qint64 size = 4000;
+        QString cc;
+        QString replyTo;
+        QString messageIdHeader;   // "" = generated "<id@mock.example>"
+        QString references;
+        QString inReplyTo;
+        QByteArray raw;            // as uploaded (sent messages / drafts)
+        QList<QByteArray> attachmentData; // served by attachments.get (default: generated)
     };
     struct Label
     {
@@ -85,6 +93,24 @@ public:
     void expireHistory() { m_minHistoryId = m_historyId; }
     int historyPageSize = 100;
     const QMap<QString, Message> &messages() const { return m_messages; }
+
+    // Sending (0.3.0)
+    QString displayName = QStringLiteral("Demo User");
+    struct Draft
+    {
+        QString id;
+        QString messageId;
+    };
+    const QMap<QString, Draft> &drafts() const { return m_drafts; }
+    QByteArray lastRaw;            // last message received by send / drafts
+    QString lastSendPath;          // "simple" or "resumable"
+    int sendCalls = 0;
+    int uploadSessions = 0;
+    int uploadPuts = 0;
+    int statusQueries = 0;         // Content-Range: bytes */N
+    qint64 failUploadAfterBytes = -1; // next resumable PUT stores this many bytes, then 503
+    static constexpr qint64 kUploadMaxBytes = 36'700'160; // Gmail discovery mediaUpload.maxSize
+    QString lastUploadId;
 
     // Failure injection
     void addFault(const Fault &f) { m_faults.append(f); }
@@ -138,6 +164,26 @@ private:
     QStringList m_validAccess;
     bool m_refreshRevoked = false;
     QList<Fault> m_faults;
+
+    struct Upload
+    {
+        QString kind;     // send / draftCreate / draftUpdate
+        QString draftId;
+        QJsonObject meta;
+        qint64 expected = 0;
+        QByteArray data;
+        bool done = false;
+        QJsonObject result;
+    };
+    QHash<QString, Upload> m_uploads;
+    QMap<QString, Draft> m_drafts;
+    int m_nextDraft = 1;
+    void handleUpload(QTcpSocket *s, const QByteArray &method, const QString &rest, const QUrlQuery &q,
+                      const QHash<QByteArray, QByteArray> &headers, const QByteArray &body);
+    // Stores an uploaded RFC 822 message; returns the API response object.
+    QJsonObject acceptSend(const QByteArray &raw, const QString &threadId, int *status);
+    QJsonObject acceptDraft(const QByteArray &raw, const QString &threadId, const QString &draftId, int *status);
+    Message messageFromRaw(const QByteArray &raw, const QString &threadId) const;
 };
 
 } // namespace zmail::test

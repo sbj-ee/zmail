@@ -24,7 +24,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 # shlibdeps can't see Qt plugins: the SQLite driver holds the mail cache.
 # Refresh tokens need a Secret Service keyring (GNOME Keyring on Ubuntu).
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6sql6-sqlite")
-set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "gnome-keyring")
+set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "gnome-keyring, hunspell-en-us")
 # zmail_<ver>_amd64.deb (the name a future updater can expect).
 set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
 include(CPack)

@@ -35,6 +35,14 @@ inline constexpr std::int64_t kReceiveLimitBytes = 50'000'000;
 // attachments on demand) and streamed to disk rather than held in memory.
 inline constexpr std::int64_t kLargeMessageBytes = 5'000'000;
 
+// Gmail API "simple" path for messages.send / drafts.*: the message goes
+// base64url-encoded in the JSON body ({"raw": ...}, plus threadId). Google
+// recommends the upload endpoints for larger messages, so anything at or
+// above this many encoded MIME bytes uses the resumable upload protocol
+// (/upload/gmail/v1/..., uploadType=resumable), up to kApiSendUploadMaxBytes.
+// https://developers.google.com/workspace/gmail/api/guides/uploads
+inline constexpr std::int64_t kSimpleUploadMaxBytes = 5'000'000;
+
 // MIME base64 line length (RFC 2045): 76 characters, then CRLF.
 inline constexpr int kBase64LineLength = 76;
 
@@ -67,6 +75,7 @@ constexpr SizeLevel classifySendSize(std::int64_t encodedBytes)
 
 static_assert(kSendLimitBytes <= kApiSendUploadMaxBytes,
               "the send limit must fit within the Gmail API upload cap");
+static_assert(kSimpleUploadMaxBytes < kSendLimitBytes);
 static_assert(base64MimeSize(3) == 4);
 static_assert(base64MimeSize(57) == 76);      // exactly one full line
 static_assert(base64MimeSize(58) == 76 + 2 + 4);

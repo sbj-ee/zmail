@@ -48,12 +48,12 @@ void GmailClient::setQuota(int unitsPerMinute, int burst)
 
 void GmailClient::getProfile(JsonCb cb)
 {
-    enqueue({"GET", QStringLiteral("/profile"), {}, {}, 1, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/profile"), {}, {}, 1, std::move(cb));
 }
 
 void GmailClient::listLabels(JsonCb cb)
 {
-    enqueue({"GET", QStringLiteral("/labels"), {}, {}, 1, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/labels"), {}, {}, 1, std::move(cb));
 }
 
 void GmailClient::listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb)
@@ -64,24 +64,24 @@ void GmailClient::listMessages(const QString &labelId, int maxResults, const QSt
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);
     }
-    enqueue({"GET", QStringLiteral("/messages"), q, {}, 5, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb));
 }
 
 void GmailClient::getMessageMetadata(const QString &id, JsonCb cb)
 {
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("format"), QStringLiteral("metadata"));
-    for (const char *h : {"From", "To", "Cc", "Subject", "Date"}) {
+    for (const char *h : {"From", "To", "Cc", "Reply-To", "Subject", "Date", "Message-ID", "References"}) {
         q.addQueryItem(QStringLiteral("metadataHeaders"), QString::fromLatin1(h));
     }
-    enqueue({"GET", QStringLiteral("/messages/") + id, q, {}, 5, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/messages/") + id, q, {}, 5, std::move(cb));
 }
 
 void GmailClient::getMessageFull(const QString &id, JsonCb cb)
 {
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("format"), QStringLiteral("full"));
-    enqueue({"GET", QStringLiteral("/messages/") + id, q, {}, 5, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/messages/") + id, q, {}, 5, std::move(cb));
 }
 
 void GmailClient::modifyLabels(const QString &id, const QStringList &add, const QStringList &remove, JsonCb cb)
@@ -89,8 +89,8 @@ void GmailClient::modifyLabels(const QString &id, const QStringList &add, const 
     QJsonObject o;
     o.insert(QStringLiteral("addLabelIds"), QJsonArray::fromStringList(add));
     o.insert(QStringLiteral("removeLabelIds"), QJsonArray::fromStringList(remove));
-    enqueue({"POST", QStringLiteral("/messages/%1/modify").arg(id), {}, QJsonDocument(o).toJson(QJsonDocument::Compact),
-             5, 0, false, std::move(cb)});
+    call("POST", QStringLiteral("/messages/%1/modify").arg(id), {}, QJsonDocument(o).toJson(QJsonDocument::Compact),
+         5, std::move(cb));
 }
 
 void GmailClient::listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb)
@@ -104,7 +104,48 @@ void GmailClient::listHistory(const QString &startHistoryId, const QString &page
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);
     }
-    enqueue({"GET", QStringLiteral("/history"), q, {}, 2, 0, false, std::move(cb)});
+    call("GET", QStringLiteral("/history"), q, {}, 2, std::move(cb));
+}
+
+void GmailClient::listSendAs(JsonCb cb)
+{
+    call("GET", QStringLiteral("/settings/sendAs"), {}, {}, 1, std::move(cb));
+}
+
+void GmailClient::getAttachment(const QString &messageId, const QString &attachmentId, JsonCb cb)
+{
+    call("GET", QStringLiteral("/messages/%1/attachments/%2").arg(messageId, attachmentId), {}, {}, 5, std::move(cb));
+}
+
+void GmailClient::deleteDraft(const QString &draftId, JsonCb cb)
+{
+    call("DELETE", QStringLiteral("/drafts/") + draftId, {}, {}, 10, std::move(cb));
+}
+
+QUrl GmailClient::uploadBaseUrl() const
+{
+    QUrl u = m_base;
+    u.setPath(QStringLiteral("/upload") + m_base.path());
+    return u;
+}
+
+void GmailClient::call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb)
+{
+    Request rq;
+    rq.verb = std::move(verb);
+    rq.path = std::move(path);
+    rq.query = std::move(q);
+    rq.body = std::move(body);
+    rq.units = units;
+    request(std::move(rq), [cb = std::move(cb)](const RawReply &r) { cb(r.json, r.err); });
+}
+
+void GmailClient::request(Request rq, RawCb cb)
+{
+    Call c;
+    c.rq = std::move(rq);
+    c.cb = std::move(cb);
+    enqueue(std::move(c));
 }
 
 void GmailClient::enqueue(Call c)
@@ -118,13 +159,13 @@ void GmailClient::pump()
     const qint64 now = nowMs();
     m_tokens = std::min(m_capacity, m_tokens + double(now - m_lastRefill) * m_refillPerMs);
     m_lastRefill = now;
-    while (!m_queue.isEmpty() && m_tokens >= m_queue.first().units) {
+    while (!m_queue.isEmpty() && m_tokens >= m_queue.first().rq.units) {
         Call c = m_queue.takeFirst();
-        m_tokens -= c.units;
+        m_tokens -= c.rq.units;
         send(std::move(c));
     }
     if (!m_queue.isEmpty() && !m_pumpTimer->isActive()) {
-        const double need = m_queue.first().units - m_tokens;
+        const double need = m_queue.first().rq.units - m_tokens;
         const int wait = m_refillPerMs > 0 ? int(need / m_refillPerMs) + 1 : 1000;
         m_pumpTimer->start(std::max(1, wait));
     }
@@ -141,27 +182,45 @@ void GmailClient::send(Call c)
 {
     m_auth->accessToken([this, c = std::move(c)](const QString &token, const QString &authErr) mutable {
         if (token.isEmpty()) {
-            ApiError e;
-            e.isError = true;
-            e.httpStatus = 401;
-            e.reason = QStringLiteral("unauthenticated");
-            e.message = authErr;
-            c.cb({}, e);
+            RawReply rr;
+            rr.err.isError = true;
+            rr.err.httpStatus = 401;
+            rr.err.reason = QStringLiteral("unauthenticated");
+            rr.err.message = authErr;
+            c.cb(rr);
             return;
         }
-        QUrl url = m_base;
-        url.setPath(m_base.path() + c.path);
-        url.setQuery(c.query);
+        const Request &rq = c.rq;
+        QUrl url;
+        if (rq.absoluteUrl.isValid()) {
+            url = rq.absoluteUrl;
+        } else {
+            url = rq.upload ? uploadBaseUrl() : m_base;
+            url.setPath(url.path() + rq.path);
+        }
+        if (!rq.query.isEmpty()) {
+            url.setQuery(rq.query);
+        }
         QNetworkRequest req(url);
         req.setRawHeader("Authorization", "Bearer " + token.toLatin1());
         req.setRawHeader("Accept", "application/json");
-        req.setTransferTimeout(60000);
+        // 308 is "Resume Incomplete" for resumable uploads, never a redirect.
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        req.setTransferTimeout(rq.timeoutMs);
+        for (const auto &h : rq.headers) {
+            req.setRawHeader(h.first, h.second);
+        }
         QNetworkReply *r = nullptr;
-        if (c.verb == "POST") {
-            req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-            r = m_nam->post(req, c.body);
-        } else {
+        if (rq.verb == "GET") {
             r = m_nam->get(req);
+        } else if (rq.verb == "DELETE") {
+            r = m_nam->deleteResource(req);
+        } else {
+            req.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromLatin1(rq.contentType));
+            r = rq.verb == "PUT" ? m_nam->put(req, rq.body) : m_nam->post(req, rq.body);
+        }
+        if (rq.progress) {
+            connect(r, &QNetworkReply::uploadProgress, this, [p = rq.progress](qint64 s, qint64 t) { p(s, t); });
         }
         ++m_sent;
         connect(r, &QNetworkReply::finished, this, [this, r, c = std::move(c)]() mutable {
@@ -169,8 +228,15 @@ void GmailClient::send(Call c)
             const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QByteArray body = r->readAll();
             const QJsonObject json = QJsonDocument::fromJson(body).object();
+            RawReply rr;
+            rr.status = status;
+            rr.body = body;
+            rr.json = json;
+            for (const auto &h : r->rawHeaderPairs()) {
+                rr.headers.insert(h.first.toLower(), h.second);
+            }
             if (r->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
-                c.cb(json, ApiError::none());
+                c.cb(rr);
                 return;
             }
             const QJsonObject err = json.value(QStringLiteral("error")).toObject();
@@ -190,7 +256,7 @@ void GmailClient::send(Call c)
             const bool transient = status == 429 || status == 500 || status == 502 || status == 503 ||
                                    status == 504 || rateLimited403 ||
                                    (status == 0 && r->error() != QNetworkReply::OperationCanceledError);
-            if (transient && c.attempt + 1 < m_maxAttempts) {
+            if (transient && c.rq.retryTransient && c.attempt + 1 < m_maxAttempts) {
                 int delay = std::min(64000, m_backoffBaseMs * (1 << c.attempt));
                 delay += QRandomGenerator::global()->bounded(std::max(1, m_backoffBaseMs));
                 bool ok = false;
@@ -198,12 +264,12 @@ void GmailClient::send(Call c)
                 if (ok && retryAfter > 0) {
                     delay = std::max(delay, std::min(120, retryAfter) * 1000);
                 }
-                qCInfo(lcGmail) << "HTTP" << status << "for" << c.path << "; retry" << (c.attempt + 1) << "in"
+                qCInfo(lcGmail) << "HTTP" << status << "for" << c.rq.path << "; retry" << (c.attempt + 1) << "in"
                                 << delay << "ms";
                 retryLater(std::move(c), delay);
                 return;
             }
-            ApiError e;
+            ApiError &e = rr.err;
             e.isError = true;
             e.httpStatus = status;
             e.reason = reason;
@@ -211,8 +277,11 @@ void GmailClient::send(Call c)
             if (e.message.isEmpty()) {
                 e.message = r->errorString();
             }
-            qCWarning(lcGmail) << "Gmail API error" << status << reason << "for" << c.path;
-            c.cb({}, e);
+            if (status != 308) {
+                qCWarning(lcGmail) << "Gmail API error" << status << reason << "for" << c.rq.path;
+            }
+            rr.json = {};
+            c.cb(rr);
         });
     });
 }

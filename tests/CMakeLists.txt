@@ -23,6 +23,7 @@ zmail_add_test(tst_theme)
 zmail_add_test(tst_auth)
 zmail_add_test(tst_sync)
 zmail_add_test(tst_connect)
+zmail_add_test(tst_send)
 
 # Offline screenshot driver: zmail against the mock server.
 add_executable(zmail_mockshot mockshot.cpp)

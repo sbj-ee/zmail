@@ -5,11 +5,14 @@
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/MessageParser.h"
+#include "core/ReplyBuilder.h"
+#include "core/Signatures.h"
 #include "core/SyncEngine.h"
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/NewMailSound.h"
 #include "ui/SafeHtmlView.h"
+#include "ui/SignaturesDialog.h"
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
 #include "ui/Theme.h"
@@ -176,9 +179,16 @@ void MainWindow::buildMenus()
     }
 
     QMenu *message = addMenu("menuMessage", tr("&Message"));
-    later(message, tr("&Reply"), QKeySequence(Qt::CTRL | Qt::Key_R));
-    later(message, tr("Reply &All"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
-    later(message, tr("&Forward"));
+    using Kind = zmail::ReplyBuilder::Kind;
+    QAction *mr = message->addAction(tr("&Reply"), this, [this]() { composeReply(int(Kind::Reply)); });
+    mr->setObjectName(QStringLiteral("menuActionReply"));
+    mr->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_R));
+    QAction *mra = message->addAction(tr("Reply &All"), this, [this]() { composeReply(int(Kind::ReplyAll)); });
+    mra->setObjectName(QStringLiteral("menuActionReplyAll"));
+    mra->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+    QAction *mf = message->addAction(tr("&Forward"), this, [this]() { composeReply(int(Kind::Forward)); });
+    mf->setObjectName(QStringLiteral("menuActionForward"));
+    mf->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
     message->addSeparator();
     later(message, tr("Mark as &Suspicious"));
     later(message, tr("S&nooze\u2026"));
@@ -186,7 +196,8 @@ void MainWindow::buildMenus()
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
     later(settings, tr("&Account\u2026"));
     later(settings, tr("&Rules (Sounds && Colours)\u2026"));
-    later(settings, tr("Si&gnatures\u2026"));
+    QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
+    sigs->setObjectName(QStringLiteral("actionSignatures"));
 
     QMenu *help = addMenu("menuHelp", tr("&Help"));
     QAction *about = help->addAction(tr("&About zmail"), this, &MainWindow::showAbout);
@@ -224,8 +235,19 @@ void MainWindow::buildToolbar()
     }
     connect(findChild<QAction *>(QStringLiteral("actionNewMessage")), &QAction::triggered, this,
             [this]() { openCompose(); });
+    using Kind = zmail::ReplyBuilder::Kind;
     connect(findChild<QAction *>(QStringLiteral("actionReply")), &QAction::triggered, this,
-            [this]() { openCompose(true); });
+            [this]() { composeReply(int(Kind::Reply)); });
+    connect(findChild<QAction *>(QStringLiteral("actionReplyAll")), &QAction::triggered, this,
+            [this]() { composeReply(int(Kind::ReplyAll)); });
+    connect(findChild<QAction *>(QStringLiteral("actionForward")), &QAction::triggered, this,
+            [this]() { composeReply(int(Kind::Forward)); });
+    connect(findChild<QAction *>(QStringLiteral("actionAttach")), &QAction::triggered, this, [this]() {
+        ComposeWindow *c = openCompose();
+        if (QAction *a = c->findChild<QAction *>(QStringLiteral("actionComposeAttach"))) {
+            QMetaObject::invokeMethod(a, &QAction::trigger, Qt::QueuedConnection);
+        }
+    });
     connect(findChild<QAction *>(QStringLiteral("actionCheckMail")), &QAction::triggered, this,
             &MainWindow::checkMail);
 
@@ -316,6 +338,7 @@ void MainWindow::buildPanes()
             } else {
                 m_preview->clear();
                 m_shownId.clear();
+                updateMessageActions();
             }
         }
     });
@@ -517,6 +540,7 @@ void MainWindow::showMessage(const QModelIndex &proxyIndex)
     if (!proxyIndex.isValid()) {
         m_preview->clear();
         m_shownId.clear();
+        updateMessageActions();
         return;
     }
     if (m_live) {
@@ -599,12 +623,63 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
 {
     auto *c = new ComposeWindow(this);
     c->setWindowFlag(Qt::Window, true);
-    if (sampleReply) {
+    if (m_live && m_session) {
+        c->setSession(m_session);
+        c->setAttribute(Qt::WA_DeleteOnClose, true);
+        connect(c, &QObject::destroyed, this, [this, c]() { m_composers.removeAll(c); });
+        connect(c, &ComposeWindow::sent, this,
+                [this]() { statusBar()->showMessage(tr("Message sent"), 6000); });
+    } else if (sampleReply) {
         c->loadSampleReply();
     }
     m_composers.append(c);
     c->show();
     return c;
+}
+
+ComposeWindow *MainWindow::composeReply(int kindInt)
+{
+    const auto kind = zmail::ReplyBuilder::Kind(kindInt);
+    if (!m_live) {
+        return openCompose(true);
+    }
+    const QString id = m_shownId;
+    if (id.isEmpty() || !m_session || !m_session->sync()) {
+        return nullptr;
+    }
+    ComposeWindow *c = openCompose();
+    QPointer<ComposeWindow> guard(c);
+    m_session->sync()->fetchBody(id, [this, guard, kind, id](const zmail::CachedMessage &m, const QString &err) {
+        if (!guard || !m_session) {
+            return;
+        }
+        guard->setDraft(zmail::ReplyBuilder::make(kind, m, m_session->account()));
+        if (kind == zmail::ReplyBuilder::Kind::Forward && m.hasAttachment) {
+            guard->attachFromMessage(id);
+        }
+        if (!err.isEmpty()) {
+            statusBar()->showMessage(err, 8000);
+        }
+    });
+    return c;
+}
+
+void MainWindow::updateMessageActions()
+{
+    const bool on = !m_live || !m_shownId.isEmpty();
+    for (const char *n : {"actionReply", "actionReplyAll", "actionForward", "menuActionReply", "menuActionReplyAll",
+                          "menuActionForward"}) {
+        if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
+            a->setEnabled(on);
+        }
+    }
+}
+
+void MainWindow::showSignatures()
+{
+    zmail::SignatureStore store;
+    SignaturesDialog dlg(&store, this);
+    dlg.exec();
 }
 
 void MainWindow::showAbout()
@@ -656,6 +731,7 @@ void MainWindow::sessionStateChanged()
         m_signInAction->setEnabled(m_session && st != State::SignedIn);
         m_signOutAction->setEnabled(m_session && st == State::SignedIn);
     }
+    updateMessageActions();
     updateSyncLabel();
 }
 
@@ -774,6 +850,7 @@ void MainWindow::showLiveMessage(int row)
     const MailItem &item = m_model->item(row);
     const QString id = item.id;
     m_shownId = id;
+    updateMessageActions();
     zmail::SyncEngine *sync = m_session->sync();
     zmail::MailCache *cache = m_session->cache();
     if (!sync || !cache) {

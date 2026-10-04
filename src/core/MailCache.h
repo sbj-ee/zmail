@@ -26,6 +26,10 @@ struct CachedMessage
     QString fromName;
     QString fromAddr;
     QString to;
+    QString cc;
+    QString replyTo;
+    QString messageIdHeader; // RFC 5322 Message-ID, for threading replies
+    QString references;      // References header (space-separated ids)
     QString subject;
     QString snippet;
     qint64 size = 0;
@@ -85,6 +89,7 @@ public:
 
 private:
     bool exec(const QString &sql);
+    bool migrate();
     QString m_conn;
     QString m_error;
     bool m_fts5 = false;

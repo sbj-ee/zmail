@@ -13,6 +13,7 @@ namespace zmail {
 
 class GmailClient;
 class MailCache;
+class Sender;
 class SyncEngine;
 class TokenStore;
 
@@ -65,6 +66,13 @@ public:
     MailCache *cache() const { return m_cache.get(); }
     SyncEngine *sync() const { return m_sync.get(); }
     QNetworkAccessManager *network() const { return m_nam; }
+    Sender *sender() const { return m_sender.get(); }
+
+    // "Display Name <address>" from the default send-as identity
+    // (users.settings.sendAs), or just the address until that arrives.
+    QString fromHeader() const;
+    // After a send: pull the new message into Sent right away.
+    void syncSoon();
 
 signals:
     void stateChanged(zmail::MailSession::State state);
@@ -72,6 +80,7 @@ signals:
     void reauthRequired(const QString &reason);
     void ready(); // cache open and sync started
     void clientChanged();
+    void identityChanged();
 
 private:
     void buildAuth();
@@ -87,6 +96,8 @@ private:
     std::unique_ptr<GmailClient> m_api;
     std::unique_ptr<MailCache> m_cache;
     std::unique_ptr<SyncEngine> m_sync;
+    std::unique_ptr<Sender> m_sender;
+    QString m_displayName;
     State m_state = State::NeedsClient;
 };
 

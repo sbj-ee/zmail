@@ -56,6 +56,15 @@ void walk(const QJsonObject &part, Body &out, int depth)
     }
     if (attachment) {
         out.attachments.append(filename.isEmpty() ? QStringLiteral("(unnamed)") : filename);
+        AttachmentRef ref;
+        ref.fileName = out.attachments.last();
+        ref.mimeType = mime;
+        ref.attachmentId = body.value(QStringLiteral("attachmentId")).toString();
+        ref.size = body.value(QStringLiteral("size")).toInteger();
+        if (ref.attachmentId.isEmpty()) {
+            ref.inlineData = decodeBase64Url(body.value(QStringLiteral("data")).toString());
+        }
+        out.attachmentRefs.append(ref);
         return;
     }
     const QString data = body.value(QStringLiteral("data")).toString();
@@ -106,6 +115,10 @@ CachedMessage fromMetadata(const QJsonObject &msg)
     m.fromName = from.first;
     m.fromAddr = from.second;
     m.to = header(headers, QStringLiteral("To"));
+    m.cc = header(headers, QStringLiteral("Cc"));
+    m.replyTo = header(headers, QStringLiteral("Reply-To"));
+    m.messageIdHeader = header(headers, QStringLiteral("Message-ID")).trimmed();
+    m.references = header(headers, QStringLiteral("References")).simplified();
     m.subject = header(headers, QStringLiteral("Subject"));
     if (m.internalDateMs == 0) {
         m.internalDateMs = QDateTime::fromString(header(headers, QStringLiteral("Date")), Qt::RFC2822Date).toMSecsSinceEpoch();

@@ -417,7 +417,7 @@ void MainWindow::buildPanes()
         }
     });
 
-    m_listSplitter->setStretchFactor(0, 3);
+    m_listSplitter->setStretchFactor(0, 1);
     m_listSplitter->setStretchFactor(1, 2);
     m_listSplitter->setChildrenCollapsible(false);
     m_splitter->setStretchFactor(0, 0);
@@ -1035,7 +1035,8 @@ void MainWindow::restoreListSplitter()
         QSettings().value(right ? QStringLiteral("ui/listSplitterRight") : QStringLiteral("ui/listSplitterBelow"))
             .toByteArray();
     if (st.isEmpty() || !m_listSplitter->restoreState(st)) {
-        m_listSplitter->setSizes(right ? QList<int>{520, 450} : QList<int>{370, 300});
+        // About 35/65: the message gets the larger share by default.
+        m_listSplitter->setSizes({350, 650});
     }
     // restoreState() also restores orientation; keep the chosen one.
     m_listSplitter->setOrientation(right ? Qt::Horizontal : Qt::Vertical);

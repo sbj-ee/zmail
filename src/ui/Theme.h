@@ -29,4 +29,18 @@ QColor rowTint(const QColor &rule, const QColor &base);
 QColor suspiciousForeground(const QPalette &p);
 QColor suspiciousBackground(const QPalette &p);
 
+// Colour emoji. Qt 6.4's fontconfig fallback doesn't reach the colour emoji
+// font for emoji (Unicode "Common" script), so subjects showed tofu boxes
+// even with fonts-noto-color-emoji installed. emojiFamily() is the first
+// installed colour emoji family ("Noto Color Emoji" on Ubuntu), or empty.
+QString emojiFamily();
+// Appends emojiFamily() to the application font's family list, behind the
+// font's real (resolved) family so text, spaces and digits keep their font.
+// Called by applyTheme(); harmless to call again.
+void installEmojiFallback();
+// True for a code point that should come from the emoji font: pictographs,
+// default-emoji symbols, joiners/VS16/skin tones, or a text-default symbol
+// followed by VS16 (`next`).
+bool isEmojiCodePoint(char32_t c, char32_t next = 0);
+
 } // namespace zmail::ui

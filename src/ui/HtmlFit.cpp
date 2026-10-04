@@ -1,5 +1,7 @@
 #include "HtmlFit.h"
 
+#include "Theme.h"
+
 #include <QImage>
 #include <QRegularExpression>
 #include <QStringList>
@@ -65,12 +67,19 @@ void fitTable(QTextTable *t, const Options &opt)
     }
     QList<QTextLength> cols = f.columnWidthConstraints();
     qreal fixedSum = 0;
+    int fixedCount = 0;
     for (const QTextLength &c : std::as_const(cols)) {
         if (c.type() == QTextLength::FixedLength) {
             fixedSum += c.rawValue();
+            ++fixedCount;
         }
     }
-    if (fixedSum > 0) {
+    // Columns without a constraint (or past the end of the list) size to
+    // their content.
+    const int flexible = t->columns() - fixedCount;
+    if (fixedSum > 0 && flexible <= 0) {
+        // Every column has a pixel width: a designed grid. Too wide for the
+        // pane, or stretched to a percentage: keep the proportions.
         const bool tooWide = fixedSum * opt.zoom > opt.availableWidth ||
                              f.width().type() == QTextLength::PercentageLength;
         for (QTextLength &c : cols) {
@@ -79,6 +88,25 @@ void fitTable(QTextTable *t, const Options &opt)
             }
             c = tooWide ? QTextLength(QTextLength::PercentageLength, c.rawValue() * 100.0 / fixedSum)
                         : scaled(c, opt.zoom);
+        }
+        f.setColumnWidthConstraints(cols);
+    } else if (fixedSum > 0) {
+        // Spacer, icon and label columns (width="10", width="30") beside a
+        // content column with no width. Turning them into percentages of
+        // their own sum (the old rule) handed them 100% of the table and
+        // squeezed the content column to one character per line. Keep them
+        // in pixels and leave the content columns at least half the room.
+        const QTextLength tw = f.width();
+        const qreal tableWidth = tw.type() == QTextLength::FixedLength      ? tw.rawValue()
+                                 : tw.type() == QTextLength::PercentageLength ? opt.availableWidth * tw.rawValue() / 100.0
+                                                                              : opt.availableWidth;
+        const qreal room = std::max<qreal>(0, tableWidth * 0.5);
+        const qreal want = fixedSum * opt.zoom;
+        const qreal shrink = want > room && want > 0 ? room / want : 1.0;
+        for (QTextLength &c : cols) {
+            if (c.type() == QTextLength::FixedLength) {
+                c = QTextLength(QTextLength::FixedLength, c.rawValue() * opt.zoom * shrink);
+            }
         }
         f.setColumnWidthConstraints(cols);
     }
@@ -181,6 +209,193 @@ QString attr(const QString &tag, const QString &name)
     return {};
 }
 
+bool isHiddenStyle(const QString &style)
+{
+    if (style.isEmpty()) {
+        return false;
+    }
+    if (lastStyleValue(style, QStringLiteral("display")).compare(QLatin1String("none"), Qt::CaseInsensitive) == 0) {
+        return true;
+    }
+    // Preheaders and dark-mode twins: collapsed to nothing with overflow hidden.
+    static const QRegularExpression zero(QStringLiteral("^0(px|em|%)?$"), QRegularExpression::CaseInsensitiveOption);
+    const bool clipped =
+        lastStyleValue(style, QStringLiteral("overflow")).compare(QLatin1String("hidden"), Qt::CaseInsensitive) == 0;
+    return clipped && (zero.match(lastStyleValue(style, QStringLiteral("max-height"))).hasMatch() ||
+                       zero.match(lastStyleValue(style, QStringLiteral("max-width"))).hasMatch());
+}
+
+int countOf(const QString &s, const QRegularExpression &re)
+{
+    int n = 0;
+    auto it = re.globalMatch(s);
+    while (it.hasNext()) {
+        it.next();
+        ++n;
+    }
+    return n;
+}
+
+// QTextDocument ignores display:none, so hidden preheaders, mobile-only
+// blocks and dark-mode duplicates (a second logo, a black status band) were
+// drawn. Drop hidden elements, as mail clients do.
+QString stripHidden(const QString &html)
+{
+    static const QRegularExpression cand(
+        QStringLiteral("<([a-zA-Z][a-zA-Z0-9]*)\\b([^>]*\\b(?:display|max-height|max-width)\\s*:[^>]*)>"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression tableOpen(QStringLiteral("<table\\b"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression tableClose(QStringLiteral("</table\\s*>"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression divOpen(QStringLiteral("<div\\b"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression divClose(QStringLiteral("</div\\s*>"), QRegularExpression::CaseInsensitiveOption);
+    static const QStringList voidTags = {QStringLiteral("img"), QStringLiteral("br"), QStringLiteral("hr"),
+                                         QStringLiteral("input"), QStringLiteral("wbr"), QStringLiteral("col")};
+    QString out;
+    out.reserve(html.size());
+    qsizetype pos = 0;
+    while (true) {
+        const auto m = cand.match(html, pos);
+        if (!m.hasMatch()) {
+            break;
+        }
+        out += QStringView(html).mid(pos, m.capturedStart() - pos);
+        pos = m.capturedEnd();
+        const QString tag = m.captured(1).toLower();
+        if (!isHiddenStyle(attr(m.captured(2), QStringLiteral("style")))) {
+            out += m.captured(0);
+            continue;
+        }
+        if (voidTags.contains(tag) || m.captured(0).endsWith(QLatin1String("/>"))) {
+            continue; // drop the tag
+        }
+        // Find the matching close tag.
+        const QRegularExpression same(QStringLiteral("<(/?)%1\\b[^>]*>").arg(tag), QRegularExpression::CaseInsensitiveOption);
+        int depth = 1;
+        qsizetype end = -1;
+        auto it = same.globalMatch(html, pos);
+        while (it.hasNext()) {
+            const auto t = it.next();
+            if (t.capturedLength(1) > 0) {
+                if (--depth == 0) {
+                    end = t.capturedEnd();
+                    break;
+                }
+            } else if (!t.captured(0).endsWith(QLatin1String("/>"))) {
+                ++depth;
+            }
+        }
+        if (end < 0) {
+            out += m.captured(0); // unclosed: leave it alone
+            continue;
+        }
+        // Only drop a range that closes what it opens (an unclosed <td> must
+        // not swallow the rest of its table).
+        const QString inner = html.mid(m.capturedStart(), end - m.capturedStart());
+        if (countOf(inner, tableOpen) != countOf(inner, tableClose) || countOf(inner, divOpen) != countOf(inner, divClose)) {
+            out += m.captured(0);
+            continue;
+        }
+        pos = end;
+    }
+    out += QStringView(html).mid(pos);
+    return out;
+}
+
+// A table built as width:100%; max-width:600px is a 600 px card centred in
+// a wide window (Gmail draws it so). QTextDocument has no max-width and
+// stretched it to the pane. Pin it to its max width; fit() still shrinks it
+// to a percentage when the pane is narrower.
+QString pinMaxWidthTables(const QString &html)
+{
+    static const QRegularExpression table(QStringLiteral("<table\\b[^>]*>"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression px(QStringLiteral("^(\\d+(?:\\.\\d+)?)px$"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression widthAttr(QStringLiteral("\\swidth\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)"),
+                                              QRegularExpression::CaseInsensitiveOption);
+    QString out;
+    out.reserve(html.size());
+    qsizetype last = 0;
+    auto it = table.globalMatch(html);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        out += QStringView(html).mid(last, m.capturedStart() - last);
+        last = m.capturedEnd();
+        QString tag = m.captured(0);
+        const QString style = attr(tag, QStringLiteral("style"));
+        const auto mw = px.match(lastStyleValue(style, QStringLiteral("max-width")));
+        const QString w = lastStyleValue(style, QStringLiteral("width"));
+        if (!mw.hasMatch() || mw.captured(1).toDouble() < 200 || (!w.isEmpty() && !w.endsWith(QLatin1Char('%')))) {
+            out += tag;
+            continue;
+        }
+        const QString n = QString::number(qRound(mw.captured(1).toDouble()));
+        tag.remove(widthAttr);
+        // Last declaration wins; the attribute covers parsers that prefer it.
+        QString newStyle = style.trimmed();
+        while (newStyle.endsWith(QLatin1Char(';'))) {
+            newStyle.chop(1); // ";;" makes Qt's CSS parser drop the whole style
+        }
+        newStyle += QStringLiteral("; width:%1px").arg(n);
+        tag.replace(style, newStyle);
+        tag.insert(6, QStringLiteral(" width=\"%1\"").arg(n));
+        out += tag;
+    }
+    out += QStringView(html).mid(last);
+    return out;
+}
+
+// "margin: 0 auto" centres a block in a browser; QTextDocument reads "auto"
+// as a length and pushed the content right by ~40 px per level (off the
+// edge of its card). Use 0 instead, and centre tables with align="center".
+QString neutraliseAutoMargins(const QString &html)
+{
+    static const QRegularExpression tag(QStringLiteral("<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*\\bmargin[^>]*>"),
+                                        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression decl(QStringLiteral("(margin(?:-left|-right)?\\s*:)([^;]*)"),
+                                         QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression autoWord(QStringLiteral("\\bauto\\b"), QRegularExpression::CaseInsensitiveOption);
+    QString out;
+    out.reserve(html.size());
+    qsizetype last = 0;
+    auto it = tag.globalMatch(html);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        out += QStringView(html).mid(last, m.capturedStart() - last);
+        last = m.capturedEnd();
+        QString t = m.captured(0);
+        const QString style = attr(t, QStringLiteral("style"));
+        if (style.isEmpty() || !style.contains(autoWord)) {
+            out += t;
+            continue;
+        }
+        QString fixedStyle;
+        bool centred = false;
+        qsizetype pos = 0;
+        auto di = decl.globalMatch(style);
+        while (di.hasNext()) {
+            const auto d = di.next();
+            fixedStyle += QStringView(style).mid(pos, d.capturedStart() - pos);
+            QString v = d.captured(2);
+            if (v.contains(autoWord)) {
+                centred = true;
+                v.replace(autoWord, QStringLiteral("0"));
+            }
+            fixedStyle += d.captured(1) + v;
+            pos = d.capturedEnd();
+        }
+        fixedStyle += QStringView(style).mid(pos);
+        if (centred) {
+            t.replace(style, fixedStyle);
+            if (m.captured(1).compare(QLatin1String("table"), Qt::CaseInsensitive) == 0 &&
+                attr(t, QStringLiteral("align")).isEmpty()) {
+                t.insert(6, QStringLiteral(" align=\"center\""));
+            }
+        }
+        out += t;
+    }
+    out += QStringView(html).mid(last);
+    return out;
+}
+
 } // namespace
 
 QString prepare(const QString &input)
@@ -189,6 +404,9 @@ QString prepare(const QString &input)
                                              QRegularExpression::DotMatchesEverythingOption);
     QString html = input;
     html.remove(comments);
+    html = stripHidden(html);
+    html = pinMaxWidthTables(html);
+    html = neutraliseAutoMargins(html);
 
     static const QRegularExpression divTag(QStringLiteral("<(/?)div\\b([^>]*)>"),
                                            QRegularExpression::CaseInsensitiveOption);
@@ -285,6 +503,8 @@ void fit(QTextDocument *doc, const Options &opt)
     // after, since setCharFormat() splits fragments under the iterator.
     struct Change { int pos; int len; QTextCharFormat fmt; };
     QList<Change> changes;
+    QList<std::pair<int, int>> emojiRuns;
+    const QString emoji = emojiFamily();
     QList<std::pair<QTextBlock, QTextBlockFormat>> blockChanges;
     for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
         if (o.dark && b.blockFormat().hasProperty(QTextFormat::BackgroundBrush)) {
@@ -296,6 +516,27 @@ void fit(QTextDocument *doc, const Options &opt)
             const QTextFragment frag = it.fragment();
             if (!frag.isValid()) {
                 continue;
+            }
+            if (!emoji.isEmpty()) {
+                // Mail fonts (Arial, 'Work Sans' ...) have no emoji and Qt 6.4
+                // doesn't fall back to the colour font: point emoji at it.
+                const QString text = frag.text();
+                const auto ucs = text.toUcs4();
+                int offset = 0, runStart = -1;
+                for (int i = 0; i < ucs.size(); ++i) {
+                    const char32_t c = ucs[i];
+                    const bool e = isEmojiCodePoint(c, i + 1 < ucs.size() ? ucs[i + 1] : 0);
+                    if (e && runStart < 0) {
+                        runStart = offset;
+                    } else if (!e && runStart >= 0) {
+                        emojiRuns.append({frag.position() + runStart, offset - runStart});
+                        runStart = -1;
+                    }
+                    offset += c > 0xFFFF ? 2 : 1;
+                }
+                if (runStart >= 0) {
+                    emojiRuns.append({frag.position() + runStart, offset - runStart});
+                }
             }
             QTextCharFormat f = frag.charFormat();
             bool changed = false;
@@ -369,6 +610,16 @@ void fit(QTextDocument *doc, const Options &opt)
         cur.setPosition(c.pos);
         cur.setPosition(c.pos + c.len, QTextCursor::KeepAnchor);
         cur.setCharFormat(c.fmt);
+    }
+    if (!emojiRuns.isEmpty()) {
+        QTextCharFormat ef;
+        ef.setFontFamilies(QStringList{emoji});
+        for (const auto &run : std::as_const(emojiRuns)) {
+            QTextCursor cur(doc);
+            cur.setPosition(run.first);
+            cur.setPosition(run.first + run.second, QTextCursor::KeepAnchor);
+            cur.mergeCharFormat(ef);
+        }
     }
     for (const auto &bc : std::as_const(blockChanges)) {
         QTextCursor cur(bc.first);

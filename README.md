@@ -84,10 +84,14 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 
 - HTML mail is shown on a white page, laid out to the width of the pane, with
   remote images blocked until you press **Load images** for that message.
-  **View → Dark Background for Messages** gives a dark version.
+  **View → Dark Background for Messages** gives a dark version. Content the
+  sender hid (preheaders, dark-mode duplicates) stays hidden, and 600 px
+  newsletter cards are centred as in Gmail.
+- Emoji in subjects and messages use Noto Color Emoji when it's installed
+  (`fonts-noto-color-emoji`, recommended by the .deb).
 - Ctrl+= and Ctrl+- (or Ctrl+wheel) zoom the message; Ctrl+0 resets it.
-- **View → Preview Pane** shows the preview below the list or to its right.
-  Drag the divider to resize it; zmail remembers the layout.
+- **View → Preview Pane** shows the preview below the list or to its right;
+  by default the message gets about two thirds of the space. Drag the divider to resize it; zmail remembers the layout.
 - Double-click a message (or press Ctrl+O) to open it in its own window.
 
 ## License

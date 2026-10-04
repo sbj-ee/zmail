@@ -1,9 +1,14 @@
 #include "Theme.h"
 
 #include <QApplication>
+#include <QFont>
+#include <QFontDatabase>
+#include <QFontInfo>
 #include <QStyleFactory>
 #include <QStyleHints>
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace zmail::ui {
 
@@ -92,6 +97,70 @@ void applyTheme(ThemeMode mode)
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     const bool dark = mode == ThemeMode::Dark || (mode == ThemeMode::System && systemPrefersDark());
     QApplication::setPalette(dark ? darkPalette() : lightPalette());
+    installEmojiFallback();
+}
+
+QString emojiFamily()
+{
+    static const QString family = []() {
+        const QStringList installed = QFontDatabase::families();
+        for (const char *name : {"Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", "Twemoji", "JoyPixels",
+                                 "EmojiOne Color"}) {
+            const QString n = QString::fromLatin1(name);
+            if (installed.contains(n, Qt::CaseInsensitive)) {
+                return n;
+            }
+        }
+        return QString();
+    }();
+    return family;
+}
+
+void installEmojiFallback()
+{
+    const QString emoji = emojiFamily();
+    if (emoji.isEmpty()) {
+        return;
+    }
+    QFont f = QApplication::font();
+    QStringList fams = f.families();
+    if (fams.contains(emoji)) {
+        return;
+    }
+    // Lead with the font Qt actually resolved: a generic name such as
+    // "Sans Serif" at the head of a family list is skipped, and everything
+    // (spaces, digits) would then be drawn from the emoji font.
+    const QString real = QFontInfo(f).family();
+    if (fams.isEmpty()) {
+        fams << real;
+    } else {
+        fams.first() = real;
+    }
+    fams << emoji;
+    f.setFamilies(fams);
+    QApplication::setFont(f);
+}
+
+bool isEmojiCodePoint(char32_t c, char32_t next)
+{
+    if (c == 0x200D || c == 0xFE0F || c == 0x20E3 || (c >= 0x1F3FB && c <= 0x1F3FF) || (c >= 0xE0020 && c <= 0xE007F)) {
+        return true; // joiners, VS16, keycap, skin tones, tag sequences: part of the emoji before them
+    }
+    if (c >= 0x1F000 && c <= 0x1FAFF) {
+        return true; // pictographs, emoticons, transport, flags, supplemental symbols
+    }
+    // Default-emoji-presentation characters in the BMP (Unicode Emoji_Presentation=Yes).
+    static const char32_t bmp[] = {0x231A, 0x231B, 0x23E9, 0x23EA, 0x23EB, 0x23EC, 0x23F0, 0x23F3, 0x25FD, 0x25FE,
+                                   0x2614, 0x2615, 0x267F, 0x2693, 0x26A1, 0x26AA, 0x26AB, 0x26BD, 0x26BE, 0x26C4,
+                                   0x26C5, 0x26CE, 0x26D4, 0x26EA, 0x26F2, 0x26F3, 0x26F5, 0x26FA, 0x26FD, 0x2705,
+                                   0x270A, 0x270B, 0x2728, 0x274C, 0x274E, 0x2753, 0x2754, 0x2755, 0x2757, 0x2795,
+                                   0x2796, 0x2797, 0x27B0, 0x27BF, 0x2B1B, 0x2B1C, 0x2B50, 0x2B55};
+    if ((c >= 0x2648 && c <= 0x2653) || std::find(std::begin(bmp), std::end(bmp), c) != std::end(bmp)) {
+        return true;
+    }
+    // Text-default symbols (\u2764 heart, \u2600 sun, \u2714 check ...) only when
+    // VS16 asks for the emoji form.
+    return next == 0xFE0F && c >= 0x2000 && c <= 0x3299;
 }
 
 ThemeMode currentTheme()

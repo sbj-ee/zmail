@@ -1,0 +1,51 @@
+# Build, test and package zmail on Ubuntu 24.04 (Linux amd64 only).
+# Version comes from CMake project() -> PROJECT_VERSION; the .deb is
+# zmail_<version>_amd64.deb.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Qt 6 + build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qt6-base-dev qt6-qpa-plugins libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package .deb
+        run: |
+          cd build
+          cpack -G DEB
+          ls -l *.deb
+          dpkg-deb -I zmail_*_amd64.deb
+          dpkg-deb -c zmail_*_amd64.deb
+          dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/bin/zmail$'
+          dpkg-deb -f zmail_*_amd64.deb Version | grep -qx '0.1.0'
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: zmail-deb
+          path: build/zmail_*_amd64.deb
+          if-no-files-found: error

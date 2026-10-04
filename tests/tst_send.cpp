@@ -40,6 +40,7 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTreeView>
+#include <QTextCursor>
 #include <QtTest>
 #include <memory>
 
@@ -219,6 +220,33 @@ bool noBareLf(const QByteArray &raw)
     }
     return true;
 }
+
+// Decoded text of every leaf part of a raw message, keyed by content type.
+QMultiHash<QString, QString> leafTexts(const QByteArray &raw)
+{
+    QMultiHash<QString, QString> out;
+    const Parsed p = parse(raw);
+    const QString type = p.headers.value(QStringLiteral("content-type"));
+    if (type.startsWith(QLatin1String("multipart/"), Qt::CaseInsensitive)) {
+        for (const QByteArray &part : partsOf(p.body, boundaryOf(type))) {
+            const auto sub = leafTexts(part);
+            for (auto it = sub.cbegin(); it != sub.cend(); ++it) {
+                out.insert(it.key(), it.value());
+            }
+        }
+        return out;
+    }
+    const QString cte = p.headers.value(QStringLiteral("content-transfer-encoding")).toLower();
+    QByteArray body = p.body;
+    if (cte == QLatin1String("base64")) {
+        body = QByteArray::fromBase64(body);
+    } else if (cte == QLatin1String("quoted-printable")) {
+        body.replace("=\r\n", "");
+        body = QByteArray::fromPercentEncoding(body, '=');
+    }
+    out.insert(type.section(QLatin1Char(';'), 0, 0).trimmed().toLower(), QString::fromUtf8(body));
+    return out;
+}
 } // namespace
 
 class TstSend : public QObject
@@ -264,7 +292,7 @@ private slots:
         QCOMPARE(decodeWords(p.headers.value("cc")), QStringLiteral("José Núñez <jose@example.es>"));
         QCOMPARE(p.headers.value("bcc"), QStringLiteral("audit@example.com")); // Gmail strips it on delivery
         QCOMPARE(decodeWords(p.headers.value("subject")), m.subject);
-        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.3.0")));
+        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.3.1")));
 
         // multipart/mixed( multipart/alternative(text, html), attachment )
         const QString ct = p.headers.value("content-type");
@@ -889,6 +917,74 @@ private slots:
         QVERIFY(m.text.contains(QStringLiteral("> original")));
         c.setSignature({});
         QVERIFY(!c.message().text.contains(QStringLiteral("-- \n")));
+    }
+
+    void signatureIsInTheSentMimeForNewReplyAndForward()
+    {
+        // 0.3.0: a New message in the default format went out without the
+        // default signature (only Reply/Forward and format changes added it).
+        // Uses the compose window's own SignatureStore, as the app does.
+        Live L;
+        const QString root = L.seed(QStringLiteral("Crew schedule"));
+        QVERIFY(L.start());
+        const CachedMessage original = L.fetch(root);
+
+        const struct { ComposeWindow::Format format; const char *name; } formats[] = {
+            {ComposeWindow::Format::Html, "html"},
+            {ComposeWindow::Format::Plain, "plain"},
+            {ComposeWindow::Format::Markdown, "markdown"},
+        };
+        for (const auto &f : formats) {
+            for (const char *kind : {"new", "reply", "forward"}) {
+                QSettings().clear();
+                {
+                    SignatureStore store;
+                    store.setAll({Signature{QStringLiteral("Work"),
+                                            QStringLiteral("<p><b>Demo User</b><br>Field Operations</p>"),
+                                            QStringLiteral("Demo User\nField Operations")}});
+                    store.setDefaultName(QStringLiteral("Work"));
+                }
+                QSettings().setValue(QStringLiteral("compose/format"), int(f.format));
+                const QString what = QStringLiteral("%1/%2").arg(QLatin1String(f.name), QLatin1String(kind));
+
+                ComposeWindow c;
+                c.setConfirmOnClose(false);
+                c.setSession(L.session.get());
+                QCOMPARE(c.format(), f.format);
+                QCOMPARE(c.signatureName(), QStringLiteral("Work"));
+                if (QByteArray(kind) == "new") {
+                    c.findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(QStringLiteral("priya.raman@example.com"));
+                    c.findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(QStringLiteral("Signature check"));
+                } else {
+                    const auto k = QByteArray(kind) == "reply" ? ReplyBuilder::Kind::Reply : ReplyBuilder::Kind::Forward;
+                    ComposeDraft d = ReplyBuilder::make(k, original, L.session->account());
+                    if (d.to.isEmpty()) {
+                        d.to = QStringLiteral("priya.raman@example.com");
+                    }
+                    c.setDraft(d);
+                }
+                auto *body = c.findChild<QTextEdit *>(QStringLiteral("composeBody"));
+                // Typed where the cursor is: above the signature (and the quote).
+                body->textCursor().insertText(QStringLiteral("Body for %1").arg(what));
+                QSignalSpy sent(&c, &ComposeWindow::sent);
+                c.send();
+                QTRY_COMPARE_WITH_TIMEOUT(sent.size(), 1, 10000);
+
+                const auto parts = leafTexts(L.g.lastRaw);
+                const QString plain = parts.value(QStringLiteral("text/plain"));
+                QVERIFY2(plain.contains(QStringLiteral("Body for ") + what), qPrintable(what + QLatin1Char('\n') + plain));
+                QVERIFY2(plain.contains(QStringLiteral("\n-- \r\n")) || plain.contains(QStringLiteral("\n-- \n")),
+                         qPrintable(what + QStringLiteral(": no signature delimiter\n") + plain));
+                QVERIFY2(plain.contains(QStringLiteral("Demo User")) && plain.contains(QStringLiteral("Field Operations")),
+                         qPrintable(what + QStringLiteral(": no signature in text/plain\n") + plain));
+                QVERIFY(plain.indexOf(QStringLiteral("Body for")) < plain.indexOf(QStringLiteral("Field Operations")));
+                if (f.format != ComposeWindow::Format::Plain) {
+                    const QString html = parts.value(QStringLiteral("text/html"));
+                    QVERIFY2(html.contains(QStringLiteral("Field Operations")),
+                             qPrintable(what + QStringLiteral(": no signature in text/html\n") + html.left(2000)));
+                }
+            }
+        }
     }
 
     // ---- spell check ------------------------------------------------------------------------

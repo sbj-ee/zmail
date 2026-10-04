@@ -110,11 +110,12 @@ QString SafeHtmlView::sanitize(const QString &html, int *blockedImages, bool kee
     QString s = html;
     using RE = QRegularExpression;
     const auto opts = RE::CaseInsensitiveOption | RE::DotMatchesEverythingOption;
-    static const RE body(QStringLiteral("<body[^>]*>(.*)</body>"), opts);
-    const auto m = body.match(s);
-    if (m.hasMatch()) {
-        s = m.captured(1);
-    }
+    // Don't crop to <body>...</body>: some senders (Meetup) concatenate two
+    // documents, the first a body holding only a tracking pixel, the second
+    // the real mail with no <body> at all, which then showed as blank. Head
+    // sections go below; <html>/<body> tags are dropped with the others.
+    static const RE prolog(QStringLiteral("<!DOCTYPE[^>]*>|<\\?xml[^>]*>"), opts);
+    s.remove(prolog);
     static const RE paired(
         QStringLiteral("<(script|style|iframe|object|embed|form|textarea|select|button|noscript|template|svg|math|head|title)\\b.*?</\\1\\s*>"),
         opts);

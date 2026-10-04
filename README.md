@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.3.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.3.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check. See
@@ -73,7 +73,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.3.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.3.1_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -84,10 +84,14 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 
 - HTML mail is shown on a white page, laid out to the width of the pane, with
   remote images blocked until you press **Load images** for that message.
-  **View → Dark Background for Messages** gives a dark version.
+  **View → Dark Background for Messages** gives a dark version. Content the
+  sender hid (preheaders, dark-mode duplicates) stays hidden, and 600 px
+  newsletter cards are centred as in Gmail.
+- Emoji in subjects and messages use Noto Color Emoji when it's installed
+  (`fonts-noto-color-emoji`, recommended by the .deb).
 - Ctrl+= and Ctrl+- (or Ctrl+wheel) zoom the message; Ctrl+0 resets it.
-- **View → Preview Pane** shows the preview below the list or to its right.
-  Drag the divider to resize it; zmail remembers the layout.
+- **View → Preview Pane** shows the preview below the list or to its right;
+  by default the message gets about two thirds of the space. Drag the divider to resize it; zmail remembers the layout.
 - Double-click a message (or press Ctrl+O) to open it in its own window.
 - **Settings → Row Stripes** sets how strongly alternate rows in the message
   list are shaded (a slider with Off / Subtle / Normal / Strong presets).

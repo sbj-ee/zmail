@@ -1,0 +1,26 @@
+# build trees
+/build*/
+/out/
+CMakeLists.txt.user
+compile_commands.json
+.cache/
+
+# OAuth client credentials and local config: NEVER commit these.
+# zmail reads them from ~/.config/zmail/oauth-client.json (mode 0600).
+client_secret*.json
+client-secret*.json
+oauth-client*.json
+*.client.json
+*.secret
+*.token
+.env
+.env.*
+/config/
+zmail.conf
+zmail.ini
+
+# local scratch
+/ref/
+/screenshot-*.png
+*.swp
+.DS_Store

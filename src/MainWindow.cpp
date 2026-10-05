@@ -12,6 +12,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/NewMailSound.h"
+#include "ui/SoundDialog.h"
 #include "ui/SafeHtmlView.h"
 #include "ui/PrivacyDialog.h"
 #include "ui/SignaturesDialog.h"
@@ -310,6 +311,8 @@ void MainWindow::buildMenus()
     sigs->setObjectName(QStringLiteral("actionSignatures"));
     QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showPrivacyDialog()->open(); });
     privacy->setObjectName(QStringLiteral("actionPrivacy"));
+    QAction *sounds = settings->addAction(tr("S&ounds\u2026"), this, [this]() { showSoundDialog()->open(); });
+    sounds->setObjectName(QStringLiteral("actionSounds"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
@@ -1295,6 +1298,17 @@ PrivacyDialog *MainWindow::showPrivacyDialog()
     return dlg;
 }
 
+SoundDialog *MainWindow::showSoundDialog()
+{
+    auto *dlg = new SoundDialog(m_sound, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QDialog::accepted, this, [this]() {
+        // Keep View/toolbar mute in step with Settings > Sounds.
+        setNewMailSoundOn(m_sound->isEnabled());
+    });
+    return dlg;
+}
+
 StripesDialog *MainWindow::showStripesDialog()
 {
     auto *dlg = new StripesDialog(m_stripes, this);
@@ -1322,7 +1336,7 @@ QAction *MainWindow::soundAction()
         m_soundAction->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
         m_soundAction->setIconText(tr("Sound"));
         m_soundAction->setIconVisibleInMenu(false); // a plain check box in View, like Dark Background
-        m_sound->setEnabled(QSettings().value(QStringLiteral("notify/sound"), true).toBool());
+        m_sound->setEnabled(QSettings().value(QLatin1String(NewMailSound::kEnabledKey), true).toBool());
         m_soundAction->setChecked(m_sound->isEnabled());
         connect(m_soundAction, &QAction::toggled, this, &MainWindow::setNewMailSoundOn);
         updateSoundAction();
@@ -1344,7 +1358,7 @@ bool MainWindow::newMailSoundOn() const
 void MainWindow::setNewMailSoundOn(bool on)
 {
     m_sound->setEnabled(on);
-    QSettings().setValue(QStringLiteral("notify/sound"), on);
+    QSettings().setValue(QLatin1String(NewMailSound::kEnabledKey), on);
     if (m_soundAction && m_soundAction->isChecked() != on) {
         const QSignalBlocker block(m_soundAction);
         m_soundAction->setChecked(on);

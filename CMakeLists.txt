@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.3.3 LANGUAGES CXX)
+project(zmail VERSION 0.3.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -107,6 +107,8 @@ add_library(zmail_app STATIC
   src/ui/SafeHtmlView.h
   src/ui/PrivacyDialog.cpp
   src/ui/PrivacyDialog.h
+  src/ui/SoundDialog.cpp
+  src/ui/SoundDialog.h
   src/ui/RemoteImages.cpp
   src/ui/RemoteImages.h
   src/ui/SignaturesDialog.cpp

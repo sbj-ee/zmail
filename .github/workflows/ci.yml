@@ -46,12 +46,14 @@ jobs:
           dpkg-deb -I zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/bin/zmail$'
+          dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/share/zmail/sounds/new-mail.wav$'
           want="$(sed -nE 's/^project\(zmail VERSION ([0-9.]+).*/\1/p' ../CMakeLists.txt)"
           echo "expect Version $want"
           dpkg-deb -f zmail_*_amd64.deb Version | grep -qx "$want"
           dpkg-deb -f zmail_*_amd64.deb Depends | tee /dev/stderr | grep -q 'libqt6svg6'
           dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6sql6-sqlite'
           dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libqt6keychain'
+          dpkg-deb -f zmail_*_amd64.deb Depends | tee /dev/stderr | grep -qiE 'libqt6multimedia|qt6-multimedia'
           dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libzip'
           dpkg-deb -f zmail_*_amd64.deb Depends | grep -q 'libmd4c-html0'
           dpkg-deb -f zmail_*_amd64.deb Recommends | grep -q 'hunspell-en-us'

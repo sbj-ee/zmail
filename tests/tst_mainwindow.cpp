@@ -115,12 +115,12 @@ private slots:
         QStringList texts;
         for (QAction *a : tb->actions()) {
             if (!a->isSeparator() && !a->text().isEmpty()) {
-                texts << a->text();
+                texts << a->iconText(); // the label under the icon
                 QVERIFY2(!a->icon().isNull(), qPrintable(a->text()));
             }
         }
         QCOMPARE(texts, (QStringList{"Check Mail", "New Message", "Reply", "Reply All", "Forward", "Delete",
-                                     "Attach"}));
+                                     "Attach", "Sound"}));
         QVERIFY(w.findChild<QLineEdit *>(QStringLiteral("searchBox")));
     }
 

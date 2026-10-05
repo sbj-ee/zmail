@@ -292,7 +292,7 @@ private slots:
         QCOMPARE(decodeWords(p.headers.value("cc")), QStringLiteral("José Núñez <jose@example.es>"));
         QCOMPARE(p.headers.value("bcc"), QStringLiteral("audit@example.com")); // Gmail strips it on delivery
         QCOMPARE(decodeWords(p.headers.value("subject")), m.subject);
-        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.3.2")));
+        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.3.3")));
 
         // multipart/mixed( multipart/alternative(text, html), attachment )
         const QString ct = p.headers.value("content-type");

@@ -604,7 +604,11 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
         if (modify) {
             id.chop(7);
         }
-        const bool trash = id.endsWith(QLatin1String("/trash"));
+        const bool untrash = id.endsWith(QLatin1String("/untrash"));
+        if (untrash) {
+            id.chop(8);
+        }
+        const bool trash = !untrash && id.endsWith(QLatin1String("/trash"));
         if (trash) {
             id.chop(6);
         }
@@ -620,6 +624,14 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
             for (const QString &r : remove) modifyCalls << id + QStringLiteral(":-") + r;
             for (const QString &a : add) modifyCalls << id + QStringLiteral(":+") + a;
             setMessageLabels(id, add, remove);
+            replyJson(s, 200, {{QStringLiteral("id"), id},
+                               {QStringLiteral("labelIds"), QJsonArray::fromStringList(m_messages.value(id).labels)}});
+            return;
+        }
+        if (untrash && method == "POST") {
+            // Like Gmail: only TRASH comes off; INBOX is not put back.
+            untrashCalls << id;
+            setMessageLabels(id, {}, {QStringLiteral("TRASH")});
             replyJson(s, 200, {{QStringLiteral("id"), id},
                                {QStringLiteral("labelIds"), QJsonArray::fromStringList(m_messages.value(id).labels)}});
             return;

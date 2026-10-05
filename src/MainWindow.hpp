@@ -6,7 +6,10 @@
 class QActionGroup;
 class QLabel;
 class QLineEdit;
+class QKeySequence;
+class QMenu;
 class QModelIndex;
+class QPoint;
 class QSplitter;
 class QTextBrowser;
 class QTimer;
@@ -63,6 +66,8 @@ public:
     ComposeWindow *composeReply(int kind, const QString &id = {});
     QString shownMessageId() const { return m_shownId; }
     QList<ComposeWindow *> composers() const { return m_composers; }
+    // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
+    static constexpr int kUndoDeleteMs = 8000;
     void selectMailbox(const QString &key);
     void setTheme(zmail::ui::ThemeMode mode);
     // Message-list row stripes, 0..100 (Settings > Row Stripes), remembered.
@@ -106,7 +111,19 @@ private:
     void updateMessageActions();
     void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
-    void trashMessage(const QString &id);
+    void trashMessage(QString id);
+    // Right-click menus, Enter to open, Mark Read/Unread, Undo Delete.
+    void installListActions();
+    QMenu *buildListMenu();
+    QMenu *buildMailboxMenu(QTreeWidgetItem *item);
+    void showListMenu(const QPoint &pos);
+    void showMailboxMenu(const QPoint &pos);
+    int unreadIn(const QString &key) const;
+    void markAllRead(const QString &key);
+    void setCurrentRead(bool read);
+    void offerUndoDelete(const QString &id);
+    void undoDelete();
+    static QString withShortcut(const QString &tip, const QKeySequence &key);
     void saveSplitters();
     void restoreListSplitter();
 
@@ -134,5 +151,10 @@ private:
     void applyStripes();
     QString m_lastSync;     // "8:45 AM"
     QString m_shownId;      // message currently in the preview
+    QAction *m_undoDeleteAction = nullptr;
+    QWidget *m_undoBar = nullptr;      // "Moved to Trash. [Undo]" in the status bar
+    QLabel *m_undoLabel = nullptr;
+    QTimer *m_undoTimer = nullptr;
+    QString m_lastTrashed;             // id the Undo puts back
     QTimer *m_reloadTimer = nullptr;
 };

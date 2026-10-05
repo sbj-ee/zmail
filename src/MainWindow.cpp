@@ -32,6 +32,10 @@
 #include <QGuiApplication>
 #include <QPointer>
 #include <QScrollBar>
+#include <QShortcut>
+#include <QToolButton>
+#include <QClipboard>
+#include <QHBoxLayout>
 #include <QTimer>
 #include <QDesktopServices>
 #include <QHeaderView>
@@ -210,6 +214,11 @@ void MainWindow::buildMenus()
     later(edit, tr("&Copy"), QKeySequence::Copy);
     QAction *find = edit->addAction(tr("&Find\u2026"), this, [this]() { m_search->setFocus(); });
     find->setShortcut(QKeySequence::Find);
+    edit->addSeparator();
+    m_undoDeleteAction = edit->addAction(tr("&Undo Delete"), this, &MainWindow::undoDelete);
+    m_undoDeleteAction->setObjectName(QStringLiteral("actionUndoDelete"));
+    m_undoDeleteAction->setShortcut(QKeySequence::Undo);
+    m_undoDeleteAction->setEnabled(false);
 
     QMenu *view = addMenu("menuView", tr("&View"));
     later(view, tr("View as &Plain Text"));
@@ -273,6 +282,20 @@ void MainWindow::buildMenus()
     mf->setObjectName(QStringLiteral("menuActionForward"));
     mf->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
     message->addSeparator();
+    QAction *markRead = message->addAction(icon(QStringLiteral("mail-open")), tr("Mark as R&ead"), this,
+                                           [this]() { setCurrentRead(true); });
+    markRead->setObjectName(QStringLiteral("actionMarkRead"));
+    markRead->setProperty("lucide", QStringLiteral("mail-open"));
+    QAction *markUnread = message->addAction(icon(QStringLiteral("mail")), tr("Mark as &Unread"), this,
+                                             [this]() { setCurrentRead(false); });
+    markUnread->setObjectName(QStringLiteral("actionMarkUnread"));
+    markUnread->setProperty("lucide", QStringLiteral("mail"));
+    QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
+                                      [this]() { trashMessage(m_shownId); });
+    del->setObjectName(QStringLiteral("menuActionDelete"));
+    del->setProperty("lucide", QStringLiteral("trash"));
+    del->setShortcuts({QKeySequence::Delete});
+    message->addSeparator();
     later(message, tr("Mark as &Suspicious"));
     later(message, tr("S&nooze\u2026"));
 
@@ -303,15 +326,18 @@ void MainWindow::buildToolbar()
     tb->setIconSize(QSize(22, 22));
     tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
 
-    struct B { const char *obj; const char *icon; QString text; QString tip; };
+    // Toolbar buttons share the menu items' shortcuts; the tooltip names
+    // the key the same way for every button ("Reply to sender (Ctrl+R)").
+    struct B { const char *obj; const char *icon; QString text; QString tip; QKeySequence key; };
     const QList<B> buttons{
-        {"actionCheckMail", "refresh-cw", tr("Check Mail"), tr("Check for new mail (Ctrl+M)")},
-        {"actionNewMessage", "square-pen", tr("New Message"), tr("Compose a new message (Ctrl+N)")},
-        {"actionReply", "reply", tr("Reply"), tr("Reply to sender")},
-        {"actionReplyAll", "reply-all", tr("Reply All"), tr("Reply to all recipients")},
-        {"actionForward", "forward", tr("Forward"), tr("Forward this message")},
-        {"actionDelete", "trash", tr("Delete"), tr("Move to Trash")},
-        {"actionAttach", "paperclip", tr("Attach"), tr("New message with an attachment")},
+        {"actionCheckMail", "refresh-cw", tr("Check Mail"), tr("Check for new mail"), QKeySequence(Qt::CTRL | Qt::Key_M)},
+        {"actionNewMessage", "square-pen", tr("New Message"), tr("Compose a new message"), QKeySequence(QKeySequence::New)},
+        {"actionReply", "reply", tr("Reply"), tr("Reply to sender"), QKeySequence(Qt::CTRL | Qt::Key_R)},
+        {"actionReplyAll", "reply-all", tr("Reply All"), tr("Reply to all recipients"),
+         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R)},
+        {"actionForward", "forward", tr("Forward"), tr("Forward this message"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F)},
+        {"actionDelete", "trash", tr("Delete"), tr("Move to Trash"), QKeySequence(QKeySequence::Delete)},
+        {"actionAttach", "paperclip", tr("Attach"), tr("New message with an attachment"), {}},
     };
     for (const B &b : buttons) {
         if (qstrcmp(b.obj, "actionDelete") == 0 || qstrcmp(b.obj, "actionReply") == 0) {
@@ -319,7 +345,7 @@ void MainWindow::buildToolbar()
         }
         QAction *a = tb->addAction(icon(QString::fromLatin1(b.icon)), b.text);
         a->setObjectName(QString::fromLatin1(b.obj));
-        a->setToolTip(b.tip);
+        a->setToolTip(withShortcut(b.tip, b.key));
         a->setProperty("lucide", QString::fromLatin1(b.icon));
     }
     connect(findChild<QAction *>(QStringLiteral("actionNewMessage")), &QAction::triggered, this,
@@ -464,6 +490,7 @@ void MainWindow::buildPanes()
     restoreListSplitter();
     connect(m_listSplitter, &QSplitter::splitterMoved, this, &MainWindow::saveSplitters);
     connect(m_splitter, &QSplitter::splitterMoved, this, &MainWindow::saveSplitters);
+    installListActions();
     setCentralWidget(m_splitter);
 }
 
@@ -640,6 +667,7 @@ void MainWindow::selectMailbox(const QString &key)
     if (!m_live && m_proxy->rowCount() > 0) {
         m_list->setCurrentIndex(m_proxy->index(0, 0));
     }
+    updateMessageActions(); // nothing to delete in an empty mailbox
 }
 
 void MainWindow::showMessage(const QModelIndex &proxyIndex)
@@ -655,6 +683,7 @@ void MainWindow::showMessage(const QModelIndex &proxyIndex)
         return;
     }
     m_view->setMessage(sampleViewMessage(m_proxy->mapToSource(proxyIndex).row()));
+    updateMessageActions();
 }
 
 ViewMessage MainWindow::sampleViewMessage(int row) const
@@ -767,6 +796,14 @@ void MainWindow::updateMessageActions()
                           "menuActionForward"}) {
         if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             a->setEnabled(on);
+        }
+    }
+    // Delete / Mark: only with a message actually selected (so never in an
+    // empty mailbox), in sample mode too.
+    const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
+    for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread"}) {
+        if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
+            a->setEnabled(selected);
         }
     }
 }
@@ -1141,7 +1178,7 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex)
     return w;
 }
 
-void MainWindow::trashMessage(const QString &id)
+void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, cleared below
 {
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
     if (!sync || id.isEmpty()) {
@@ -1153,8 +1190,9 @@ void MainWindow::trashMessage(const QString &id)
     if (m_shownId == id) {
         m_view->clear();
         m_shownId.clear();
+        updateMessageActions();
     }
-    statusBar()->showMessage(tr("Moved to Trash."), 5000);
+    offerUndoDelete(id);
 }
 
 void MainWindow::setStripeStrength(int strength)
@@ -1218,3 +1256,223 @@ void MainWindow::applyStripes()
     m_list->setAlternatingRowColors(m_stripes > 0);
     m_list->viewport()->update();
 }
+
+// ---- list / mailbox actions, Undo Delete ------------------------------------
+
+QString MainWindow::withShortcut(const QString &tip, const QKeySequence &key)
+{
+    return key.isEmpty() ? tip : QStringLiteral("%1 (%2)").arg(tip, key.toString(QKeySequence::NativeText));
+}
+
+void MainWindow::installListActions()
+{
+    // Right-click menus.
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_list, &QWidget::customContextMenuRequested, this, &MainWindow::showListMenu);
+    m_mailboxes->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_mailboxes, &QWidget::customContextMenuRequested, this, &MainWindow::showMailboxMenu);
+
+    // Enter / Return on a row opens it in its own window (as double-click
+    // does). Scoped to the list so Enter in the search box still searches.
+    for (const QKeySequence &k : {QKeySequence(Qt::Key_Return), QKeySequence(Qt::Key_Enter)}) {
+        auto *sc = new QShortcut(k, m_list, nullptr, nullptr, Qt::WidgetShortcut);
+        connect(sc, &QShortcut::activated, this, [this]() { openMessageWindow(m_list->currentIndex()); });
+    }
+    m_list->setToolTip(QString());
+}
+
+QMenu *MainWindow::buildListMenu()
+{
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("messageListMenu"));
+    for (const char *n : {"actionOpenMessage", "", "menuActionReply", "menuActionReplyAll", "menuActionForward", "",
+                          "actionMarkRead", "actionMarkUnread", "", "menuActionDelete"}) {
+        if (!*n) {
+            menu->addSeparator();
+        } else if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
+            menu->addAction(a); // the menu-bar actions, so shortcuts show and stay in sync
+        }
+    }
+    const QModelIndex cur = m_list->currentIndex();
+    if (cur.isValid()) {
+        const MailItem &m = m_model->item(m_proxy->mapToSource(cur).row());
+        QAction *read = findChild<QAction *>(QStringLiteral("actionMarkRead"));
+        QAction *unread = findChild<QAction *>(QStringLiteral("actionMarkUnread"));
+        read->setVisible(m.status == MailStatus::Unread);
+        unread->setVisible(m.status != MailStatus::Unread);
+        if (!m.address.isEmpty()) {
+            menu->addSeparator();
+            const QString addr = m.address;
+            QAction *copy = menu->addAction(icon(QStringLiteral("copy")), tr("Copy Address"), menu,
+                                            [addr]() { QGuiApplication::clipboard()->setText(addr); });
+            copy->setObjectName(QStringLiteral("actionCopyAddress"));
+        }
+    }
+    connect(menu, &QMenu::aboutToHide, this, [this]() {
+        // Back to both visible for the menu bar.
+        for (const char *n : {"actionMarkRead", "actionMarkUnread"}) {
+            if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
+                a->setVisible(true);
+            }
+        }
+    });
+    return menu;
+}
+
+void MainWindow::showListMenu(const QPoint &pos)
+{
+    const QModelIndex at = m_list->indexAt(pos);
+    if (!at.isValid()) {
+        return;
+    }
+    if (at.row() != m_list->currentIndex().row()) {
+        m_list->setCurrentIndex(at); // right-click selects the row, then acts on it
+    }
+    QMenu *menu = buildListMenu();
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->popup(m_list->viewport()->mapToGlobal(pos));
+}
+
+QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
+{
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("mailboxMenu"));
+    const QString key = item ? item->data(0, Qt::UserRole).toString() : QString();
+    if (!key.isEmpty()) {
+        QAction *all = menu->addAction(icon(QStringLiteral("mail-open")), tr("Mark All as &Read"), menu,
+                                       [this, key]() { markAllRead(key); });
+        all->setObjectName(QStringLiteral("actionMarkAllRead"));
+        all->setEnabled(unreadIn(key) > 0);
+        menu->addSeparator();
+    }
+    if (QAction *check = findChild<QAction *>(QStringLiteral("actionCheckMail"))) {
+        menu->addAction(check);
+    }
+    menu->addSeparator();
+    menu->addAction(tr("E&xpand All"), m_mailboxes, &QTreeView::expandAll)->setObjectName(QStringLiteral("actionExpandAll"));
+    menu->addAction(tr("&Collapse All"), m_mailboxes, &QTreeView::collapseAll)->setObjectName(QStringLiteral("actionCollapseAll"));
+    return menu;
+}
+
+void MainWindow::showMailboxMenu(const QPoint &pos)
+{
+    QTreeWidgetItem *item = m_mailboxes->itemAt(pos);
+    if (item && (item->flags() & Qt::ItemIsSelectable) && item != m_mailboxes->currentItem()) {
+        m_mailboxes->setCurrentItem(item);
+    }
+    QMenu *menu = buildMailboxMenu(item);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->popup(m_mailboxes->viewport()->mapToGlobal(pos));
+}
+
+int MainWindow::unreadIn(const QString &key) const
+{
+    int n = 0;
+    for (const MailItem &m : m_model->items()) {
+        const bool in = key.startsWith(QLatin1String("label:")) ? m.label == key.mid(6) : m.mailboxes.contains(key);
+        n += in && m.status == MailStatus::Unread;
+    }
+    return n;
+}
+
+void MainWindow::markAllRead(const QString &key)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    int n = 0;
+    for (int row = 0; row < m_model->rowCount(); ++row) {
+        const MailItem &m = m_model->item(row);
+        const bool in = key.startsWith(QLatin1String("label:")) ? m.label == key.mid(6) : m.mailboxes.contains(key);
+        if (!in || m.status != MailStatus::Unread) {
+            continue;
+        }
+        if (sync) {
+            sync->markRead(m.id);
+        }
+        m_model->setStatus(row, MailStatus::Read);
+        ++n;
+    }
+    if (!sync) {
+        // Sample mail: clear the mailbox's unread badge (live mail
+        // repopulates from Gmail's counts).
+        for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == key) {
+                (*it)->setText(1, QString());
+                (*it)->setFont(0, m_mailboxes->font());
+                (*it)->setFont(1, m_mailboxes->font());
+            }
+        }
+    }
+    updateCounts();
+    statusBar()->showMessage(n == 1 ? tr("Marked 1 message as read.") : tr("Marked %1 messages as read.").arg(n), 5000);
+}
+
+void MainWindow::setCurrentRead(bool read)
+{
+    const QModelIndex cur = m_list->currentIndex();
+    if (!cur.isValid()) {
+        return;
+    }
+    const int row = m_proxy->mapToSource(cur).row();
+    const MailItem &m = m_model->item(row);
+    if (zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr) {
+        read ? sync->markRead(m.id) : sync->markUnread(m.id);
+    }
+    m_model->setStatus(row, read ? MailStatus::Read : MailStatus::Unread);
+    updateCounts();
+}
+
+void MainWindow::offerUndoDelete(const QString &id)
+{
+    if (!m_undoBar) {
+        // "Moved to Trash.  [Undo]" at the right of the status bar for a few
+        // seconds. Gmail's Trash is recoverable for 30 days anyway; this is
+        // the quick way back from a slip of the Delete key.
+        m_undoBar = new QWidget(this);
+        m_undoBar->setObjectName(QStringLiteral("undoDeleteBar"));
+        auto *h = new QHBoxLayout(m_undoBar);
+        h->setContentsMargins(0, 0, 6, 0);
+        h->setSpacing(6);
+        m_undoLabel = new QLabel(m_undoBar);
+        m_undoLabel->setObjectName(QStringLiteral("undoDeleteLabel"));
+        auto *btn = new QToolButton(m_undoBar);
+        btn->setObjectName(QStringLiteral("undoDeleteButton"));
+        btn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        btn->setText(tr("Undo"));
+        connect(btn, &QToolButton::clicked, this, &MainWindow::undoDelete);
+        btn->setToolTip(withShortcut(tr("Put the message back"), m_undoDeleteAction->shortcut()));
+        h->addWidget(m_undoLabel);
+        h->addWidget(btn);
+        statusBar()->insertPermanentWidget(0, m_undoBar);
+        m_undoTimer = new QTimer(this);
+        m_undoTimer->setSingleShot(true);
+        connect(m_undoTimer, &QTimer::timeout, this, [this]() {
+            m_undoBar->hide();
+            m_undoDeleteAction->setEnabled(false);
+            m_lastTrashed.clear();
+        });
+    }
+    m_lastTrashed = id;
+    m_undoLabel->setText(tr("Moved to Trash."));
+    m_undoBar->show();
+    m_undoDeleteAction->setEnabled(true);
+    m_undoTimer->start(kUndoDeleteMs);
+}
+
+void MainWindow::undoDelete()
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    const QString id = m_lastTrashed;
+    m_lastTrashed.clear();
+    if (m_undoTimer) {
+        m_undoTimer->stop();
+    }
+    if (m_undoBar) {
+        m_undoBar->hide();
+    }
+    m_undoDeleteAction->setEnabled(false);
+    if (!sync || id.isEmpty() || !sync->untrash(id)) {
+        return;
+    }
+    statusBar()->showMessage(tr("Message restored."), 4000);
+}
+

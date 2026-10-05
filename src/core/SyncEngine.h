@@ -3,6 +3,8 @@
 #include "MailCache.h"
 
 #include <QDateTime>
+#include <QHash>
+#include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <functional>
@@ -49,9 +51,15 @@ public:
     using MessageCb = std::function<void(const CachedMessage &m, const QString &error)>;
     void fetchBody(const QString &id, MessageCb cb);
     void markRead(const QString &id);
+    void markUnread(const QString &id); // messages.modify addLabelIds: ["UNREAD"]
     // Move to Gmail's Trash (users.messages.trash): optimistic cache update,
     // rolled back if the call fails.
     void trash(const QString &id);
+    // Undo a trash() from this session: users.messages.untrash, then put
+    // back any labels the message had before (INBOX, UNREAD, ...) that
+    // untrash didn't restore. Optimistic, rolled back if Gmail refuses.
+    // Returns false if the message wasn't trashed by this engine.
+    bool untrash(const QString &id);
 
     int fullSyncs() const { return m_fullSyncs; }
 
@@ -74,8 +82,12 @@ private:
     void drain();
     void setBusy(bool b, const QString &status = {});
     void reportError(const ApiError &e, const QString &what);
+    void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
 
     GmailClient *m_api;
+    QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
+    QSet<QString> m_trashInFlight;                   // trash() sent, no answer yet
+    QSet<QString> m_untrashQueued;                   // ... and already undone
     MailCache *m_cache;
     QTimer *m_poll;
     int m_initialCount = 500;

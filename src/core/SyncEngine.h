@@ -56,6 +56,13 @@ public:
     void markJunk(const QString &id);
     // Leave Spam: remove SPAM, add INBOX (optimistic, rolled back on error).
     void markNotJunk(const QString &id);
+    // Local snooze: store wake time in the cache DB, remove INBOX on Gmail so
+    // other clients agree the mail left the inbox, restore INBOX on wake.
+    // Snooze state itself is not a Gmail label (avoids fighting history sync).
+    void snooze(const QString &id, qint64 wakeMs);
+    void unsnooze(const QString &id); // cancel: restore INBOX if it had it, drop row
+    // Wake any due snoozes (startup + timer). Returns how many woke.
+    int wakeDue(qint64 nowMs = 0);
     // Move to Gmail's Trash (users.messages.trash): optimistic cache update,
     // rolled back if the call fails.
     void trash(const QString &id);
@@ -71,6 +78,7 @@ signals:
     void labelsChanged();
     void messagesChanged();
     void newMail(const QStringList &ids);
+    void snoozesWoke(const QStringList &ids);
     void statusChanged(const QString &status);
     void syncError(const QString &message);
     void fullResyncStarted(const QString &reason);

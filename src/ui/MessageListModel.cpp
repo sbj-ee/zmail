@@ -5,6 +5,7 @@
 #include "core/SizeFormat.h"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QFont>
 #include <QPalette>
 
@@ -76,12 +77,16 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
     switch (role) {
     case Qt::DisplayRole:
         switch (col) {
-        case Status: return statusGlyph(m.status);
+        case Status: return m.snoozeBadge ? QString() : statusGlyph(m.status);
         case Priority:
             return m.priority == MailPriority::High ? QStringLiteral("!")
                  : m.priority == MailPriority::Low ? QStringLiteral("\u2193") : QString();
         case Who: return m.who;
-        case Date: return formatDate(m.date);
+        case Date:
+            if (m.snoozeWakeMs > 0) {
+                return formatDate(QDateTime::fromMSecsSinceEpoch(m.snoozeWakeMs).toLocalTime());
+            }
+            return formatDate(m.date);
         case Size: return formatSize(m.sizeBytes);
         case Subject: return m.subject;
         default: return {};
@@ -95,6 +100,9 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         }
         if (col == Status && m.suspicious) {
             return icon(QStringLiteral("shield-alert"), suspiciousForeground(pal));
+        }
+        if (col == Status && m.snoozeBadge) {
+            return icon(QStringLiteral("clock"));
         }
         return {};
     case Qt::ForegroundRole: {
@@ -149,6 +157,13 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         if (m.suspicious) {
             return tr("Suspicious: see the warning banner in the preview");
         }
+        if (m.snoozeWakeMs > 0 && col == Date) {
+            return tr("Snoozed until %1")
+                .arg(formatDate(QDateTime::fromMSecsSinceEpoch(m.snoozeWakeMs).toLocalTime()));
+        }
+        if (m.snoozeBadge) {
+            return tr("Returned from snooze");
+        }
         return {};
     case SortRole:
         switch (col) {
@@ -167,6 +182,8 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
     case LabelRole: return m.label;
     case SearchTextRole:
         return QStringList{m.who, m.address, m.subject, m.preview, m.label}.join(QLatin1Char('\n'));
+    case SnoozeBadgeRole: return m.snoozeBadge;
+    case SnoozeWakeRole: return m.snoozeWakeMs;
     default:
         return {};
     }
@@ -387,11 +404,19 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
     if (m_hideSpam && m_mailbox != QLatin1String("Junk") && boxes.contains(QStringLiteral("Junk"))) {
         return false;
     }
-    if (m_mailbox.startsWith(QLatin1String("label:"))) {
+    if (m_mailbox == QLatin1String("Snoozed")) {
+        if (idx.data(MessageListModel::SnoozeWakeRole).toLongLong() <= 0) {
+            return false;
+        }
+    } else if (m_mailbox.startsWith(QLatin1String("label:"))) {
         if (idx.data(MessageListModel::LabelRole).toString() != m_mailbox.mid(6)) {
             return false;
         }
     } else if (!boxes.contains(m_mailbox)) {
+        return false;
+    }
+    // Active snoozes leave In (and other label views) until they wake.
+    if (m_mailbox != QLatin1String("Snoozed") && idx.data(MessageListModel::SnoozeWakeRole).toLongLong() > 0) {
         return false;
     }
     if (!m_terms.isEmpty()) {

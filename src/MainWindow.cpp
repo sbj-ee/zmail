@@ -1,3 +1,4 @@
+#include <QDateTime>
 #include "MainWindow.hpp"
 
 #include "AboutDialog.hpp"
@@ -9,6 +10,7 @@
 #include "core/Signatures.h"
 #include "core/SizeFormat.h"
 #include "core/SyncEngine.h"
+#include "core/SnoozeTimes.h"
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/NewMailSound.h"
@@ -40,6 +42,10 @@
 #include <QClipboard>
 #include <QHBoxLayout>
 #include <QTimer>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
+#include <QDateTimeEdit>
 #include <QDesktopServices>
 #include <QHeaderView>
 #include <QLabel>
@@ -147,6 +153,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_reloadTimer->setSingleShot(true);
     m_reloadTimer->setInterval(150);
     connect(m_reloadTimer, &QTimer::timeout, this, &MainWindow::reloadFromCache);
+    m_snoozeTimer = new QTimer(this);
+    m_snoozeTimer->setInterval(30 * 1000); // wake check while the app is open
+    connect(m_snoozeTimer, &QTimer::timeout, this, &MainWindow::checkSnoozeWakes);
 
     buildMenus();
     buildToolbar();
@@ -325,7 +334,13 @@ void MainWindow::buildMenus()
     notJunk->setProperty("lucide", QStringLiteral("mail"));
     notJunk->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));
     notJunk->setVisible(false);
-    later(message, tr("S&nooze\u2026"));
+    QMenu *snoozeMenu = buildSnoozeMenu(message);
+    snoozeMenu->setTitle(tr("S&nooze"));
+    snoozeMenu->setObjectName(QStringLiteral("menuSnooze"));
+    message->addMenu(snoozeMenu);
+    QAction *unsnooze = message->addAction(tr("&Unsnooze"), this, [this]() { unsnoozeMessage(m_shownId); });
+    unsnooze->setObjectName(QStringLiteral("menuActionUnsnooze"));
+    unsnooze->setVisible(false);
 
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
     later(settings, tr("&Account\u2026"));
@@ -587,6 +602,8 @@ void MainWindow::populateMailboxes()
         add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), true, unread(QStringLiteral("INBOX")));
         QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false, 0);
         out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
+        add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"), false,
+            m_session->cache() ? int(m_session->cache()->snoozes(true).size()) : 0);
         if (showJunkFolder) {
             QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
                                         icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
@@ -640,6 +657,7 @@ void MainWindow::populateMailboxes()
     add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"));
     QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false);
     out->setToolTip(0, tr("Queued and sent mail"));
+    add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"), false);
     if (showJunkFolder) {
         QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
                                     icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
@@ -858,7 +876,7 @@ void MainWindow::updateMessageActions()
     // empty mailbox), in sample mode too.
     const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
     for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread",
-                          "actionJunk", "menuActionJunk", "menuActionNotJunk"}) {
+                          "actionJunk", "menuActionJunk", "menuActionNotJunk", "menuActionUnsnooze"}) {
         if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             a->setEnabled(selected);
         }
@@ -879,6 +897,13 @@ void MainWindow::updateMessageActions()
         tb->setToolTip(withShortcut(onJunk ? tr("Not Junk (move out of Spam)") : tr("Mark as Junk (move to Spam)"),
                                     QKeySequence(onJunk ? (Qt::CTRL | Qt::SHIFT | Qt::Key_J)
                                                         : (Qt::CTRL | Qt::Key_J))));
+    }
+    const bool onSnoozed = m_proxy && m_proxy->mailbox() == QLatin1String("Snoozed");
+    if (QAction *u = findChild<QAction *>(QStringLiteral("menuActionUnsnooze"))) {
+        u->setVisible(onSnoozed);
+    }
+    if (QMenu *sm = findChild<QMenu *>(QStringLiteral("menuSnooze"))) {
+        sm->setEnabled(selected && !onSnoozed);
     }
 }
 
@@ -974,6 +999,14 @@ void MainWindow::attachSync()
     });
     connect(sync, &zmail::SyncEngine::syncError, this,
             [this](const QString &e) { statusBar()->showMessage(e, 10000); });
+    connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
+        statusBar()->showMessage(tr("%n snoozed message(s) returned to the Inbox.", nullptr, int(ids.size())), 8000);
+        if (m_reloadTimer) {
+            m_reloadTimer->start();
+        }
+    });
+    checkSnoozeWakes();
+    m_snoozeTimer->start();
 }
 
 QString MainWindow::labelForMailbox(const QString &key) const
@@ -1033,6 +1066,12 @@ void MainWindow::reloadFromCache()
             else if (id == QLatin1String("TRASH")) m.mailboxes << QStringLiteral("Trash");
             m.mailboxes << QStringLiteral("gmail:") + id;
         }
+        const auto sn = cache->snooze(c.id);
+        if (sn.wakeMs > 0) {
+            m.snoozeWakeMs = sn.wakeMs;
+            m.mailboxes << QStringLiteral("Snoozed");
+        }
+        m.snoozeBadge = sn.badge && sn.wakeMs == 0;
         m.preview = c.hasBody ? c.bodyText : c.snippet;
         m.attachments = c.attachments;
         items.append(std::move(m));
@@ -1065,6 +1104,11 @@ void MainWindow::showLiveMessage(int row)
     zmail::MailCache *cache = m_session->cache();
     if (!sync || !cache) {
         return;
+    }
+    if (cache->snooze(id).badge) {
+        cache->clearSnoozeBadge(id);
+        // Soft refresh so the clock icon drops without a full resync.
+        m_reloadTimer->start();
     }
     auto render = [this](const zmail::CachedMessage &c, bool loading, const QString &error) {
         m_view->setMessage(liveViewMessage(c, loading, error));
@@ -1424,6 +1468,92 @@ void MainWindow::showSpamFolder()
     selectMailbox(QStringLiteral("Junk"));
 }
 
+QMenu *MainWindow::buildSnoozeMenu(QWidget *parent)
+{
+    auto *menu = new QMenu(parent ? parent : this);
+    menu->setObjectName(QStringLiteral("snoozePresetMenu"));
+    struct P { const char *id; const char *text; };
+    for (const P &p : {P{"laterToday", QT_TR_NOOP("Later Today (+3 hours)")},
+                       P{"tomorrow", QT_TR_NOOP("Tomorrow 8:00 AM")},
+                       P{"weekend", QT_TR_NOOP("This Weekend (Sat 8:00 AM)")},
+                       P{"nextWeek", QT_TR_NOOP("Next Week (Mon 8:00 AM)")}}) {
+        QAction *a = menu->addAction(tr(p.text), this, [this, id = QByteArray(p.id)]() {
+            const QDateTime wake = zmail::SnoozeTimes::wakeFor(id.constData(), QDateTime::currentDateTime());
+            snoozeMessage(m_shownId, wake.toMSecsSinceEpoch());
+        });
+        a->setObjectName(QStringLiteral("snooze_") + QString::fromLatin1(p.id));
+    }
+    menu->addSeparator();
+    QAction *custom = menu->addAction(tr("Custom…"), this, &MainWindow::customSnooze);
+    custom->setObjectName(QStringLiteral("snooze_custom"));
+    return menu;
+}
+
+void MainWindow::snoozeMessage(QString id, qint64 wakeMs)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || id.isEmpty() || wakeMs <= 0) {
+        statusBar()->showMessage(
+            m_live ? tr("Select a message to snooze.") : tr("Sign in to Gmail to snooze mail."), 5000);
+        return;
+    }
+    selectPastRemoved({id}); // it leaves every view but Snoozed
+    sync->snooze(id, wakeMs);
+    if (m_shownId == id) {
+        m_view->clear();
+        m_shownId.clear();
+        updateMessageActions();
+    }
+    const QString when = MessageListModel::formatDate(QDateTime::fromMSecsSinceEpoch(wakeMs).toLocalTime());
+    statusBar()->showMessage(tr("Snoozed until %1.").arg(when), 5000);
+}
+
+void MainWindow::unsnoozeMessage(QString id)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || id.isEmpty()) {
+        statusBar()->showMessage(
+            m_live ? tr("Select a snoozed message.") : tr("Sign in to Gmail to unsnooze."), 5000);
+        return;
+    }
+    if (m_proxy->mailbox() == QLatin1String("Snoozed")) {
+        selectPastRemoved({id}); // back to In: gone from the Snoozed list
+    }
+    sync->unsnooze(id);
+    statusBar()->showMessage(tr("Unsnoozed."), 5000);
+}
+
+void MainWindow::customSnooze()
+{
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("customSnoozeDialog"));
+    dlg.setWindowTitle(tr("Snooze until"));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *edit = new QDateTimeEdit(QDateTime::currentDateTime().addSecs(3600), &dlg);
+    edit->setObjectName(QStringLiteral("snoozeDateTime"));
+    edit->setCalendarPopup(true);
+    edit->setDisplayFormat(QStringLiteral("yyyy-MM-dd h:mm AP"));
+    edit->setMinimumDateTime(QDateTime::currentDateTime());
+    lay->addWidget(edit);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    lay->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) {
+        return;
+    }
+    snoozeMessage(m_shownId, edit->dateTime().toMSecsSinceEpoch());
+}
+
+void MainWindow::checkSnoozeWakes()
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync) {
+        return;
+    }
+    sync->wakeDue();
+}
+
 void MainWindow::setStripeStrength(int strength)
 {
     m_stripes = std::clamp(strength, 0, kStripeMax);
@@ -1582,12 +1712,15 @@ QMenu *MainWindow::buildListMenu()
     menu->setObjectName(QStringLiteral("messageListMenu"));
     for (const char *n : {"actionOpenMessage", "", "menuActionReply", "menuActionReplyAll", "menuActionForward", "",
                           "actionMarkRead", "actionMarkUnread", "", "menuActionJunk", "menuActionNotJunk", "",
-                          "menuActionDelete"}) {
+                          "menuActionUnsnooze", "", "menuActionDelete"}) {
         if (!*n) {
             menu->addSeparator();
         } else if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             menu->addAction(a); // the menu-bar actions, so shortcuts show and stay in sync
         }
+    }
+    if (m_proxy->mailbox() != QLatin1String("Snoozed")) {
+        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildSnoozeMenu(menu));
     }
     const QModelIndex cur = m_list->currentIndex();
     if (cur.isValid()) {

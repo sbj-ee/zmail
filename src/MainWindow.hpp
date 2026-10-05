@@ -129,6 +129,10 @@ private:
     void trashMessage(QString id);
     void junkMessage(QString id);
     void notJunkMessage(QString id);
+    void snoozeMessage(QString id, qint64 wakeMs);
+    void unsnoozeMessage(QString id);
+    void customSnooze();
+    void checkSnoozeWakes();
     // Right-click menus, Enter to open, Mark Read/Unread, Undo Delete.
     void installListActions();
     QMenu *buildListMenu();
@@ -188,4 +192,6 @@ private:
     QString m_lastTrashed;             // id the Undo puts back
     QTimer *m_reloadTimer = nullptr;
     QAction *m_hideSpamAction = nullptr;
+    QTimer *m_snoozeTimer = nullptr;
+    QMenu *buildSnoozeMenu(QWidget *parent = nullptr);
 };

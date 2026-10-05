@@ -87,6 +87,23 @@ public:
     int count(const QString &labelId = {}) const;
     QStringList search(const QString &ftsQuery, int limit = 200) const;
 
+    // Local snooze state (not a Gmail label). wake_ms is UTC epoch ms.
+    // had_inbox: restore INBOX on wake. badge: show "was snoozed" until opened.
+    struct SnoozeRow {
+        QString messageId;
+        qint64 wakeMs = 0;
+        bool hadInbox = false;
+        bool badge = false;
+    };
+    void setSnooze(const QString &id, qint64 wakeMs, bool hadInbox);
+    void clearSnooze(const QString &id);
+    void markSnoozeWoke(const QString &id); // keep row as badge-only (wakeMs=0, badge=1)
+    void clearSnoozeBadge(const QString &id);
+    SnoozeRow snooze(const QString &id) const;
+    QList<SnoozeRow> snoozes(bool activeOnly = true) const; // active = wakeMs > 0
+    QStringList dueSnoozes(qint64 nowMs) const;
+    QStringList snoozeBadgeIds() const;
+
 private:
     bool exec(const QString &sql);
     bool migrate();

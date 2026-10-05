@@ -120,7 +120,7 @@ private slots:
             }
         }
         QCOMPARE(texts, (QStringList{"Check Mail", "New Message", "Reply", "Reply All", "Forward", "Delete",
-                                     "Attach", "Sound"}));
+                                     "Junk", "Attach", "Sound"}));
         QVERIFY(w.findChild<QLineEdit *>(QStringLiteral("searchBox")));
     }
 
@@ -133,8 +133,9 @@ private slots:
         for (int i = 0; i < tree->topLevelItemCount(); ++i) {
             top << tree->topLevelItem(i)->text(0);
         }
-        QCOMPARE(top, (QStringList{"In", "Out", "Junk / Suspicious", "Trash", "Gmail Labels"}));
-        QVERIFY(tree->topLevelItem(4)->childCount() >= 4);
+        // Hide Spam (default) omits Junk; labels are still under Gmail Labels.
+        QCOMPARE(top, (QStringList{"In", "Out", "Trash", "Gmail Labels"}));
+        QVERIFY(tree->topLevelItem(3)->childCount() >= 4);
     }
 
     void listAbovePreview()
@@ -171,6 +172,7 @@ private slots:
     void rowsAreTintedAndSuspiciousIsFixed()
     {
         MainWindow w;
+        w.showSpamFolder(); // Contoso phish lives in Junk (hidden from In by default)
         auto *m = w.findChild<QTreeView *>(QStringLiteral("messageList"))->model();
         int tinted = 0, suspicious = 0;
         for (int r = 0; r < m->rowCount(); ++r) {
@@ -182,8 +184,17 @@ private slots:
                 ++tinted;
             }
         }
-        QVERIFY(tinted >= 2);
         QCOMPARE(suspicious, 1);
+        w.selectMailbox(QStringLiteral("In"));
+        m = w.findChild<QTreeView *>(QStringLiteral("messageList"))->model();
+        tinted = 0;
+        for (int r = 0; r < m->rowCount(); ++r) {
+            if (m->index(r, MessageListModel::Subject).data(Qt::BackgroundRole).isValid()
+                && !m->index(r, 0).data(MessageListModel::SuspiciousRole).toBool()) {
+                ++tinted;
+            }
+        }
+        QVERIFY(tinted >= 2);
     }
 
     void statusBarShowsSyncAndCounts()
@@ -193,7 +204,8 @@ private slots:
         auto *counts = w.findChild<QLabel *>(QStringLiteral("countLabel"));
         QVERIFY(sync && counts);
         QVERIFY(sync->text().contains(QStringLiteral("sync")));
-        QVERIFY(counts->text().startsWith(QStringLiteral("In: 12 messages, 4 unread")));
+        // Hide Spam drops the sample Contoso phish from In (was 12 / 4 unread).
+        QVERIFY(counts->text().startsWith(QStringLiteral("In: 11 messages, 3 unread")));
     }
 
     void darkThemeKeepsRuleColoursReadable()

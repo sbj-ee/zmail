@@ -75,6 +75,10 @@ public:
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
     static constexpr int kUndoDeleteMs = 8000;
     void selectMailbox(const QString &key);
+    // View > Hide Spam from Folders (QSettings mail/hideSpam, default on).
+    bool hideSpam() const;
+    void setHideSpam(bool hide);
+    void showSpamFolder(); // View > Show Spam
     void setTheme(zmail::ui::ThemeMode mode);
     // Message-list row stripes, 0..100 (Settings > Row Stripes), remembered.
     void setStripeStrength(int strength);
@@ -119,6 +123,8 @@ private:
     void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
     void trashMessage(QString id);
+    void junkMessage(QString id);
+    void notJunkMessage(QString id);
     // Right-click menus, Enter to open, Mark Read/Unread, Undo Delete.
     void installListActions();
     QMenu *buildListMenu();
@@ -176,4 +182,5 @@ private:
     QTimer *m_undoTimer = nullptr;
     QString m_lastTrashed;             // id the Undo puts back
     QTimer *m_reloadTimer = nullptr;
+    QAction *m_hideSpamAction = nullptr;
 };

@@ -5,6 +5,9 @@ include(GNUInstallDirs)
 install(TARGETS zmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/packaging/zmail.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+# Bundled default new-mail chime (also compiled into Qt resources).
+install(FILES ${CMAKE_SOURCE_DIR}/assets/sounds/new-mail.wav
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/zmail/sounds)
 install(FILES ${CMAKE_SOURCE_DIR}/LICENSE
         DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/zmail RENAME copyright)
 
@@ -24,7 +27,7 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 # shlibdeps can't see Qt plugins: the SQLite driver holds the mail cache.
 # Refresh tokens need a Secret Service keyring (GNOME Keyring on Ubuntu).
 # Colour emoji in subjects and mail: zmail asks for "Noto Color Emoji" by name.
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6sql6-sqlite")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libqt6sql6-sqlite, libqt6multimedia6")
 set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "gnome-keyring, hunspell-en-us, fonts-noto-color-emoji")
 # zmail_<ver>_amd64.deb (the name a future updater can expect).
 set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")

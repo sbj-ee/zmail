@@ -3,12 +3,12 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.3.3: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.3.4: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
-menus with Undo Delete, a sign-in Retry banner and a new-mail sound mute
-(Ctrl+Shift+M). See
+menus with Undo Delete, a sign-in Retry banner, a new-mail sound mute
+(Ctrl+Shift+M), and Settings → Sounds (custom WAV, Test, Default). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -75,7 +75,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.3.3_amd64.deb
+cd build && cpack -G DEB   # zmail_0.3.4_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -102,6 +102,16 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Double-click a message (or press Ctrl+O) to open it in its own window.
 - **Settings → Row Stripes** sets how strongly alternate rows in the message
   list are shaded (a slider with Off / Subtle / Normal / Strong presets).
+
+## New-mail sound
+
+When new INBOX mail arrives (while zmail is already running), zmail plays a
+short built-in two-note chime once per sync batch. Mute it from **View → Play
+Sound for New Mail**, the toolbar speaker, or **Ctrl+Shift+M**. **Settings →
+Sounds** turns the chime on or off, lets you **Browse…** for a custom `.wav`,
+**Default** resets to the bundled sound, and **Test** previews the current
+choice. A missing or unreadable custom file falls back to the built-in chime
+(`assets/sounds/new-mail.wav`, also embedded in the binary via Qt resources).
 
 ## License
 

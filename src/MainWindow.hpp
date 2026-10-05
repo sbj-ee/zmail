@@ -28,6 +28,7 @@ namespace zmail::ui {
 class MessageListModel;
 class MessageFilterProxy;
 class NewMailSound;
+class SoundDialog;
 class SafeHtmlView;
 class MessageView;
 class MessageWindow;
@@ -80,6 +81,7 @@ public:
     int stripeStrength() const { return m_stripes; }
     zmail::ui::StripesDialog *showStripesDialog(); // non-modal; returned for tests
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
+    zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
 
     // Preview pane under the list (Eudora) or to its right; remembered.
     void setPreviewRight(bool right);

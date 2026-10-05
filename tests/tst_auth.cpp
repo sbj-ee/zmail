@@ -4,6 +4,7 @@
 #include "LogCapture.h"
 #include "core/AuthManager.h"
 #include "core/ClientConfig.h"
+#include "core/LoopbackServer.h"
 #include "core/Pkce.h"
 #include "core/TokenStore.h"
 #include "mock/MockGoogle.h"
@@ -11,11 +12,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHostAddress>
 #include <QRegularExpression>
 #include <QSet>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QSignalSpy>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QUrlQuery>
@@ -293,6 +296,84 @@ private slots:
         bad.close();
         QVERIFY(!ClientConfig::install(bad.fileName(), dest).isEmpty()); // rejected, old file kept
         QCOMPARE(ClientConfig::load(dest).config.clientId, QStringLiteral("test-client-42.apps.example.test"));
+    }
+
+    void signInTimeoutIsLongAndStopsListening()
+    {
+        // Default: 15 minutes (was 5; too short for 2FA on a phone or for
+        // finding the browser again on Wayland).
+        QCOMPARE(LoopbackServer::kDefaultTimeoutMs, 15 * 60 * 1000);
+        QCOMPARE(LoopbackServer().timeoutMs(), 15 * 60 * 1000);
+        MockGoogle g;
+        QVERIFY(g.listen());
+        MemoryTokenStore store;
+        QNetworkAccessManager nam;
+        AuthManager auth(g.clientConfig(), &store, &nam);
+        QCOMPARE(auth.signInTimeoutMs(), LoopbackServer::kDefaultTimeoutMs);
+        QCOMPARE(AuthManager::describeTimeout(auth.signInTimeoutMs()), QStringLiteral("15 minutes"));
+        QCOMPARE(AuthManager::describeTimeout(60 * 1000), QStringLiteral("1 minute"));
+        QCOMPARE(AuthManager::describeTimeout(300), QStringLiteral("1 second"));
+
+        // A browser that never comes back.
+        QUrl opened;
+        auth.setBrowserOpener([&](const QUrl &u) { opened = u; return true; });
+        auth.setSignInTimeoutMs(300);
+        QSignalSpy failed(&auth, &AuthManager::signInFailed);
+        const int logStart = m_log->lines().size();
+        auth.startSignIn();
+        QVERIFY(auth.signInInProgress());
+        const QUrl redirect(QUrlQuery(opened).queryItemValue(QStringLiteral("redirect_uri"), QUrl::FullyDecoded));
+        QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 5000);
+        QVERIFY(!auth.signInInProgress());
+        const QString reason = failed.first().first().toString();
+        QVERIFY2(reason.contains(QLatin1String("within 1 second")), qPrintable(reason));
+        QVERIFY(reason.contains(QLatin1String("Retry")));
+
+        // The port really is closed now...
+        QTcpSocket probe;
+        probe.connectToHost(QHostAddress::LocalHost, quint16(redirect.port()));
+        QVERIFY(!probe.waitForConnected(1000));
+        // ...and the log says so, after the "waiting" line (which is no
+        // longer the last word on the port).
+        const QStringList log = m_log->lines().mid(logStart);
+        const QString port = QString::number(redirect.port());
+        int waiting = -1, stopped = -1;
+        for (int i = 0; i < log.size(); ++i) {
+            if (log[i].contains(QLatin1String("waiting for the browser redirect on port ") + port)) {
+                waiting = i;
+                QVERIFY2(log[i].contains(QLatin1String("for up to 1 second")), qPrintable(log[i]));
+            }
+            if (log[i].contains(QLatin1String("timed out after 1 second ; stopped listening on port ") + port)) {
+                stopped = i;
+            }
+        }
+        QVERIFY2(waiting >= 0 && stopped > waiting, qPrintable(log.join('\n')));
+    }
+
+    void cancelAndRedirectAreLogged()
+    {
+        MockGoogle g;
+        QVERIFY(g.listen());
+        MemoryTokenStore store;
+        QNetworkAccessManager nam;
+        AuthManager auth(g.clientConfig(), &store, &nam);
+        auth.setBrowserOpener([](const QUrl &) { return true; });
+        int from = m_log->lines().size();
+        auth.startSignIn();
+        auth.cancelSignIn();
+        QVERIFY(m_log->lines().mid(from).join('\n').contains(QLatin1String("Sign-in: cancelled; stopped listening on port")));
+
+        // Browser that can't be opened: the listener doesn't stay open.
+        auth.setBrowserOpener([](const QUrl &) { return false; });
+        QSignalSpy failed(&auth, &AuthManager::signInFailed);
+        auth.startSignIn();
+        QCOMPARE(failed.count(), 1);
+        QVERIFY(!auth.signInInProgress());
+
+        from = m_log->lines().size();
+        FakeBrowser browser;
+        signIn(g, auth, browser);
+        QVERIFY(m_log->lines().mid(from).join('\n').contains(QLatin1String("browser redirect received; stopped listening on port")));
     }
 
     void noSecretsInLogs()

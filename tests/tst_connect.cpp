@@ -4,6 +4,7 @@
 #include "core/ClientConfig.h"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
+#include "core/AuthManager.h"
 #include "core/SyncEngine.h"
 #include "core/TokenStore.h"
 #include "mock/MockGoogle.h"
@@ -22,6 +23,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextBrowser>
+#include <QToolBar>
 #include <QTreeView>
 #include <QTreeWidget>
 
@@ -193,6 +195,70 @@ private slots:
 
         for (const char *secret : {MockGoogle::kClientSecret, MockGoogle::kRefreshToken, MockGoogle::kAccessPrefix}) {
             QVERIFY2(!log.all().contains(QLatin1String(secret)), secret);
+        }
+    }
+
+    void signInTimeoutShowsBannerWithRetry()
+    {
+        // The browser never comes back. The main window says so itself (a
+        // banner with Retry); nothing relies on raising a dialog, which
+        // Wayland won't do over the browser.
+        LogCapture log;
+        MockGoogle g;
+        QVERIFY(g.listen());
+        g.seedDemo(3);
+        MemoryTokenStore store;
+        SessionOptions o = mockOptions(g, &store);
+        int opened = 0;
+        o.browserOpener = [&opened](const QUrl &) { ++opened; return true; }; // user wandered off
+        MailSession session(o);
+        session.auth()->setSignInTimeoutMs(300);
+        MainWindow w;
+        w.setSession(&session);
+        w.show();
+        QVERIFY(!w.findChild<QToolBar *>(QStringLiteral("signInBanner"))); // created on first use
+        session.signIn();
+        QCOMPARE(session.state(), MailSession::State::SigningIn);
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), MailSession::State::SignedOut, 5000);
+        auto *banner = w.findChild<QToolBar *>(QStringLiteral("signInBanner"));
+        QVERIFY(banner);
+        QTRY_VERIFY(banner->isVisible());
+        const QString text = banner->findChild<QLabel *>(QStringLiteral("signInBannerText"))->text();
+        QVERIFY2(text.contains(QLatin1String("timed out")), qPrintable(text));
+        QCOMPARE(w.toolBarArea(banner), Qt::TopToolBarArea);
+        QVERIFY(!banner->isMovable());
+        QVERIFY(!banner->toggleViewAction()->isVisible());
+        QVERIFY(log.all().contains(QLatin1String("stopped listening on port")));
+
+        // Dismiss hides it; a second failure brings it back.
+        banner->findChild<QPushButton *>(QStringLiteral("signInDismiss"))->click();
+        QVERIFY(!banner->isVisible());
+        session.signIn();
+        QTRY_VERIFY_WITH_TIMEOUT(banner->isVisible(), 5000);
+        QCOMPARE(opened, 2);
+
+        // Retry: a fresh sign-in (this time the browser comes back).
+        session.auth()->setBrowserOpener([](const QUrl &u) {
+            QNetworkReply *r = browserNam()->get(QNetworkRequest(u));
+            QObject::connect(r, &QNetworkReply::finished, r, &QObject::deleteLater);
+            return true;
+        });
+        session.auth()->setSignInTimeoutMs(0); // default again
+        banner->findChild<QPushButton *>(QStringLiteral("signInRetry"))->click();
+        QVERIFY(!banner->isVisible());
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), MailSession::State::SignedIn, 10000);
+        QVERIFY(!banner->isVisible());
+        QTRY_VERIFY(w.isLive());
+
+        // Revoked at Google: the banner too, not only the dialog.
+        QTRY_VERIFY_WITH_TIMEOUT(!session.sync()->isBusy(), 15000);
+        g.revokeRefreshToken();
+        session.auth()->invalidateAccessToken();
+        session.sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), MailSession::State::SignedOut, 10000);
+        QTRY_VERIFY(banner->isVisible());
+        if (auto *dlg = w.findChild<ui::ConnectDialog *>()) {
+            dlg->close();
         }
     }
 

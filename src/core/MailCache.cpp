@@ -1,6 +1,7 @@
 #include "MailCache.h"
 
 #include "Log.h"
+#include "SearchQuery.h"
 
 #include <algorithm>
 #include <QDir>
@@ -147,6 +148,7 @@ bool MailCache::open(const QString &path)
             "old.body_text); "
             "INSERT INTO messages_fts(rowid, subject, from_name, from_addr, to_addr, snippet, body_text) VALUES "
             "(new.rowid, new.subject, new.from_name, new.from_addr, new.to_addr, new.snippet, new.body_text); END"));
+        backfillFtsIfNeeded(); // caches from before full-text search: index existing mail once
     } else {
         qCWarning(lcSync) << "SQLite has no FTS5; search falls back to LIKE";
     }
@@ -394,26 +396,90 @@ int MailCache::count(const QString &labelId) const
     return 0;
 }
 
-QStringList MailCache::search(const QString &ftsQuery, int limit) const
+void MailCache::rebuildFts()
+{
+    if (!m_fts5) {
+        return;
+    }
+    exec(QStringLiteral("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')"));
+}
+
+void MailCache::backfillFtsIfNeeded()
+{
+    if (!m_fts5) {
+        return;
+    }
+    if (meta(QStringLiteral("fts_backfill")) == QLatin1String("1")) {
+        return;
+    }
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    qint64 msgs = 0, fts = 0;
+    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM messages")) && q.next()) {
+        msgs = q.value(0).toLongLong();
+    }
+    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM messages_fts")) && q.next()) {
+        fts = q.value(0).toLongLong();
+    }
+    if (msgs > 0 && fts == 0) {
+        rebuildFts();
+    }
+    setMeta(QStringLiteral("fts_backfill"), QStringLiteral("1"));
+}
+
+QStringList MailCache::search(const QString &userText, int limit) const
 {
     QStringList ids;
+    if (userText.trimmed().isEmpty()) {
+        return ids;
+    }
     QSqlQuery q(QSqlDatabase::database(m_conn));
     if (m_fts5) {
+        const QString match = SearchQuery::toFts5(userText);
+        if (match.isEmpty()) {
+            return ids;
+        }
         q.prepare(QStringLiteral("SELECT m.id FROM messages_fts f JOIN messages m ON m.rowid = f.rowid "
                                  "WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?"));
-        q.addBindValue(ftsQuery);
+        q.addBindValue(match);
+        q.addBindValue(limit);
     } else {
-        q.prepare(QStringLiteral("SELECT id FROM messages WHERE subject LIKE ? OR snippet LIKE ? OR from_name LIKE ? "
-                                 "LIMIT ?"));
-        const QString like = QLatin1Char('%') + ftsQuery + QLatin1Char('%');
-        q.addBindValue(like);
-        q.addBindValue(like);
-        q.addBindValue(like);
+        const QString needle = SearchQuery::toLikeNeedle(userText);
+        if (needle.isEmpty()) {
+            return ids;
+        }
+        q.prepare(QStringLiteral(
+            "SELECT id FROM messages WHERE subject LIKE ? OR snippet LIKE ? OR from_name LIKE ? "
+            "OR from_addr LIKE ? OR to_addr LIKE ? OR body_text LIKE ? "
+            "ORDER BY internal_date DESC LIMIT ?"));
+        const QString like = QLatin1Char('%') + needle + QLatin1Char('%');
+        for (int i = 0; i < 6; ++i) {
+            q.addBindValue(like);
+        }
+        q.addBindValue(limit);
     }
-    q.addBindValue(limit);
     if (q.exec()) {
         while (q.next()) {
             ids.append(q.value(0).toString());
+        }
+    } else if (m_fts5) {
+        // Bad MATCH syntax → empty rather than warn-spam; LIKE fallback for this query.
+        const QString needle = SearchQuery::toLikeNeedle(userText);
+        if (!needle.isEmpty()) {
+            QSqlQuery q2(QSqlDatabase::database(m_conn));
+            q2.prepare(QStringLiteral(
+                "SELECT id FROM messages WHERE subject LIKE ? OR snippet LIKE ? OR from_name LIKE ? "
+                "OR from_addr LIKE ? OR to_addr LIKE ? OR body_text LIKE ? "
+                "ORDER BY internal_date DESC LIMIT ?"));
+            const QString like = QLatin1Char('%') + needle + QLatin1Char('%');
+            for (int i = 0; i < 6; ++i) {
+                q2.addBindValue(like);
+            }
+            q2.addBindValue(limit);
+            if (q2.exec()) {
+                while (q2.next()) {
+                    ids.append(q2.value(0).toString());
+                }
+            }
         }
     }
     return ids;

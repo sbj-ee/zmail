@@ -41,6 +41,7 @@ class MessageListModel : public QAbstractTableModel
 
 public:
     enum Column { Status, Priority, Attachment, Label, Who, Date, Size, Subject, ColumnCount };
+    static constexpr int IdRole = Qt::UserRole + 8; // Gmail message id (Search mailbox)
     static constexpr int SortRole = Qt::UserRole + 1;
     static constexpr int SuspiciousRole = Qt::UserRole + 2;
     static constexpr int MailboxesRole = Qt::UserRole + 3;
@@ -101,6 +102,9 @@ public:
     // When true (default), spam stays out of In / Out / labels; only Junk shows it.
     void setHideSpam(bool hide);
     bool hideSpam() const { return m_hideSpam; }
+    // Global FTS hit list for the Search mailbox (empty = sample / operator-only).
+    void setSearchIds(const QStringList &ids);
+    QStringList searchIds() const { return m_searchIds; }
 
     static QList<SearchTerm> parseSearch(const QString &text);
     static bool matches(const QList<SearchTerm> &terms, const MailItem &m);
@@ -114,6 +118,7 @@ private:
     QString m_mailbox = QStringLiteral("In");
     QList<SearchTerm> m_terms;
     bool m_hideSpam = true;
+    QStringList m_searchIds;
 };
 
 // Fake, realistic-looking sample data (fictional people and companies only).

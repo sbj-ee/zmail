@@ -162,6 +162,7 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         case Subject: return m.subject.toLower();
         default: return {};
         }
+    case IdRole: return m.id;
     case SuspiciousRole: return m.suspicious;
     case MailboxesRole: return m.mailboxes;
     case LabelRole: return m.label;
@@ -262,6 +263,15 @@ void MessageFilterProxy::setHideSpam(bool hide)
         return;
     }
     m_hideSpam = hide;
+    invalidateFilter();
+}
+
+void MessageFilterProxy::setSearchIds(const QStringList &ids)
+{
+    if (m_searchIds == ids) {
+        return;
+    }
+    m_searchIds = ids;
     invalidateFilter();
 }
 
@@ -373,7 +383,7 @@ bool MessageFilterProxy::matches(const QList<SearchTerm> &terms, const MailItem 
 
 QString MessageFilterProxy::searchHelp()
 {
-    return tr("Search this mailbox. Words match sender, subject, text and label.\n"
+    return tr("Search all synced mail (subject, from, to, body).\n"
               "from:name   to:name   subject:word   label:name\n"
               "has:attachment   is:unread   is:read\n"
               "\"exact phrase\"   -word (exclude)");
@@ -389,6 +399,15 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
     }
     if (m_mailbox.startsWith(QLatin1String("label:"))) {
         if (idx.data(MessageListModel::LabelRole).toString() != m_mailbox.mid(6)) {
+            return false;
+        }
+    } else if (m_mailbox == QLatin1String("Search")) {
+        if (!m_searchIds.isEmpty()) {
+            if (!m_searchIds.contains(idx.data(MessageListModel::IdRole).toString())) {
+                return false;
+            }
+        } else if (m_terms.isEmpty()) {
+            // Sample data / operator-only: match terms against every loaded row.
             return false;
         }
     } else if (!boxes.contains(m_mailbox)) {

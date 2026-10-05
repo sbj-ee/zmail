@@ -78,6 +78,7 @@ add_library(zmail_app STATIC
   src/core/Sender.h
   src/core/Signatures.cpp
   src/core/Signatures.h
+  src/core/SizeFormat.h
   src/core/SpellChecker.cpp
   src/core/SpellChecker.h
   src/core/SyncEngine.cpp

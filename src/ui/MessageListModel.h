@@ -62,13 +62,30 @@ public:
 
     static QString statusGlyph(MailStatus s);
     static QString formatDate(const QDateTime &dt);
-    static QString formatSizeK(qint64 bytes);
+    // "3 KB", "1.2 MB" (zmail::formatSize); the exact count is in the tooltip.
+    static QString formatSize(qint64 bytes);
 
     // Call after a palette change so colours are recomputed.
     void paletteChanged();
 
 private:
     QList<MailItem> m_items;
+};
+
+// One term of the search box. Gmail-style operators, matched locally
+// against the cached rows (case-insensitive substring):
+//   from:priya   to:dana   subject:"crew schedule"   label:work
+//   has:attachment   is:unread   is:read
+// Bare words and "quoted phrases" match sender, address, subject, body
+// preview and label. A leading '-' negates a term (-from:newsletter).
+// Unknown "word:" tokens (8:30, http://...) are searched as plain text.
+struct SearchTerm
+{
+    enum Field { Any, From, To, Subject, Label, HasAttachment, IsUnread, IsRead };
+    Field field = Any;
+    QString text;
+    bool negate = false;
+    bool operator==(const SearchTerm &o) const { return field == o.field && text == o.text && negate == o.negate; }
 };
 
 // Mailbox ("In", "Out", ..., or "label:<name>") + search filter.
@@ -82,12 +99,17 @@ public:
     QString mailbox() const { return m_mailbox; }
     void setSearchText(const QString &text);
 
+    static QList<SearchTerm> parseSearch(const QString &text);
+    static bool matches(const QList<SearchTerm> &terms, const MailItem &m);
+    // The operators parseSearch() understands, for the search box tooltip.
+    static QString searchHelp();
+
 protected:
     bool filterAcceptsRow(int row, const QModelIndex &parent) const override;
 
 private:
     QString m_mailbox = QStringLiteral("In");
-    QString m_search;
+    QList<SearchTerm> m_terms;
 };
 
 // Fake, realistic-looking sample data (fictional people and companies only).

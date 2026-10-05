@@ -2,6 +2,7 @@
 
 #include "Icons.h"
 #include "Theme.h"
+#include "core/SizeFormat.h"
 
 #include <QApplication>
 #include <QFont>
@@ -50,9 +51,9 @@ QString MessageListModel::formatDate(const QDateTime &dt)
         .toString(dt, QStringLiteral("M/d/yy  h:mm AP"));
 }
 
-QString MessageListModel::formatSizeK(qint64 bytes)
+QString MessageListModel::formatSize(qint64 bytes)
 {
-    return QString::number(std::max<qint64>(1, (bytes + 1023) / 1024));
+    return zmail::formatSize(bytes);
 }
 
 void MessageListModel::paletteChanged()
@@ -81,7 +82,7 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
                  : m.priority == MailPriority::Low ? QStringLiteral("\u2193") : QString();
         case Who: return m.who;
         case Date: return formatDate(m.date);
-        case Size: return formatSizeK(m.sizeBytes);
+        case Size: return formatSize(m.sizeBytes);
         case Subject: return m.subject;
         default: return {};
         }
@@ -141,6 +142,10 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         if (col == Label) {
             return m.label;
         }
+        if (col == Size) {
+            // sizeEstimate from Gmail: close to, but not exactly, the raw size.
+            return tr("%1 (Gmail's estimate)").arg(zmail::formatExactBytes(m.sizeBytes));
+        }
         if (m.suspicious) {
             return tr("Suspicious: see the warning banner in the preview");
         }
@@ -176,10 +181,20 @@ QVariant MessageListModel::headerData(int section, Qt::Orientation o, int role) 
         switch (section) {
         case Who: return tr("Who");
         case Date: return tr("Date");
-        case Size: return tr("K");
+        case Size: return tr("Size");
         case Subject: return tr("Subject");
         default: return QString();
         }
+    }
+    if (role == Qt::TextAlignmentRole) {
+        // Headers line up with their values: numbers right, icon columns centred.
+        if (section == Size) {
+            return int(Qt::AlignRight | Qt::AlignVCenter);
+        }
+        if (section <= Label) {
+            return int(Qt::AlignCenter);
+        }
+        return int(Qt::AlignLeft | Qt::AlignVCenter);
     }
     if (role == Qt::DecorationRole) {
         switch (section) {
@@ -196,7 +211,7 @@ QVariant MessageListModel::headerData(int section, Qt::Orientation o, int role) 
         case Priority: return tr("Priority");
         case Attachment: return tr("Attachments");
         case Label: return tr("Label");
-        case Size: return tr("Size in kilobytes");
+        case Size: return tr("Message size (Gmail's estimate); hover a row for the exact bytes");
         default: return {};
         }
     }
@@ -237,8 +252,122 @@ void MessageListModel::setStatus(int row, MailStatus status)
 
 void MessageFilterProxy::setSearchText(const QString &text)
 {
-    m_search = text.trimmed();
+    m_terms = parseSearch(text);
     invalidateFilter();
+}
+
+QList<SearchTerm> MessageFilterProxy::parseSearch(const QString &text)
+{
+    // Split on whitespace, keeping "quoted phrases" (also after an operator:
+    // subject:"crew schedule") together.
+    QStringList tokens;
+    QString cur;
+    bool quoted = false;
+    for (const QChar c : text) {
+        if (c == QLatin1Char('"')) {
+            quoted = !quoted;
+            cur += c;
+        } else if (c.isSpace() && !quoted) {
+            if (!cur.isEmpty()) {
+                tokens << cur;
+                cur.clear();
+            }
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.isEmpty()) {
+        tokens << cur;
+    }
+
+    static const struct { const char *name; SearchTerm::Field field; } ops[] = {
+        {"from", SearchTerm::From}, {"to", SearchTerm::To}, {"subject", SearchTerm::Subject},
+        {"label", SearchTerm::Label}};
+    auto unquote = [](QString s) { return s.remove(QLatin1Char('"')).trimmed(); };
+
+    QList<SearchTerm> out;
+    for (QString tok : tokens) {
+        SearchTerm t;
+        if (tok.size() > 1 && tok.startsWith(QLatin1Char('-'))) {
+            t.negate = true;
+            tok.remove(0, 1);
+        }
+        const int colon = tok.indexOf(QLatin1Char(':'));
+        const QString op = colon > 0 ? tok.left(colon).toLower() : QString();
+        const QString val = colon > 0 ? unquote(tok.mid(colon + 1)) : QString();
+        bool known = false;
+        for (const auto &o : ops) {
+            if (op == QLatin1String(o.name)) {
+                t.field = o.field;
+                t.text = val;
+                known = true;
+                break;
+            }
+        }
+        if (!known && op == QLatin1String("has") &&
+            (val.compare(QLatin1String("attachment"), Qt::CaseInsensitive) == 0 ||
+             val.compare(QLatin1String("attachments"), Qt::CaseInsensitive) == 0)) {
+            t.field = SearchTerm::HasAttachment;
+            known = true;
+        } else if (!known && op == QLatin1String("is") && val.compare(QLatin1String("unread"), Qt::CaseInsensitive) == 0) {
+            t.field = SearchTerm::IsUnread;
+            known = true;
+        } else if (!known && op == QLatin1String("is") && val.compare(QLatin1String("read"), Qt::CaseInsensitive) == 0) {
+            t.field = SearchTerm::IsRead;
+            known = true;
+        }
+        if (!known) {
+            t.field = SearchTerm::Any;
+            t.text = unquote(tok);
+        }
+        // "from:" with nothing after it yet (still typing): no filter.
+        const bool needsText = t.field != SearchTerm::HasAttachment && t.field != SearchTerm::IsUnread &&
+                               t.field != SearchTerm::IsRead;
+        if (needsText && t.text.isEmpty()) {
+            continue;
+        }
+        out << t;
+    }
+    return out;
+}
+
+bool MessageFilterProxy::matches(const QList<SearchTerm> &terms, const MailItem &m)
+{
+    auto has = [](const QString &hay, const QString &needle) { return hay.contains(needle, Qt::CaseInsensitive); };
+    // Sent-only rows show the recipient in Who (as Eudora's Out mailbox does).
+    const bool whoIsRecipient = m.mailboxes.contains(QStringLiteral("Out")) && !m.mailboxes.contains(QStringLiteral("In"));
+    for (const SearchTerm &t : terms) {
+        bool hit = false;
+        switch (t.field) {
+        case SearchTerm::Any:
+            hit = has(m.who, t.text) || has(m.address, t.text) || has(m.subject, t.text) || has(m.preview, t.text) ||
+                  has(m.label, t.text);
+            break;
+        case SearchTerm::From:
+            hit = !whoIsRecipient && (has(m.who, t.text) || has(m.address, t.text));
+            break;
+        case SearchTerm::To:
+            hit = has(m.to, t.text) || (whoIsRecipient && (has(m.who, t.text) || has(m.address, t.text)));
+            break;
+        case SearchTerm::Subject: hit = has(m.subject, t.text); break;
+        case SearchTerm::Label: hit = has(m.label, t.text); break;
+        case SearchTerm::HasAttachment: hit = m.hasAttachment; break;
+        case SearchTerm::IsUnread: hit = m.status == MailStatus::Unread; break;
+        case SearchTerm::IsRead: hit = m.status != MailStatus::Unread; break;
+        }
+        if (hit == t.negate) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QString MessageFilterProxy::searchHelp()
+{
+    return tr("Search this mailbox. Words match sender, subject, text and label.\n"
+              "from:name   to:name   subject:word   label:name\n"
+              "has:attachment   is:unread   is:read\n"
+              "\"exact phrase\"   -word (exclude)");
 }
 
 bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) const
@@ -251,9 +380,11 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
     } else if (!idx.data(MessageListModel::MailboxesRole).toStringList().contains(m_mailbox)) {
         return false;
     }
-    if (!m_search.isEmpty()
-        && !idx.data(MessageListModel::SearchTextRole).toString().contains(m_search, Qt::CaseInsensitive)) {
-        return false;
+    if (!m_terms.isEmpty()) {
+        const auto *model = qobject_cast<const MessageListModel *>(sourceModel());
+        if (model && row < model->rowCount()) {
+            return matches(m_terms, model->item(row));
+        }
     }
     return true;
 }

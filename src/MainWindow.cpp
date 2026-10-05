@@ -7,6 +7,7 @@
 #include "core/MessageParser.h"
 #include "core/ReplyBuilder.h"
 #include "core/Signatures.h"
+#include "core/SizeFormat.h"
 #include "core/SyncEngine.h"
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
@@ -41,6 +42,7 @@
 #include <QMessageBox>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
 #include <QTreeView>
@@ -51,6 +53,19 @@
 using namespace zmail::ui;
 
 namespace {
+// Mailbox rows get 3 px of air above and below. Done with a delegate, not a
+// widget style sheet: a style sheet freezes the tree's palette at polish
+// time, so View > Theme > Dark left the sidebar white.
+class RoomyRowDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem &opt, const QModelIndex &index) const override
+    {
+        return QStyledItemDelegate::sizeHint(opt, index) + QSize(4, 6);
+    }
+};
+
 QString esc(const QString &s)
 {
     return s.toHtmlEscaped();
@@ -156,7 +171,9 @@ void MainWindow::buildMenus()
     auto later = [](QMenu *menu, const QString &text, const QKeySequence &ks = {}) {
         QAction *a = menu->addAction(text);
         a->setShortcut(ks);
-        a->setEnabled(false); // placeholder until the feature lands
+        a->setEnabled(false); // placeholder until the feature lands:
+        a->setVisible(false); // hidden, not greyed out (menus collapse the spare separators)
+        a->setProperty("placeholder", true);
         return a;
     };
 
@@ -330,7 +347,8 @@ void MainWindow::buildToolbar()
     tb->addWidget(spacer);
     m_search = new QLineEdit(tb);
     m_search->setObjectName(QStringLiteral("searchBox"));
-    m_search->setPlaceholderText(tr("Search  (from: subject: has:attachment \u2026)"));
+    m_search->setPlaceholderText(tr("Search  (from: subject: has:attachment is:unread \u2026)"));
+    m_search->setToolTip(MessageFilterProxy::searchHelp());
     m_search->setClearButtonEnabled(true);
     m_search->setMinimumWidth(300);
     QAction *lead = m_search->addAction(icon(QStringLiteral("search")), QLineEdit::LeadingPosition);
@@ -361,7 +379,7 @@ void MainWindow::buildPanes()
     m_mailboxes->header()->setStretchLastSection(false);
     m_mailboxes->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_mailboxes->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_mailboxes->setStyleSheet(QStringLiteral("QTreeWidget::item{padding:3px 2px;}"));
+    m_mailboxes->setItemDelegate(new RoomyRowDelegate(m_mailboxes));
 
     m_listSplitter = new QSplitter(Qt::Vertical, m_splitter);
     m_listSplitter->setObjectName(QStringLiteral("listPreviewSplitter"));
@@ -390,7 +408,9 @@ void MainWindow::buildPanes()
     }
     h->resizeSection(MessageListModel::Who, 190);
     h->resizeSection(MessageListModel::Date, 140);
-    h->resizeSection(MessageListModel::Size, 52);
+    // Room for "888.8 MB" plus padding, at any font size or scale.
+    h->resizeSection(MessageListModel::Size,
+                     std::max(68, m_list->fontMetrics().horizontalAdvance(QStringLiteral("888.8 MB")) + 18));
     connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &cur) { showMessage(cur); });
 
@@ -594,11 +614,11 @@ void MainWindow::updateCounts()
     } else if (box.startsWith(QLatin1String("gmail:")) && m_mailboxes->currentItem()) {
         box = m_mailboxes->currentItem()->text(0);
     }
-    m_countLabel->setText(tr("%1: %2 messages, %3 unread, %4 K  \u00b7  %5 queued ")
+    m_countLabel->setText(tr("%1: %2 messages, %3 unread, %4  \u00b7  %5 queued ")
                               .arg(box)
                               .arg(total)
                               .arg(unread)
-                              .arg(QLocale(QLocale::English).toString((bytes + 1023) / 1024))
+                              .arg(zmail::formatSize(bytes))
                               .arg(queued));
 }
 

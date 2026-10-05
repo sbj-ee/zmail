@@ -69,7 +69,9 @@ QPalette darkPalette()
 {
     QPalette p;
     const QColor window(0x2a, 0x2d, 0x31), base(0x1f, 0x22, 0x25), text(0xe4, 0xe6, 0xe8);
-    const QColor accent(0x3d, 0x8b, 0xfd);
+    // Selected rows: white on this blue is 5.0:1 (WCAG AA needs 4.5:1; the
+    // old #3d8bfd was 3.3:1), and the band still stands out from Base (3.2:1).
+    const QColor accent(0x2b, 0x6c, 0xd4);
     p.setColor(QPalette::Window, window);
     p.setColor(QPalette::WindowText, text);
     p.setColor(QPalette::Base, base);

@@ -54,6 +54,12 @@ public:
     static QByteArray foldHeader(const QByteArray &name, const QByteArray &value);
     static QString guessMimeType(const QString &fileName, const QByteArray &data);
     static QString makeMessageId(const QString &fromAddress);
+    // Header values that come from received mail (the parent's Message-ID
+    // and References, a forwarded part's type): CR, LF and other control
+    // characters removed so they can't start a new header.
+    static QString stripControl(const QString &value);
+    // A type/subtype safe for Content-Type, or "application/octet-stream".
+    static QString safeMimeType(const QString &mimeType);
 };
 
 } // namespace zmail

@@ -50,6 +50,7 @@ MessageWindow::MessageWindow(QWidget *parent)
     m_forward->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
 
     m_view = new MessageView(this);
+    connect(m_view, &MessageView::mailtoRequested, this, &MessageWindow::mailtoRequested);
     m_view->setObjectName(QStringLiteral("messageView"));
     setCentralWidget(m_view);
 

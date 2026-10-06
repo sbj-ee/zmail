@@ -81,6 +81,10 @@ void AuthManager::startSignIn(const QString &loginHint)
     }
     m_listenPort = m_loopback->port();
     connect(m_loopback, &LoopbackServer::callbackReceived, this, &AuthManager::onCallback);
+    connect(m_loopback, &LoopbackServer::callbackRejected, this, [this]() {
+        qCWarning(lcAuth) << "Sign-in: ignored a redirect with a missing or wrong state; still listening on port"
+                          << m_listenPort;
+    });
     connect(m_loopback, &LoopbackServer::timedOut, this, [this]() {
         const int ms = m_loopback->timeoutMs();
         m_loopback->deleteLater();
@@ -93,6 +97,7 @@ void AuthManager::startSignIn(const QString &loginHint)
 
     m_verifier = pkce::makeVerifier();
     m_state = pkce::makeState();
+    m_loopback->setExpectedState(m_state); // anything else gets a 400; the listener keeps waiting
     m_redirect = m_loopback->redirectUri();
 
     QUrlQuery q;

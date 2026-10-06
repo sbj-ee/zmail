@@ -151,6 +151,7 @@ MessageView::MessageView(QWidget *parent)
     lay->addWidget(line);
 
     m_body = new SafeHtmlView(this);
+    connect(m_body, &SafeHtmlView::mailtoActivated, this, &MessageView::mailtoRequested);
     m_body->setObjectName(QStringLiteral("messageBody"));
     m_body->setFrameShape(QFrame::NoFrame);
     m_body->setOpenLinks(false);

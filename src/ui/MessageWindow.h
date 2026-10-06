@@ -32,6 +32,7 @@ signals:
     // kind is zmail::ReplyBuilder::Kind (Reply, ReplyAll, Forward).
     void composeRequested(const QString &id, int kind);
     void deleteRequested(const QString &id);
+    void mailtoRequested(const QUrl &url);
 
 protected:
     void closeEvent(QCloseEvent *ev) override;

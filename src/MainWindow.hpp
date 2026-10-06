@@ -72,6 +72,8 @@ public:
     // (sample mode opens the sample reply).
     // zmail::ReplyBuilder::Kind; id "" = the message in the preview pane.
     ComposeWindow *composeReply(int kind, const QString &id = {});
+    // A mailto: link clicked in a message: a new compose window, prefilled.
+    ComposeWindow *composeMailto(const QUrl &url);
     QString shownMessageId() const { return m_shownId; }
     QList<ComposeWindow *> composers() const { return m_composers; }
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.

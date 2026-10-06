@@ -43,6 +43,11 @@ public:
     // Exposed for unit tests.
     static QList<int> parseSemver(QStringView s);
     static bool isNewer(const QString &tag, const QString &current);
+    // The page "Open the release page?" may open: the reply's html_url only
+    // if it is under https://github.com/sbj-ee/zmail/, otherwise the
+    // releases page. The reply is untrusted (a proxy, a compromised account
+    // or a bug could put any URL there).
+    static QString releasePageUrl(const QString &htmlUrl);
 
 private:
     static QString failureReason(QNetworkReply *reply);

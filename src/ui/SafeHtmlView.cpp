@@ -20,7 +20,11 @@ SafeHtmlView::SafeHtmlView(QWidget *parent)
     connect(this, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
         emit linkActivated(url);
         const QString scheme = url.scheme().toLower();
-        if (scheme != QLatin1String("http") && scheme != QLatin1String("https") && scheme != QLatin1String("mailto")) {
+        if (scheme == QLatin1String("mailto")) {
+            emit mailtoActivated(url); // zmail's own compose window, never xdg-open
+            return;
+        }
+        if (scheme != QLatin1String("http") && scheme != QLatin1String("https")) {
             return;
         }
         const auto choice = QMessageBox::question(

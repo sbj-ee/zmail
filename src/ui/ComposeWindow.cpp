@@ -1139,6 +1139,23 @@ void ComposeWindow::setDraft(const ComposeDraft &d)
     }
 }
 
+void ComposeWindow::setMailto(const MailtoFields &f)
+{
+    ComposeDraft d;
+    d.to = f.to;
+    d.cc = f.cc;
+    d.bcc = f.bcc;
+    d.subject = f.subject;
+    setDraft(d);
+    if (!f.body.isEmpty()) {
+        QTextCursor c(m_body->document());
+        c.movePosition(QTextCursor::Start);
+        c.insertText(f.body); // plain text, never parsed as HTML
+        c.movePosition(QTextCursor::Start);
+        m_body->setTextCursor(c);
+    }
+}
+
 void ComposeWindow::attachFromMessage(const QString &gmailMessageId)
 {
     if (!m_session || !m_session->api()) {

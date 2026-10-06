@@ -81,6 +81,7 @@ public:
 
 signals:
     void zoomChanged(qreal zoom);
+    void mailtoRequested(const QUrl &url); // a mailto: link in the body
 
 protected:
     bool eventFilter(QObject *obj, QEvent *ev) override;

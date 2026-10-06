@@ -17,6 +17,7 @@
 #include <QSet>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -133,24 +134,131 @@ private slots:
         auth.cancelSignIn();
     }
 
-    void stateMismatchIsRejected()
+    void wrongOrMissingStateGets400AndKeepsListening()
+    {
+        // A forged or stray request to the loopback port used to end the
+        // sign-in ("state mismatch"). Now it gets a 400 and is ignored; the
+        // real redirect still completes the sign-in.
+        MockGoogle g;
+        QVERIFY(g.listen());
+        MemoryTokenStore store;
+        QNetworkAccessManager nam;
+        AuthManager auth(g.clientConfig(), &store, &nam);
+        QUrl opened;
+        auth.setBrowserOpener([&](const QUrl &u) { opened = u; return true; });
+        QSignalSpy failed(&auth, &AuthManager::signInFailed);
+        QSignalSpy ok(&auth, &AuthManager::signedIn);
+        auth.startSignIn();
+        const QUrl redirect(QUrlQuery(opened).queryItemValue(QStringLiteral("redirect_uri"), QUrl::FullyDecoded));
+        const QString state = QUrlQuery(opened).queryItemValue(QStringLiteral("state"), QUrl::FullyDecoded);
+        QVERIFY(!state.isEmpty());
+
+        auto get = [&](const QString &query) {
+            QUrl u = redirect;
+            u.setPath(QStringLiteral("/"));
+            u.setQuery(query);
+            QNetworkReply *r = nam.get(QNetworkRequest(u));
+            QSignalSpy done(r, &QNetworkReply::finished);
+            done.wait(5000);
+            const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            r->deleteLater();
+            return status;
+        };
+        QCOMPARE(get(QStringLiteral("code=stolen&state=forged")), 400);
+        QCOMPARE(get(QStringLiteral("code=stolen")), 400);                       // missing state
+        QCOMPARE(get(QStringLiteral("code=stolen&state=")), 400);                // empty state
+        QCOMPARE(get(QStringLiteral("error=access_denied&state=forged")), 400);  // forged error
+        QCOMPARE(get(QStringLiteral("code=stolen&state=") + state + QLatin1Char('x')), 400);
+        QTest::qWait(100);
+        QCOMPARE(failed.count(), 0);
+        QVERIFY(auth.signInInProgress()); // still listening
+        QCOMPARE(g.count(QStringLiteral("POST /token")), 0);
+
+        // The real browser redirect still works.
+        FakeBrowser browser;
+        browser(opened);
+        QTRY_COMPARE_WITH_TIMEOUT(ok.count(), 1, 10000);
+        QCOMPARE(failed.count(), 0);
+        QCOMPARE(g.count(QStringLiteral("POST /token")), 1);
+
+        // A forged state through the full browser flow: the code is never
+        // exchanged.
+        MockGoogle g2;
+        QVERIFY(g2.listen());
+        MemoryTokenStore store2;
+        AuthManager auth2(g2.clientConfig(), &store2, &nam);
+        FakeBrowser forged;
+        forged.tamperState = true;
+        auth2.setBrowserOpener([&forged](const QUrl &u) { return forged(u); });
+        QSignalSpy ok2(&auth2, &AuthManager::signedIn);
+        const int logStart = m_log->lines().size();
+        auth2.startSignIn();
+        auto rejectedLogged = [&]() {
+            for (const QString &l : m_log->lines().mid(logStart)) {
+                if (l.contains(QLatin1String("ignored a redirect with a missing or wrong state"))) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(rejectedLogged(), 5000); // the browser came back with the forged state
+        QTest::qWait(200);
+        QCOMPARE(ok2.count(), 0);
+        QVERIFY(auth2.signInInProgress());
+        QCOMPARE(g2.count(QStringLiteral("POST /token")), 0);
+        QVERIFY(store2.values.isEmpty());
+        auth2.cancelSignIn();
+    }
+
+    void badStateKeepsTheTimeout()
     {
         MockGoogle g;
         QVERIFY(g.listen());
         MemoryTokenStore store;
         QNetworkAccessManager nam;
         AuthManager auth(g.clientConfig(), &store, &nam);
-        FakeBrowser browser;
-        browser.tamperState = true;
-        auth.setBrowserOpener([&browser](const QUrl &u) { return browser(u); });
+        FakeBrowser forged;
+        forged.tamperState = true;
+        auth.setBrowserOpener([&forged](const QUrl &u) { return forged(u); });
+        auth.setSignInTimeoutMs(800);
         QSignalSpy failed(&auth, &AuthManager::signInFailed);
-        QSignalSpy ok(&auth, &AuthManager::signedIn);
+        QElapsedTimer t;
+        t.start();
         auth.startSignIn();
-        QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 10000);
-        QVERIFY(failed.first().first().toString().contains(QStringLiteral("state")));
-        QCOMPARE(ok.count(), 0);
-        QCOMPARE(g.count(QStringLiteral("POST /token")), 0); // code never exchanged
-        QVERIFY(store.values.isEmpty());
+        QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 5000);
+        QVERIFY(t.elapsed() >= 700); // ended by the timeout, not by the forged redirect
+        QVERIFY2(failed.first().first().toString().contains(QLatin1String("timed out")),
+                 qPrintable(failed.first().first().toString()));
+        QVERIFY(!auth.signInInProgress());
+    }
+
+    void loopbackServerRejectsBadState()
+    {
+        LoopbackServer server;
+        server.setExpectedState("s3cret");
+        QVERIFY(server.listen());
+        QSignalSpy got(&server, &LoopbackServer::callbackReceived);
+        QSignalSpy rejected(&server, &LoopbackServer::callbackRejected);
+        QNetworkAccessManager nam;
+        auto get = [&](const QString &query) {
+            QUrl u = server.redirectUri();
+            u.setPath(QStringLiteral("/"));
+            u.setQuery(query);
+            QNetworkReply *r = nam.get(QNetworkRequest(u));
+            QSignalSpy done(r, &QNetworkReply::finished);
+            done.wait(5000);
+            const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            r->deleteLater();
+            return status;
+        };
+        QCOMPARE(get(QStringLiteral("code=x&state=nope")), 400);
+        QCOMPARE(get(QStringLiteral("code=x")), 400);
+        QCOMPARE(rejected.count(), 2);
+        QCOMPARE(server.rejectedCallbacks(), 2);
+        QCOMPARE(got.count(), 0);
+        QCOMPARE(get(QStringLiteral("code=x&state=s3cret")), 200);
+        QCOMPARE(got.count(), 1);
+        QCOMPARE(got.first().at(0).toString(), QStringLiteral("x"));
     }
 
     void missingGmailScopeFails()

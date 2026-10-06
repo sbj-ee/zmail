@@ -1107,8 +1107,9 @@ void MainWindow::attachSync()
     connect(sync, &zmail::SyncEngine::syncError, this, [this](const QString &e) {
         m_syncError = e;
         m_keepSyncErrorAcrossIdle = true;
-        // Keep the permanent account row visible (showMessage would hide it).
-        statusBar()->clearMessage();
+        // Temporary notice (same as before); permanent row + red circle remain
+        // underneath and reappear when the message clears.
+        statusBar()->showMessage(e, 10000);
         updateSyncLabel();
     });
     connect(sync, &zmail::SyncEngine::trashFailed, this, [this](const QString &id) { onTrashFailed(id); });

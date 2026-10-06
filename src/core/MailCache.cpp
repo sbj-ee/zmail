@@ -347,10 +347,15 @@ void MailCache::remove(const QString &id)
     q.exec();
 }
 
-void MailCache::clearMessages()
+void MailCache::clearMessages(bool keepSnoozed)
 {
-    exec(QStringLiteral("DELETE FROM message_labels"));
-    exec(QStringLiteral("DELETE FROM messages"));
+    if (keepSnoozed) {
+        exec(QStringLiteral("DELETE FROM message_labels WHERE message_id NOT IN (SELECT message_id FROM snoozes)"));
+        exec(QStringLiteral("DELETE FROM messages WHERE id NOT IN (SELECT message_id FROM snoozes)"));
+    } else {
+        exec(QStringLiteral("DELETE FROM message_labels"));
+        exec(QStringLiteral("DELETE FROM messages"));
+    }
     if (m_fts5) {
         exec(QStringLiteral("INSERT INTO messages_fts(messages_fts) VALUES ('rebuild')"));
     }

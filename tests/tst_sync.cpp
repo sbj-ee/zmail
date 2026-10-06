@@ -64,6 +64,17 @@ struct Rig
         m.date = QDateTime::currentDateTimeUtc().addSecs(-60 * minutesAgo);
         return m;
     }
+    // Idle, including the follow-up history poll a full sync queues.
+    bool settle()
+    {
+        for (int i = 0; i < 3; ++i) {
+            if (!QTest::qWaitFor([this] { return !sync->isBusy(); }, 20000)) {
+                return false;
+            }
+            QTest::qWait(30);
+        }
+        return !sync->isBusy();
+    }
     bool waitIdle(int ms = 15000)
     {
         QSignalSpy idle(sync.get(), &SyncEngine::idle);
@@ -213,6 +224,89 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2 && !r.sync->isBusy(), 20000);
         QCOMPARE(r.sync->fullSyncs(), 2);
         QCOMPARE(r.cache.historyId(), r.g.historyId());
+    }
+
+    // A message whose metadata fetch fails for good must not be skipped: the
+    // poll leaves historyId alone so the next one replays the range.
+    void failedFetchDoesNotAdvanceHistory()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addMessage(r.msg(QStringLiteral("old"), {QStringLiteral("INBOX")}, 100), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 1, 20000);
+        QVERIFY(r.settle());
+        const qint64 before = r.cache.historyId();
+
+        QSignalSpy newMail(r.sync.get(), &SyncEngine::newMail);
+        QSignalSpy errors(r.sync.get(), &SyncEngine::syncError);
+        r.api->setMaxAttempts(2);
+        const QString ok = r.g.addMessage(r.msg(QStringLiteral("arrives")));
+        const QString late = r.g.addMessage(r.msg(QStringLiteral("arrives late")));
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + late, 500, 2, -1}); // both attempts
+        r.sync->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 20000);
+        QVERIFY(r.settle());
+        QVERIFY(r.cache.contains(ok));
+        QVERIFY(!r.cache.contains(late));
+        QCOMPARE(r.cache.historyId(), before); // not advanced past the missing message
+        QCOMPARE(newMail.count(), 1);
+        QCOMPARE(newMail.first().first().toStringList(), QStringList{ok});
+
+        // Next poll: the same range again, and this time the fetch works.
+        r.sync->pollNow(true);
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(late), 20000);
+        QVERIFY(r.settle());
+        QCOMPARE(r.cache.historyId(), r.g.historyId());
+        QCOMPARE(newMail.count(), 2); // only the late one; "arrives" isn't announced twice
+        QCOMPARE(newMail.last().first().toStringList(), QStringList{late});
+        QCOMPARE(errors.count(), 1);
+    }
+
+    // A page load cut off by a full resync used to leave its label marked
+    // "loading" for good, so the folder never paged again.
+    void fetchMoreWorksAfterResyncInterruptsOne()
+    {
+        Rig r(2);
+        r.g.seedSystemLabels();
+        for (int i = 0; i < 5; ++i) {
+            r.g.addMessage(r.msg(QStringLiteral("Message %1").arg(i), {QStringLiteral("INBOX")}, i + 1), false);
+        }
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2, 20000);
+        QVERIFY(r.settle());
+
+        r.g.addMessage(r.msg(QStringLiteral("Message new"), {QStringLiteral("INBOX")}, 0), false);
+        r.g.expireHistory();
+        r.sync->pollNow(true);                      // history.list -> 404 -> full resync
+        r.sync->fetchMore(QStringLiteral("INBOX")); // still in flight when that starts
+        QTRY_COMPARE_WITH_TIMEOUT(r.sync->fullSyncs(), 2, 20000);
+        QVERIFY(r.settle());
+        QCOMPARE(r.cache.count(QStringLiteral("INBOX")), 2);
+
+        QVERIFY(r.sync->hasMore(QStringLiteral("INBOX")));
+        r.sync->fetchMore(QStringLiteral("INBOX"));
+        QTRY_COMPARE_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")), 6, 20000);
+    }
+
+    // Same for stop() + start() on one engine.
+    void fetchMoreWorksAfterRestartInterruptsOne()
+    {
+        Rig r(2);
+        r.g.seedSystemLabels();
+        for (int i = 0; i < 5; ++i) {
+            r.g.addMessage(r.msg(QStringLiteral("Message %1").arg(i), {QStringLiteral("INBOX")}, i + 1), false);
+        }
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2, 20000);
+        QVERIFY(r.settle());
+
+        r.sync->fetchMore(QStringLiteral("INBOX"));
+        r.sync->stop(); // its answer is dropped
+        r.sync->start();
+        QVERIFY(r.settle());
+        r.sync->fetchMore(QStringLiteral("INBOX"));
+        QTRY_COMPARE_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")), 5, 20000);
     }
 
     void backoffOn429And5xx()

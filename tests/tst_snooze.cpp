@@ -41,6 +41,38 @@ struct Rig
         sync = std::make_unique<SyncEngine>(api.get(), &cache);
         sync->setPollInterval(3600 * 1000);
     }
+    QString addInbox(const QString &subject)
+    {
+        MockGoogle::Message msg;
+        msg.from = QStringLiteral("Ada <ada@example.org>");
+        msg.to = QStringLiteral("me@example.com");
+        msg.subject = subject;
+        msg.text = QStringLiteral("body");
+        msg.labels = {QStringLiteral("INBOX")};
+        msg.date = QDateTime::currentDateTimeUtc();
+        return g.addMessage(msg, false);
+    }
+    // Idle, including the follow-up history poll a full sync queues.
+    bool settle()
+    {
+        for (int i = 0; i < 3; ++i) {
+            if (!QTest::qWaitFor([this] { return !sync->isBusy(); }, 20000)) {
+                return false;
+            }
+            QTest::qWait(30);
+        }
+        return !sync->isBusy();
+    }
+    // The cached historyId is older than Gmail keeps: the next poll gets a
+    // 404 and starts a full resync. Returns once that has finished.
+    bool forceFullResync()
+    {
+        const int before = sync->fullSyncs();
+        addInbox(QStringLiteral("arrived while offline"));
+        g.expireHistory();
+        sync->pollNow(true);
+        return QTest::qWaitFor([this, before] { return sync->fullSyncs() == before + 1; }, 20000) && settle();
+    }
 };
 } // namespace
 
@@ -139,6 +171,58 @@ private slots:
         r.sync->unsnooze(id);
         QVERIFY(r.cache.snooze(id).messageId.isEmpty());
         QVERIFY(r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+    }
+
+    // A full resync clears the cached messages; the snooze row used to go
+    // with them (ON DELETE CASCADE), leaving the mail out of INBOX for good.
+    void snoozeSurvivesFullResync()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        const QString id = r.addInbox(QStringLiteral("Snooze me"));
+        r.addInbox(QStringLiteral("Stays put"));
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(id), 20000);
+        QVERIFY(r.settle());
+
+        const qint64 wake = QDateTime::currentMSecsSinceEpoch() + 3600'000;
+        r.sync->snooze(id, wake);
+        QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":-INBOX")));
+        QVERIFY(r.settle());
+
+        QVERIFY(r.forceFullResync());
+        QCOMPARE(r.cache.count(QStringLiteral("INBOX")), 2); // "Stays put" + the one that arrived
+        QVERIFY(r.cache.contains(id));
+        QCOMPARE(r.cache.snooze(id).wakeMs, wake);
+        QVERIFY(r.cache.snooze(id).hadInbox);
+        QVERIFY(!r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+
+        // ... and it still wakes.
+        r.cache.setSnooze(id, QDateTime::currentMSecsSinceEpoch() - 1000, true);
+        QCOMPARE(r.sync->wakeDue(), 1);
+        QVERIFY(r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+        QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":+INBOX")));
+    }
+
+    // The kept row is refreshed from Gmail: a message deleted elsewhere while
+    // it was snoozed goes, and its snooze with it.
+    void snoozedMessageDeletedElsewhereIsDroppedOnResync()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        const QString id = r.addInbox(QStringLiteral("Snoozed, then deleted on the phone"));
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(id), 20000);
+        QVERIFY(r.settle());
+        r.sync->snooze(id, QDateTime::currentMSecsSinceEpoch() + 3600'000);
+        QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":-INBOX")));
+        QVERIFY(r.settle());
+
+        r.g.deleteMessage(id);
+        QVERIFY(r.forceFullResync());
+        QVERIFY(!r.cache.contains(id));
+        QVERIFY(r.cache.snooze(id).messageId.isEmpty());
+        QVERIFY(r.cache.snoozes(false).isEmpty());
     }
 };
 

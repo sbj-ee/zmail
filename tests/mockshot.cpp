@@ -5,6 +5,8 @@
 //   zmail_mockshot compose  Reply to a synced message: signature, attachments, quote
 //   zmail_mockshot offline  sample data, grey account circle (not signed in)
 //   zmail_mockshot error    signed in, then a forced sync failure (red circle)
+//   zmail_mockshot multiselect          three rows selected (Shift-range)
+//   zmail_mockshot multiselect-deleted  same, then Delete on the selection
 // Prints "READY" on stdout once the requested state is on screen.
 #include "MainWindow.hpp"
 #include "core/MailSession.h"
@@ -28,6 +30,7 @@
 #include <QNetworkReply>
 #include <QTimer>
 #include <QTreeView>
+#include <QItemSelectionModel>
 #include <cstdio>
 
 using namespace zmail;
@@ -118,8 +121,29 @@ int main(int argc, char *argv[])
                 // Open an HTML newsletter with a (blocked) tracking pixel once
                 // the list has been rebuilt from the cache.
                 const bool compose = mode == QLatin1String("compose");
-                QTimer::singleShot(800, &w, [&w, ready, compose] {
+                const bool multi = mode.startsWith(QLatin1String("multiselect"));
+                const bool multiDeleted = mode == QLatin1String("multiselect-deleted");
+                QTimer::singleShot(800, &w, [&w, ready, compose, multi, multiDeleted] {
                     auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+                    if (multi) {
+                        // Select the first three visible rows (Shift-range style).
+                        const int cols = list->model()->columnCount();
+                        QItemSelection sel(list->model()->index(0, 0),
+                                           list->model()->index(2, cols - 1));
+                        list->selectionModel()->select(sel, QItemSelectionModel::ClearAndSelect);
+                        list->selectionModel()->setCurrentIndex(
+                            list->model()->index(0, 0), QItemSelectionModel::NoUpdate);
+                        list->scrollTo(list->model()->index(0, 0));
+                        if (multiDeleted) {
+                            QTimer::singleShot(400, &w, [&w, ready] {
+                                w.findChild<QAction *>(QStringLiteral("actionDelete"))->trigger();
+                                QTimer::singleShot(1200, ready);
+                            });
+                            return;
+                        }
+                        QTimer::singleShot(1200, ready);
+                        return;
+                    }
                     const QLatin1String want = compose ? QLatin1String("Q4 budget review") : QLatin1String("Issue 112");
                     for (int r = 0; r < list->model()->rowCount(); ++r) {
                         if (list->model()->index(r, 7).data().toString().startsWith(want)) {

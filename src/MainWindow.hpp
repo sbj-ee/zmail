@@ -2,6 +2,8 @@
 
 #include <QMainWindow>
 #include <QPointer>
+#include <QList>
+#include <QStringList>
 
 class QActionGroup;
 class QLabel;
@@ -138,14 +140,27 @@ private:
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
     void showContacts();
     void addSenderToContacts();
-    void trashMessage(QString id);
+    void trashMessage(QString id); // single id (Message window); list actions use trashSelected
+    void trashSelected();
+    void trashMessages(const QStringList &ids);
     void onTrashFailed(const QString &id);
     QString currentListId() const;
+    // Selected message-list rows (proxy order → source rows / Gmail ids).
+    QList<int> selectedSourceRows() const;
+    QStringList selectedMessageIds() const;
     void runFullTextSearch(const QString &text);
     void junkMessage(QString id);
+    void junkSelected();
+    void junkSelectedIds(const QStringList &ids);
     void notJunkMessage(QString id);
+    void notJunkSelected();
+    void notJunkSelectedIds(const QStringList &ids);
     void snoozeMessage(QString id, qint64 wakeMs);
+    void snoozeSelected(qint64 wakeMs);
+    void snoozeMessages(const QStringList &ids, qint64 wakeMs);
     void unsnoozeMessage(QString id);
+    void unsnoozeSelected();
+    void unsnoozeMessages(const QStringList &ids);
     void customSnooze();
     void checkSnoozeWakes();
     // Right-click menus, Enter to open, Mark Read/Unread, Undo Delete.
@@ -161,8 +176,8 @@ private:
     void renameLabelFolder(const QString &labelId, const QString &currentName);
     void deleteLabelFolder(const QString &labelId, const QString &displayName);
     void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
-    void setCurrentRead(bool read);
-    void offerUndoDelete(const QString &id);
+    void setCurrentRead(bool read); // selected rows (Shift/Ctrl multi-select)
+    void offerUndoDelete(const QStringList &ids);
     void undoDelete();
     static QString withShortcut(const QString &tip, const QKeySequence &key);
     void saveSplitters();
@@ -227,7 +242,7 @@ private:
     QWidget *m_undoBar = nullptr;      // "Moved to Trash. [Undo]" in the status bar
     QLabel *m_undoLabel = nullptr;
     QTimer *m_undoTimer = nullptr;
-    QString m_lastTrashed;             // id the Undo puts back
+    QStringList m_lastTrashed;        // ids the Undo puts back
     QTimer *m_reloadTimer = nullptr;
     QAction *m_hideSpamAction = nullptr;
     QTimer *m_snoozeTimer = nullptr;

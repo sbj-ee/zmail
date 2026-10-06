@@ -115,6 +115,14 @@ private:
     void setBusy(bool b, const QString &status = {});
     void reportError(const ApiError &e, const QString &what);
     void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
+    static QStringList labelIds(const QJsonObject &message); // a message resource's labelIds
+    // users.messages.modify with the cache updated first. If Gmail refuses,
+    // exactly what this edit changed is undone (label changes that arrived
+    // meanwhile are kept) and `what` is reported; on success Gmail's label
+    // list is adopted. after(err) runs either way, before the last
+    // messagesChanged(). announce=false: no messagesChanged() unless undone.
+    void modifyOptimistic(const QString &id, const QStringList &add, const QStringList &remove, const QString &what,
+                          std::function<void(const ApiError &err)> after = {}, bool announce = true);
 
     GmailClient *m_api;
     QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
@@ -144,6 +152,7 @@ private:
     QSet<QString> m_loadingLabels;
     qint64 m_lastLabelsRefreshMs = 0;
     bool m_labelsRefreshing = false;
+    bool m_labelsRefreshAgain = false; // a forced refresh was asked for during one
     static constexpr qint64 kLabelRefreshMinIntervalMs = 60000;
     static constexpr int kLabelGetConcurrency = 2;
     static constexpr int kLabelRefreshSoonMs = 400; // restarted by each move that lands

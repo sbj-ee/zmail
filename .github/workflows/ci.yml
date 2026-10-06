@@ -33,7 +33,7 @@ jobs:
             libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DZMAIL_WERROR=ON
 
       - name: Build
         run: cmake --build build
@@ -68,3 +68,32 @@ jobs:
           name: zmail-deb
           path: build/zmail_*_amd64.deb
           if-no-files-found: error
+
+  # The same tests under AddressSanitizer (with leak detection) and
+  # UndefinedBehaviorSanitizer: the async callbacks hold a lot of shared
+  # state, and a use-after-free or a self-owning closure doesn't fail a
+  # normal run. Any report fails the test that produced it.
+  sanitizers:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Qt 6 + build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
+            libmd4c-dev libmd4c-html0-dev libzip-dev libhunspell-dev hunspell-en-us fonts-noto-color-emoji \
+            libgl1-mesa-dev cmake ninja-build g++
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DZMAIL_SANITIZE=ON -DZMAIL_WERROR=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (mock Google only; no network access to Google)
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure --timeout 900

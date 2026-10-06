@@ -121,7 +121,8 @@ private slots:
         const int afterCreate = spy.count();
         r.sync->renameLabel(id, QStringLiteral("Projects/Beta"));
         QTRY_VERIFY_WITH_TIMEOUT(spy.count() > afterCreate, 10000);
-        QCOMPARE(idOf(QStringLiteral("Projects/Beta")), id);
+        // (labelsChanged also fires for the create's own refresh finishing.)
+        QTRY_COMPARE_WITH_TIMEOUT(idOf(QStringLiteral("Projects/Beta")), id, 10000);
         QVERIFY(idOf(QStringLiteral("Projects/Alpha")).isEmpty());
 
         const QString mid =
@@ -137,7 +138,7 @@ private slots:
         const int afterRename = spy.count();
         r.sync->deleteLabel(id);
         QTRY_VERIFY_WITH_TIMEOUT(spy.count() > afterRename, 10000);
-        QVERIFY(idOf(QStringLiteral("Projects/Beta")).isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(idOf(QStringLiteral("Projects/Beta")).isEmpty(), 10000);
         QVERIFY(r.g.messages().contains(mid));
         QVERIFY(!r.g.messages().value(mid).labels.contains(id));
         QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("INBOX")));
@@ -224,6 +225,47 @@ private slots:
         QCOMPARE(labelLists(), before + 1);
         QCOMPARE(r.cache.count(QStringLiteral("INBOX")), 0);
         QCOMPARE(r.cache.count(QStringLiteral("Label_2")), 8);
+    }
+
+    // A folder renamed or deleted while a label refresh is under way: that
+    // refresh has already listed the labels, and the change's own refresh used
+    // to be folded into it, so the sidebar kept the old name (or the deleted
+    // folder) until some later refresh.
+    void folderChangeDuringLabelRefreshIsNotLost()
+    {
+        Rig r;
+        r.api->setBackoffBaseMs(200);
+        r.g.seedSystemLabels();
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy() && r.cache.historyId() > 0, 20000);
+        QTest::qWait(100); // the follow-up history poll
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+
+        auto idOf = [&r](const QString &name) {
+            for (const CachedLabel &l : r.cache.labels()) {
+                if (l.name == name && l.type == QLatin1String("user")) {
+                    return l.id;
+                }
+            }
+            return QString();
+        };
+        // The refresh after the create lists the labels, then can't finish
+        // for a while: one labels.get keeps failing.
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/INBOX"), 503, 2, -1});
+        r.sync->createLabel(QStringLiteral("Alpha"));
+        QTRY_VERIFY_WITH_TIMEOUT(!idOf(QStringLiteral("Alpha")).isEmpty(), 10000); // listed; counts still coming
+        const QString id = idOf(QStringLiteral("Alpha"));
+
+        r.sync->renameLabel(id, QStringLiteral("Beta"));
+        QTRY_COMPARE_WITH_TIMEOUT(idOf(QStringLiteral("Beta")), id, 10000);
+        QVERIFY(idOf(QStringLiteral("Alpha")).isEmpty());
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/INBOX"), 503, 2, -1});
+        r.sync->createLabel(QStringLiteral("Gamma"));
+        QTRY_VERIFY_WITH_TIMEOUT(!idOf(QStringLiteral("Gamma")).isEmpty(), 10000);
+        r.sync->deleteLabel(id);
+        QTRY_VERIFY_WITH_TIMEOUT(idOf(QStringLiteral("Beta")).isEmpty(), 10000);
+        QVERIFY(!idOf(QStringLiteral("Gamma")).isEmpty());
     }
 
     // A move that lands while a label refresh is under way used to be folded

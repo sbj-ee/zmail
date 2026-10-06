@@ -55,13 +55,16 @@ struct Rig
     // Idle, including the follow-up history poll a full sync queues.
     bool settle()
     {
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 50; ++i) {
             if (!QTest::qWaitFor([this] { return !sync->isBusy(); }, 20000)) {
                 return false;
             }
-            QTest::qWait(30);
+            QTest::qWait(30); // a queued poll starts within this
+            if (!sync->isBusy()) {
+                return true;
+            }
         }
-        return !sync->isBusy();
+        return false;
     }
     // The cached historyId is older than Gmail keeps: the next poll gets a
     // 404 and starts a full resync. Returns once that has finished.
@@ -202,6 +205,59 @@ private slots:
         QCOMPARE(r.sync->wakeDue(), 1);
         QVERIFY(r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
         QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":+INBOX")));
+    }
+
+    // Gmail refused to put INBOX back: the message must not be left out of
+    // the Inbox with its snooze spent. It stays snoozed and due, and the next
+    // wake check tries again.
+    void failedWakeStaysSnoozedAndIsRetried()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        const QString id = r.addInbox(QStringLiteral("Wake me"));
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(id), 20000);
+        QVERIFY(r.settle());
+        r.sync->snooze(id, QDateTime::currentMSecsSinceEpoch() + 3600'000);
+        QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":-INBOX")));
+        QVERIFY(r.settle());
+
+        r.api->setMaxAttempts(1);
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + id + QStringLiteral("/modify"), 500, 1, -1});
+        r.cache.setSnooze(id, QDateTime::currentMSecsSinceEpoch() - 1000, true); // due
+        QCOMPARE(r.sync->wakeDue(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.snooze(id).wakeMs > 0, 10000); // snoozed again
+        QVERIFY(!r.cache.snooze(id).badge);
+        QVERIFY(!r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+        QVERIFY(!r.g.messages().value(id).labels.contains(QStringLiteral("INBOX")));
+
+        QCOMPARE(r.sync->wakeDue(), 1); // still due: this time Gmail accepts
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(id).labels.contains(QStringLiteral("INBOX")), 10000);
+        QVERIFY(r.cache.message(id).labels.contains(QStringLiteral("INBOX")));
+        QVERIFY(r.cache.snooze(id).badge);
+        QCOMPARE(r.cache.snooze(id).wakeMs, 0);
+        QCOMPARE(r.sync->wakeDue(), 0);
+    }
+
+    // ... unless the message no longer exists: then it goes, snooze and all.
+    void wakeOfMessageDeletedElsewhereDropsIt()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        const QString id = r.addInbox(QStringLiteral("Deleted before it woke"));
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.contains(id), 20000);
+        QVERIFY(r.settle());
+        r.sync->snooze(id, QDateTime::currentMSecsSinceEpoch() + 3600'000);
+        QTRY_VERIFY(r.g.modifyCalls.contains(id + QStringLiteral(":-INBOX")));
+        QVERIFY(r.settle());
+
+        r.g.deleteMessage(id); // not polled yet
+        r.cache.setSnooze(id, QDateTime::currentMSecsSinceEpoch() - 1000, true);
+        QCOMPARE(r.sync->wakeDue(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(!r.cache.contains(id), 10000);
+        QVERIFY(r.cache.snoozes(false).isEmpty());
+        QCOMPARE(r.sync->wakeDue(), 0);
     }
 
     // The kept row is refreshed from Gmail: a message deleted elsewhere while

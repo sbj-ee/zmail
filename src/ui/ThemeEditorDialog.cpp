@@ -84,12 +84,23 @@ ThemeEditorDialog::ThemeEditorDialog(const QString &currentId, int stripes, QWid
         b->setObjectName(QStringLiteral("role:") + QLatin1String(roleKey(r)));
         b->setIconSize(QSize(28, 16));
         connect(b, &QToolButton::clicked, this, [this, r]() {
-            const QColor c = QColorDialog::getColor(QColor::fromRgb(m_theme.roles[size_t(r)]), this, tr("Choose Colour"));
-            if (c.isValid()) {
-                m_theme.roles[size_t(r)] = c.rgb() & 0xFFFFFF;
-                m_dirty = true;
-                showTheme();
-            }
+            // Qt's own colour dialog, opened on this window. The static
+            // getColor() uses the desktop's native one (GTK under GNOME), a
+            // window Qt can't attach to this dialog on Wayland: it can come up
+            // behind it while the editor, blocked waiting for it, looks frozen.
+            auto *picker = new QColorDialog(QColor::fromRgb(m_theme.roles[size_t(r)]), this);
+            picker->setObjectName(QStringLiteral("colourPicker"));
+            picker->setWindowTitle(tr("Choose Colour"));
+            picker->setOption(QColorDialog::DontUseNativeDialog);
+            picker->setAttribute(Qt::WA_DeleteOnClose);
+            connect(picker, &QColorDialog::colorSelected, this, [this, r](const QColor &c) {
+                if (c.isValid()) {
+                    m_theme.roles[size_t(r)] = c.rgb() & 0xFFFFFF;
+                    m_dirty = true;
+                    showTheme();
+                }
+            });
+            picker->open(); // modal to the editor only; returns at once
         });
         m_colourButtons.append({b, r});
         pg->addWidget(new QLabel(QLatin1String(roleKey(r))), r / 3, (r % 3) * 2);

@@ -25,6 +25,7 @@ zmail_add_test(tst_compose)
 zmail_add_test(tst_search)
 zmail_add_test(tst_localfiles)
 zmail_add_test(tst_listactions)
+zmail_add_test(tst_viewdelete) # Delete outside the Inbox (0.4.2)
 zmail_add_test(tst_theme)
 zmail_add_test(tst_themefile) # data shared with zterminal
 target_compile_definitions(tst_themefile PRIVATE ZMAIL_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")

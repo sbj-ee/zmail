@@ -595,6 +595,10 @@ int SyncEngine::wakeDue(qint64 nowMs)
     }
     for (const QString &id : due) {
         const auto row = m_cache->snooze(id);
+        if (m_cache->message(id).labels.contains(QStringLiteral("TRASH"))) {
+            m_cache->clearSnooze(id); // deleted while snoozed: stays in Trash
+            continue;
+        }
         m_cache->markSnoozeWoke(id);
         if (row.hadInbox && !m_cache->message(id).labels.contains(QStringLiteral("INBOX"))) {
             m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
@@ -638,6 +642,7 @@ void SyncEngine::trash(const QString &id)
             m_labelsBeforeTrash.remove(id);
             if (!undone) {
                 reportError(err, tr("Moving to Trash"));
+                emit trashFailed(id, err.message);
             }
             emit messagesChanged();
             return;
@@ -646,6 +651,7 @@ void SyncEngine::trash(const QString &id)
             sendUntrash(id, before, json);
             return;
         }
+        emit trashSucceeded(id);
         QStringList labels;
         for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
             labels.append(l.toString());

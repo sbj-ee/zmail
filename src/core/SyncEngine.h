@@ -81,6 +81,10 @@ signals:
     void snoozesWoke(const QStringList &ids);
     void statusChanged(const QString &status);
     void syncError(const QString &message);
+    // trash() was refused and rolled back (not emitted if Undo was already
+    // pressed). Emitted before the messagesChanged() that brings the row back.
+    void trashFailed(const QString &id, const QString &message);
+    void trashSucceeded(const QString &id); // Gmail confirmed a trash()
     void fullResyncStarted(const QString &reason);
     void idle();
 

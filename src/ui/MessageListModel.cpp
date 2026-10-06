@@ -412,8 +412,18 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
 {
     const QModelIndex idx = sourceModel()->index(row, 0, parent);
     const QStringList boxes = idx.data(MessageListModel::MailboxesRole).toStringList();
-    // Hide Spam: keep SPAM out of every mailbox except Junk itself.
-    if (m_hideSpam && m_mailbox != QLatin1String("Junk") && boxes.contains(QStringLiteral("Junk"))) {
+    // Trashed mail shows only in Trash, as in Gmail. Gmail keeps a trashed
+    // message's other labels (user labels, STARRED, SENT, SPAM), so without
+    // this a deleted message stayed in every view but In.
+    const bool trashView = m_mailbox == QLatin1String("Trash") || m_mailbox == QLatin1String("gmail:TRASH");
+    const bool trashed = boxes.contains(QStringLiteral("Trash"));
+    if (trashed && !trashView) {
+        return false;
+    }
+    // Hide Spam: keep SPAM out of every mailbox except Junk itself (and
+    // Trash, so mail deleted from Junk can still be found there).
+    if (m_hideSpam && m_mailbox != QLatin1String("Junk") && !(trashView && trashed)
+        && boxes.contains(QStringLiteral("Junk"))) {
         return false;
     }
     if (m_mailbox == QLatin1String("Snoozed")) {
@@ -436,8 +446,10 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
     } else if (!boxes.contains(m_mailbox)) {
         return false;
     }
-    // Active snoozes leave In (and other label views) until they wake.
-    if (m_mailbox != QLatin1String("Snoozed") && idx.data(MessageListModel::SnoozeWakeRole).toLongLong() > 0) {
+    // Active snoozes leave In (and other label views) until they wake; a
+    // snoozed message that was deleted still shows in Trash.
+    if (m_mailbox != QLatin1String("Snoozed") && !trashView
+        && idx.data(MessageListModel::SnoozeWakeRole).toLongLong() > 0) {
         return false;
     }
     if (!m_terms.isEmpty()) {

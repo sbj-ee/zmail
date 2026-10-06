@@ -138,6 +138,8 @@ private:
     void showContacts();
     void addSenderToContacts();
     void trashMessage(QString id);
+    void onTrashFailed(const QString &id);
+    QString currentListId() const;
     void runFullTextSearch(const QString &text);
     void junkMessage(QString id);
     void notJunkMessage(QString id);
@@ -202,6 +204,16 @@ private:
     QString m_lastSync;     // "8:45 AM"
     QString m_shownId;      // message currently in the preview
     int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
+    // A Delete still waiting on Gmail: if it fails, the next reload selects
+    // the message again, provided the user is still on the neighbour that
+    // Delete moved to, in the same mailbox.
+    struct PendingTrash
+    {
+        QString mailbox;
+        QString neighbour; // id selected after the Delete ("" = none)
+    };
+    QHash<QString, PendingTrash> m_pendingTrash;
+    QString m_reselectAfterReload; // id to select (and show) on the next reload
     QAction *m_undoDeleteAction = nullptr;
     QWidget *m_undoBar = nullptr;      // "Moved to Trash. [Undo]" in the status bar
     QLabel *m_undoLabel = nullptr;

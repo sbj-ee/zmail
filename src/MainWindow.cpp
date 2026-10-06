@@ -1088,6 +1088,8 @@ void MainWindow::attachSync()
     });
     connect(sync, &zmail::SyncEngine::syncError, this,
             [this](const QString &e) { statusBar()->showMessage(e, 10000); });
+    connect(sync, &zmail::SyncEngine::trashFailed, this, [this](const QString &id) { onTrashFailed(id); });
+    connect(sync, &zmail::SyncEngine::trashSucceeded, this, [this](const QString &id) { m_pendingTrash.remove(id); });
     connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
         statusBar()->showMessage(tr("%n snoozed message(s) returned to the Inbox.", nullptr, int(ids.size())), 8000);
         if (m_reloadTimer) {
@@ -1165,13 +1167,19 @@ void MainWindow::reloadFromCache()
         m.attachments = c.attachments;
         items.append(std::move(m));
     }
+    const QString reselect = std::exchange(m_reselectAfterReload, QString());
     const QString keep = m_shownId;
     const int fallbackRow = std::exchange(m_selectRowAfterReload, -1);
     const int scroll = m_list->verticalScrollBar()->value();
     m_model->setItems(std::move(items));
+    const int back = reselect.isEmpty() ? -1 : m_model->rowForId(reselect);
+    const QModelIndex backIndex = back >= 0 ? m_proxy->mapFromSource(m_model->index(back, 0)) : QModelIndex();
     const int row = keep.isEmpty() ? -1 : m_model->rowForId(keep);
     const QModelIndex pi = row >= 0 ? m_proxy->mapFromSource(m_model->index(row, 0)) : QModelIndex();
-    if (pi.isValid()) {
+    if (backIndex.isValid()) {
+        // A failed Delete: the message is back, so select and show it again.
+        m_list->setCurrentIndex(backIndex);
+    } else if (pi.isValid()) {
         const QSignalBlocker block(m_list->selectionModel());
         m_list->setCurrentIndex(pi);
         m_shownId = keep;
@@ -1524,14 +1532,49 @@ void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, c
                                  5000);
         return;
     }
+    const bool wasCurrent = currentListId() == id;
     selectPastRemoved({id});
-    sync->trash(id); // optimistic; rolled back with an error if Gmail refuses
+    if (wasCurrent) {
+        m_pendingTrash.insert(id, {m_proxy->mailbox(), currentListId()});
+    }
+    sync->trash(id); // optimistic; rolled back (onTrashFailed) if Gmail refuses
     if (m_shownId == id) {
         m_view->clear();
         m_shownId.clear();
         updateMessageActions();
     }
     offerUndoDelete(id);
+}
+
+QString MainWindow::currentListId() const
+{
+    const QModelIndex cur = m_list->currentIndex();
+    return cur.isValid() ? m_model->item(m_proxy->mapToSource(cur).row()).id : QString();
+}
+
+void MainWindow::onTrashFailed(const QString &id)
+{
+    // The row comes back with the rollback's refresh; the error itself is
+    // already in the status bar (syncError). Nothing is left to undo.
+    if (m_lastTrashed == id) {
+        m_lastTrashed.clear();
+        if (m_undoTimer) {
+            m_undoTimer->stop();
+        }
+        if (m_undoBar) {
+            m_undoBar->hide();
+        }
+        m_undoDeleteAction->setEnabled(false);
+    }
+    const auto it = m_pendingTrash.constFind(id);
+    if (it == m_pendingTrash.constEnd()) {
+        return;
+    }
+    const PendingTrash p = *it;
+    m_pendingTrash.erase(it);
+    if (p.mailbox == m_proxy->mailbox() && p.neighbour == currentListId()) {
+        m_reselectAfterReload = id;
+    }
 }
 
 void MainWindow::runFullTextSearch(const QString &text)

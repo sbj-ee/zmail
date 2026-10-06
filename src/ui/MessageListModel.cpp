@@ -8,6 +8,8 @@
 #include <QDateTime>
 #include <QFont>
 #include <QPalette>
+#include <QMimeData>
+#include <QSet>
 
 namespace zmail::ui {
 
@@ -55,6 +57,46 @@ QString MessageListModel::formatDate(const QDateTime &dt)
 QString MessageListModel::formatSize(qint64 bytes)
 {
     return zmail::formatSize(bytes);
+}
+
+
+Qt::ItemFlags MessageListModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags f = QAbstractTableModel::flags(index);
+    if (index.isValid() && !m_items.at(index.row()).id.isEmpty()) {
+        f |= Qt::ItemIsDragEnabled;
+    }
+    return f;
+}
+
+QStringList MessageListModel::mimeTypes() const
+{
+    return {QString::fromLatin1(kMessageIdsMime)};
+}
+
+QMimeData *MessageListModel::mimeData(const QModelIndexList &indexes) const
+{
+    QSet<QString> ids;
+    for (const QModelIndex &i : indexes) {
+        if (!i.isValid()) {
+            continue;
+        }
+        const QString id = m_items.at(i.row()).id;
+        if (!id.isEmpty()) {
+            ids.insert(id);
+        }
+    }
+    if (ids.isEmpty()) {
+        return nullptr;
+    }
+    auto *mime = new QMimeData;
+    QByteArray raw;
+    for (const QString &id : ids) {
+        raw += id.toUtf8();
+        raw += char(10);
+    }
+    mime->setData(QByteArray(kMessageIdsMime), raw);
+    return mime;
 }
 
 void MessageListModel::paletteChanged()

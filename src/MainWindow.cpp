@@ -32,6 +32,7 @@
 #include "version.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 #include <QAction>
 #include <QActionGroup>
@@ -57,6 +58,11 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QDropEvent>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QInputDialog>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
@@ -83,6 +89,71 @@ public:
     QSize sizeHint(const QStyleOptionViewItem &opt, const QModelIndex &index) const override
     {
         return QStyledItemDelegate::sizeHint(opt, index) + QSize(4, 6);
+    }
+};
+
+// Sidebar mailbox tree: accepts message-list drops onto user Gmail labels
+// (folder-style move). onDrop(labelId, ids) is set by MainWindow.
+class MailboxTree : public QTreeWidget
+{
+public:
+    std::function<void(const QString &labelId, const QStringList &ids)> onDrop;
+
+    explicit MailboxTree(QWidget *parent = nullptr) : QTreeWidget(parent)
+    {
+        setAcceptDrops(true);
+        setDropIndicatorShown(true);
+    }
+
+protected:
+    void dragEnterEvent(QDragEnterEvent *e) override
+    {
+        if (e->mimeData()->hasFormat(QByteArray(MessageListModel::kMessageIdsMime))) {
+            e->acceptProposedAction();
+        } else {
+            e->ignore();
+        }
+    }
+    void dragMoveEvent(QDragMoveEvent *e) override
+    {
+        if (!e->mimeData()->hasFormat(QByteArray(MessageListModel::kMessageIdsMime))) {
+            e->ignore();
+            return;
+        }
+        QTreeWidgetItem *it = itemAt(e->position().toPoint());
+        const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
+        if (isUserLabelKey(key)) {
+            e->acceptProposedAction();
+        } else {
+            e->ignore();
+        }
+    }
+    void dropEvent(QDropEvent *e) override
+    {
+        QTreeWidgetItem *it = itemAt(e->position().toPoint());
+        const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
+        if (!isUserLabelKey(key) || !onDrop) {
+            e->ignore();
+            return;
+        }
+        const QByteArray raw = e->mimeData()->data(QByteArray(MessageListModel::kMessageIdsMime));
+        QStringList ids;
+        for (const QByteArray &line : raw.split(char(10))) {
+            const QString id = QString::fromUtf8(line).trimmed();
+            if (!id.isEmpty()) {
+                ids.append(id);
+            }
+        }
+        e->acceptProposedAction();
+        onDrop(key.mid(6), ids);
+    }
+
+private:
+    static bool isUserLabelKey(const QString &key)
+    {
+        // User labels have Gmail ids like Label_12. System rows under Gmail
+        // Labels (STARRED, …) are not folder drop targets.
+        return key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"));
     }
 };
 
@@ -482,7 +553,8 @@ void MainWindow::buildPanes()
     m_splitter->setObjectName(QStringLiteral("mainSplitter"));
     m_splitter->setHandleWidth(5);
 
-    m_mailboxes = new QTreeWidget(m_splitter);
+    auto *mailboxTree = new MailboxTree(m_splitter);
+    m_mailboxes = mailboxTree;
     m_mailboxes->setObjectName(QStringLiteral("mailboxTree"));
     m_mailboxes->setColumnCount(2);
     m_mailboxes->setHeaderHidden(true);
@@ -493,6 +565,9 @@ void MainWindow::buildPanes()
     m_mailboxes->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_mailboxes->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     m_mailboxes->setItemDelegate(new RoomyRowDelegate(m_mailboxes));
+    mailboxTree->onDrop = [this](const QString &labelId, const QStringList &ids) {
+        moveMessagesToLabel(ids, labelId);
+    };
 
     m_listSplitter = new QSplitter(Qt::Vertical, m_splitter);
     m_listSplitter->setObjectName(QStringLiteral("listPreviewSplitter"));
@@ -507,6 +582,9 @@ void MainWindow::buildPanes()
     m_list->setSortingEnabled(true);
     m_list->setAllColumnsShowFocus(true);
     m_list->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_list->setDragEnabled(true);
+    m_list->setDragDropMode(QAbstractItemView::DragOnly);
+    m_list->setDefaultDropAction(Qt::MoveAction);
     m_list->setIconSize(QSize(14, 14));
     m_list->sortByColumn(MessageListModel::Date, Qt::DescendingOrder);
     QHeaderView *h = m_list->header();
@@ -587,6 +665,8 @@ void MainWindow::populateMailboxes()
 {
     const QSignalBlocker block(m_mailboxes);
     m_mailboxes->clear();
+    // Folder-style counts: total messages in the mailbox/label (not unread).
+    // Unread emphasis (bold name) is kept when Gmail reports unread > 0.
     auto countFor = [this](const QString &key, bool unreadOnly) {
         int n = 0;
         const bool hide = hideSpam();
@@ -603,62 +683,68 @@ void MainWindow::populateMailboxes()
         return n;
     };
     const bool showJunkFolder = !hideSpam() || m_proxy->mailbox() == QLatin1String("Junk");
+    const QPalette palEarly = QApplication::palette();
     auto add = [&](QTreeWidgetItem *parent, const QString &name, const QIcon &ic, const QString &key,
-                   bool countUnread = true, int forced = -1) {
+                   int forcedTotal = -1, int unreadHint = 0) {
         auto *it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_mailboxes);
         it->setText(0, name);
         it->setIcon(0, ic);
         it->setData(0, Qt::UserRole, key);
-        const int n = forced >= 0 ? forced : key.isEmpty() ? 0 : countFor(key, countUnread);
+        const int n = forcedTotal >= 0 ? forcedTotal : key.isEmpty() ? 0 : countFor(key, false);
         if (n > 0) {
             it->setText(1, QString::number(n));
             it->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-            if (countUnread) {
-                QFont f = m_mailboxes->font();
-                f.setBold(true);
-                it->setFont(0, f);
-                it->setFont(1, f);
-            }
+            it->setForeground(1, palEarly.color(QPalette::PlaceholderText));
+        }
+        if (unreadHint > 0) {
+            QFont f = m_mailboxes->font();
+            f.setBold(true);
+            it->setFont(0, f);
         }
         return it;
     };
     const QPalette pal = QApplication::palette();
     if (m_live && m_session->cache()) {
         // Real Gmail labels: system ones map onto Eudora's mailboxes, user
-        // labels (nested on "/") go under "Gmail Labels". Unread counts come
-        // from Gmail, so they're right even for mail not cached yet.
+        // labels (nested on "/") go under "Gmail Labels" like folders.
+        // messagesTotal comes from labels.get (list omits counts on real Gmail).
         QHash<QString, zmail::CachedLabel> byId;
         for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
             byId.insert(l.id, l);
         }
+        auto total = [&](const QString &id) { return byId.contains(id) ? byId.value(id).total : 0; };
         auto unread = [&](const QString &id) { return byId.contains(id) ? byId.value(id).unread : 0; };
-        add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), true, unread(QStringLiteral("INBOX")));
-        QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false, 0);
+        add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), total(QStringLiteral("INBOX")),
+            unread(QStringLiteral("INBOX")));
+        QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"),
+                                   total(QStringLiteral("SENT")));
         out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
-        add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"), false,
+        add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"),
             m_session->cache() ? int(m_session->cache()->snoozes(true).size()) : 0);
         if (showJunkFolder) {
             QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
                                         icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
-                                        QStringLiteral("Junk"), false, unread(QStringLiteral("SPAM")));
+                                        QStringLiteral("Junk"), total(QStringLiteral("SPAM")),
+                                        unread(QStringLiteral("SPAM")));
             junk->setForeground(0, suspiciousForeground(pal));
             junk->setToolTip(0, tr("Gmail Spam"));
         }
         if (m_proxy->mailbox() == QLatin1String("Search") || !m_proxy->searchIds().isEmpty()
             || (m_search && !m_search->text().trimmed().isEmpty())) {
-            add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"), false);
+            add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"));
         }
-        add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false, 0);
+        add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), total(QStringLiteral("TRASH")));
 
         auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
         root->setFlags(root->flags() & ~Qt::ItemIsSelectable);
+        root->setData(0, Qt::UserRole + 1, QStringLiteral("labels-root"));
         struct S { const char *id; QString name; const char *icon; };
         for (const S &sys : {S{"STARRED", tr("Starred"), "star"}, S{"IMPORTANT", tr("Important"), "flag"},
                              S{"DRAFT", tr("Drafts"), "square-pen"}}) {
             const QString id = QString::fromLatin1(sys.id);
             if (byId.contains(id)) {
-                add(root, sys.name, icon(QString::fromLatin1(sys.icon)), QStringLiteral("gmail:") + id, true,
-                    id == QLatin1String("DRAFT") ? 0 : unread(id));
+                add(root, sys.name, icon(QString::fromLatin1(sys.icon)), QStringLiteral("gmail:") + id,
+                    total(id), unread(id));
             }
         }
         QHash<QString, QTreeWidgetItem *> folders;
@@ -680,41 +766,46 @@ void MainWindow::populateMailboxes()
                 if (!folders.contains(path)) {
                     auto *f = add(parent, parts[i], icon(QStringLiteral("folder")), QString());
                     f->setFlags(f->flags() & ~Qt::ItemIsSelectable);
+                    f->setData(0, Qt::UserRole + 1, QStringLiteral("folder-prefix:") + path);
                     folders.insert(path, f);
                 }
                 parent = folders.value(path);
             }
             const QColor c = l.color.isEmpty() ? pal.color(QPalette::Mid) : QColor(l.color);
-            QTreeWidgetItem *it = add(parent, parts.last(), swatch(c, 14), QStringLiteral("gmail:") + l.id, true, l.unread);
+            QTreeWidgetItem *it = add(parent, parts.last(), swatch(c, 14), QStringLiteral("gmail:") + l.id, l.total,
+                                      l.unread);
+            it->setData(0, Qt::UserRole + 2, l.name); // full Gmail label name for rename
+            it->setToolTip(0, tr("Folder · drag mail here to move (leaves Inbox)"));
             folders.insert(l.name, it);
         }
         m_mailboxes->expandAll();
         return;
     }
-    add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"));
-    QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false);
+    add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), -1, countFor(QStringLiteral("In"), true));
+    QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"));
     out->setToolTip(0, tr("Queued and sent mail"));
-    add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"), false);
+    add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"));
     if (showJunkFolder) {
         QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
                                     icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
-                                    QStringLiteral("Junk"), false);
+                                    QStringLiteral("Junk"));
         junk->setForeground(0, suspiciousForeground(pal));
         junk->setToolTip(0, tr("Gmail Spam"));
     }
     if (m_proxy->mailbox() == QLatin1String("Search") || !m_proxy->searchIds().isEmpty()
         || (m_search && !m_search->text().trimmed().isEmpty())) {
-        add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"), false);
+        add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"));
     }
-    add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false);
+    add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"));
 
     auto *labels = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
     labels->setFlags(labels->flags() & ~Qt::ItemIsSelectable);
+    labels->setData(0, Qt::UserRole + 1, QStringLiteral("labels-root"));
     struct L { QString name; QColor color; };
     for (const L &l : {L{tr("Family"), QColor(0x00, 0x89, 0x7b)}, L{tr("Work"), QColor(0x7b, 0x3f, 0xb5)},
                        L{tr("Receipts"), QColor(0xe0, 0x8e, 0x0b)}, L{tr("Travel"), QColor(0x1e, 0x6f, 0xd9)},
                        L{tr("Newsletters"), QColor(0x78, 0x80, 0x88)}}) {
-        add(labels, l.name, swatch(l.color, 14), QStringLiteral("label:") + l.name, false);
+        add(labels, l.name, swatch(l.color, 14), QStringLiteral("label:") + l.name);
     }
     m_mailboxes->expandAll();
 }
@@ -1976,6 +2067,42 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
     auto *menu = new QMenu(this);
     menu->setObjectName(QStringLiteral("mailboxMenu"));
     const QString key = item ? item->data(0, Qt::UserRole).toString() : QString();
+    const QString meta = item ? item->data(0, Qt::UserRole + 1).toString() : QString();
+    const bool live = m_live && m_session && m_session->sync();
+    const bool userLabel = key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"));
+    const bool labelsRoot = meta == QLatin1String("labels-root");
+    const bool folderPrefix = meta.startsWith(QLatin1String("folder-prefix:"));
+
+    if (live) {
+        QString prefix;
+        if (folderPrefix) {
+            prefix = meta.mid(QStringLiteral("folder-prefix:").size()) + QLatin1Char('/');
+        } else if (userLabel) {
+            const QString full = item->data(0, Qt::UserRole + 2).toString();
+            prefix = full.isEmpty() ? QString() : full + QLatin1Char('/');
+        }
+        QAction *neu = menu->addAction(icon(QStringLiteral("folder")), tr("&New Folder…"), menu, [this, prefix]() {
+            newLabelFolder(prefix);
+        });
+        neu->setObjectName(QStringLiteral("actionNewFolder"));
+        if (userLabel) {
+            const QString id = key.mid(6);
+            const QString fullName = item->data(0, Qt::UserRole + 2).toString();
+            QAction *ren = menu->addAction(tr("&Rename Folder…"), menu, [this, id, fullName]() {
+                renameLabelFolder(id, fullName);
+            });
+            ren->setObjectName(QStringLiteral("actionRenameFolder"));
+            QAction *del = menu->addAction(icon(QStringLiteral("trash")), tr("&Delete Folder…"), menu,
+                                           [this, id, fullName, item]() {
+                                               deleteLabelFolder(id, fullName.isEmpty() ? item->text(0) : fullName);
+                                           });
+            del->setObjectName(QStringLiteral("actionDeleteFolder"));
+        } else if (labelsRoot || folderPrefix) {
+            // New Folder is enough on the group headers.
+        }
+        menu->addSeparator();
+    }
+
     if (!key.isEmpty()) {
         QAction *all = menu->addAction(icon(QStringLiteral("mail-open")), tr("Mark All as &Read"), menu,
                                        [this, key]() { markAllRead(key); });
@@ -2030,11 +2157,9 @@ void MainWindow::markAllRead(const QString &key)
         ++n;
     }
     if (!sync) {
-        // Sample mail: clear the mailbox's unread badge (live mail
-        // repopulates from Gmail's counts).
+        // Sample mail: totals stay; only clear unread emphasis (bold name).
         for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
             if ((*it)->data(0, Qt::UserRole).toString() == key) {
-                (*it)->setText(1, QString());
                 (*it)->setFont(0, m_mailboxes->font());
                 (*it)->setFont(1, m_mailboxes->font());
             }
@@ -2042,6 +2167,82 @@ void MainWindow::markAllRead(const QString &key)
     }
     updateCounts();
     statusBar()->showMessage(n == 1 ? tr("Marked 1 message as read.") : tr("Marked %1 messages as read.").arg(n), 5000);
+}
+
+
+void MainWindow::newLabelFolder(const QString &namePrefix)
+{
+    if (!(m_live && m_session && m_session->sync())) {
+        return;
+    }
+    bool ok = false;
+    const QString suggested = namePrefix.isEmpty() ? tr("New Folder") : namePrefix + tr("New Folder");
+    const QString name = QInputDialog::getText(this, tr("New Folder"),
+                                               tr("Folder name (use / for nested folders):"),
+                                               QLineEdit::Normal, suggested, &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty()) {
+        return;
+    }
+    m_session->sync()->createLabel(name);
+    statusBar()->showMessage(tr("Creating folder \"%1\"\u2026").arg(name), 4000);
+}
+
+void MainWindow::renameLabelFolder(const QString &labelId, const QString &currentName)
+{
+    if (!(m_live && m_session && m_session->sync()) || labelId.isEmpty()) {
+        return;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("Rename Folder"),
+                                               tr("Folder name (use / for nested folders):"),
+                                               QLineEdit::Normal, currentName, &ok)
+                             .trimmed();
+    if (!ok || name.isEmpty() || name == currentName) {
+        return;
+    }
+    m_session->sync()->renameLabel(labelId, name);
+    statusBar()->showMessage(tr("Renaming folder\u2026"), 4000);
+}
+
+void MainWindow::deleteLabelFolder(const QString &labelId, const QString &displayName)
+{
+    if (!(m_live && m_session && m_session->sync()) || labelId.isEmpty()) {
+        return;
+    }
+    const auto choice = QMessageBox::question(
+        this, tr("Delete Folder"),
+        tr("Delete the folder \"%1\"?\n\n"
+           "Only the folder (Gmail label) is removed. Messages in it are not "
+           "deleted or moved to Trash — they keep any other labels and stay in "
+           "All Mail / Inbox as before.")
+            .arg(displayName),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (choice != QMessageBox::Yes) {
+        return;
+    }
+    // If this folder is selected, leave it before it disappears.
+    if (m_proxy->mailbox() == QLatin1String("gmail:") + labelId) {
+        selectMailbox(QStringLiteral("In"));
+    }
+    m_session->sync()->deleteLabel(labelId);
+    statusBar()->showMessage(tr("Deleting folder \"%1\"\u2026").arg(displayName), 4000);
+}
+
+void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId)
+{
+    if (!(m_live && m_session && m_session->sync()) || messageIds.isEmpty() || targetLabelId.isEmpty()) {
+        return;
+    }
+    const QString source = m_proxy->mailbox();
+    zmail::SyncEngine *sync = m_session->sync();
+    for (const QString &id : messageIds) {
+        sync->moveToLabel(id, targetLabelId, source);
+    }
+    statusBar()->showMessage(
+        messageIds.size() == 1 ? tr("Moved 1 message to folder.")
+                               : tr("Moved %1 messages to folder.").arg(messageIds.size()),
+        5000);
 }
 
 void MainWindow::setCurrentRead(bool read)

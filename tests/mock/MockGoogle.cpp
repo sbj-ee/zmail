@@ -9,6 +9,7 @@
 #include <QRegularExpression>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QUrl>
 #include <QUrlQuery>
 
 namespace zmail::test {
@@ -492,23 +493,114 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
                            {QStringLiteral("historyId"), QString::number(m_historyId)}});
         return;
     }
-    if (rest == QLatin1String("/labels")) {
-        QJsonArray arr;
+    // Real Gmail: labels.list omits messagesTotal / messagesUnread; labels.get
+    // fills them in. Match that so sync's get-after-list path is exercised.
+    auto labelCounts = [this](const QString &id) {
+        int total = 0, unread = 0;
+        for (const Message &m : m_messages) {
+            if (m.labels.contains(id)) {
+                ++total;
+                unread += m.labels.contains(QStringLiteral("UNREAD"));
+            }
+        }
+        return qMakePair(total, unread);
+    };
+    auto labelJson = [&](const Label &l, bool withCounts) {
+        QJsonObject o{{QStringLiteral("id"), l.id}, {QStringLiteral("name"), l.name}, {QStringLiteral("type"), l.type}};
+        if (withCounts) {
+            const auto c = labelCounts(l.id);
+            o.insert(QStringLiteral("messagesTotal"), c.first);
+            o.insert(QStringLiteral("messagesUnread"), c.second);
+        }
+        if (!l.color.isEmpty()) {
+            o.insert(QStringLiteral("color"),
+                     QJsonObject{{QStringLiteral("backgroundColor"), l.color},
+                                 {QStringLiteral("textColor"), QStringLiteral("#ffffff")}});
+        }
+        return o;
+    };
+    if (rest.startsWith(QLatin1String("/labels/"))) {
+        const QString id = QUrl::fromPercentEncoding(rest.mid(8).toUtf8());
+        if (method == "DELETE") {
+            for (int i = 0; i < m_labels.size(); ++i) {
+                if (m_labels[i].id != id) {
+                    continue;
+                }
+                if (m_labels[i].type != QLatin1String("user")) {
+                    replyJson(s, 400, gerror(400, QStringLiteral("FAILED_PRECONDITION"),
+                                             QStringLiteral("Cannot delete system label")));
+                    return;
+                }
+                m_labels.removeAt(i);
+                for (Message &m : m_messages) {
+                    m.labels.removeAll(id);
+                }
+                replyJson(s, 200, {});
+                return;
+            }
+            replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Label not found")));
+            return;
+        }
+        if (method == "PATCH" || method == "PUT") {
+            const QJsonObject bodyJson = QJsonDocument::fromJson(body).object();
+            for (Label &l : m_labels) {
+                if (l.id != id) {
+                    continue;
+                }
+                if (l.type != QLatin1String("user")) {
+                    replyJson(s, 400, gerror(400, QStringLiteral("FAILED_PRECONDITION"),
+                                             QStringLiteral("Cannot update system label")));
+                    return;
+                }
+                if (bodyJson.contains(QStringLiteral("name"))) {
+                    l.name = bodyJson.value(QStringLiteral("name")).toString();
+                }
+                const QJsonObject color = bodyJson.value(QStringLiteral("color")).toObject();
+                if (!color.isEmpty()) {
+                    l.color = color.value(QStringLiteral("backgroundColor")).toString();
+                }
+                replyJson(s, 200, labelJson(l, true));
+                return;
+            }
+            replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Label not found")));
+            return;
+        }
+        // GET
         for (const Label &l : m_labels) {
-            int total = 0, unread = 0;
-            for (const Message &m : m_messages) {
-                if (m.labels.contains(l.id)) {
-                    ++total;
-                    unread += m.labels.contains(QStringLiteral("UNREAD"));
+            if (l.id == id) {
+                replyJson(s, 200, labelJson(l, true));
+                return;
+            }
+        }
+        replyJson(s, 404, gerror(404, QStringLiteral("NOT_FOUND"), QStringLiteral("Label not found")));
+        return;
+    }
+    if (rest == QLatin1String("/labels")) {
+        if (method == "POST") {
+            const QJsonObject bodyJson = QJsonDocument::fromJson(body).object();
+            const QString name = bodyJson.value(QStringLiteral("name")).toString().trimmed();
+            if (name.isEmpty()) {
+                replyJson(s, 400, gerror(400, QStringLiteral("INVALID_ARGUMENT"), QStringLiteral("name required")));
+                return;
+            }
+            int maxN = 0;
+            for (const Label &l : m_labels) {
+                if (l.id.startsWith(QLatin1String("Label_"))) {
+                    maxN = std::max(maxN, l.id.mid(6).toInt());
                 }
             }
-            QJsonObject o{{QStringLiteral("id"), l.id}, {QStringLiteral("name"), l.name}, {QStringLiteral("type"), l.type},
-                          {QStringLiteral("messagesTotal"), total}, {QStringLiteral("messagesUnread"), unread}};
-            if (!l.color.isEmpty()) {
-                o.insert(QStringLiteral("color"), QJsonObject{{QStringLiteral("backgroundColor"), l.color},
-                                                              {QStringLiteral("textColor"), QStringLiteral("#ffffff")}});
-            }
-            arr.append(o);
+            Label l;
+            l.id = QStringLiteral("Label_%1").arg(maxN + 1);
+            l.name = name;
+            l.type = QStringLiteral("user");
+            l.color = bodyJson.value(QStringLiteral("color")).toObject().value(QStringLiteral("backgroundColor")).toString();
+            m_labels.append(l);
+            replyJson(s, 200, labelJson(l, true));
+            return;
+        }
+        QJsonArray arr;
+        for (const Label &l : m_labels) {
+            arr.append(labelJson(l, false));
         }
         replyJson(s, 200, {{QStringLiteral("labels"), arr}});
         return;

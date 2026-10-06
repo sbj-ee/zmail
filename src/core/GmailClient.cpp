@@ -12,6 +12,7 @@
 #include <QNetworkRequest>
 #include <QRandomGenerator>
 #include <QTimer>
+#include <QUrl>
 
 namespace zmail {
 
@@ -54,6 +55,49 @@ void GmailClient::getProfile(JsonCb cb)
 void GmailClient::listLabels(JsonCb cb)
 {
     call("GET", QStringLiteral("/labels"), {}, {}, 1, std::move(cb));
+}
+
+void GmailClient::getLabel(const QString &id, JsonCb cb)
+{
+    // Label ids are usually [A-Za-z0-9_]+ (INBOX, Label_12); percent-encode
+    // anyway so odd ids never break the path.
+    const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
+    call("GET", QStringLiteral("/labels/") + enc, {}, {}, 1, std::move(cb));
+}
+
+void GmailClient::createLabel(const QString &name, const QString &backgroundColor, JsonCb cb)
+{
+    QJsonObject o{{QStringLiteral("name"), name},
+                  {QStringLiteral("labelListVisibility"), QStringLiteral("labelShow")},
+                  {QStringLiteral("messageListVisibility"), QStringLiteral("show")}};
+    if (!backgroundColor.isEmpty()) {
+        o.insert(QStringLiteral("color"),
+                 QJsonObject{{QStringLiteral("backgroundColor"), backgroundColor},
+                             {QStringLiteral("textColor"), QStringLiteral("#ffffff")}});
+    }
+    call("POST", QStringLiteral("/labels"), {}, QJsonDocument(o).toJson(QJsonDocument::Compact), 5, std::move(cb));
+}
+
+void GmailClient::updateLabel(const QString &id, const QString &name, const QString &backgroundColor, JsonCb cb)
+{
+    QJsonObject o{{QStringLiteral("id"), id},
+                  {QStringLiteral("name"), name},
+                  {QStringLiteral("labelListVisibility"), QStringLiteral("labelShow")},
+                  {QStringLiteral("messageListVisibility"), QStringLiteral("show")}};
+    if (!backgroundColor.isEmpty()) {
+        o.insert(QStringLiteral("color"),
+                 QJsonObject{{QStringLiteral("backgroundColor"), backgroundColor},
+                             {QStringLiteral("textColor"), QStringLiteral("#ffffff")}});
+    }
+    const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
+    call("PATCH", QStringLiteral("/labels/") + enc, {}, QJsonDocument(o).toJson(QJsonDocument::Compact), 5,
+         std::move(cb));
+}
+
+void GmailClient::deleteLabel(const QString &id, JsonCb cb)
+{
+    const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
+    call("DELETE", QStringLiteral("/labels/") + enc, {}, {}, 5, std::move(cb));
 }
 
 void GmailClient::listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb)
@@ -227,7 +271,13 @@ void GmailClient::send(Call c)
             r = m_nam->deleteResource(req);
         } else {
             req.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromLatin1(rq.contentType));
-            r = rq.verb == "PUT" ? m_nam->put(req, rq.body) : m_nam->post(req, rq.body);
+            if (rq.verb == "PUT") {
+                r = m_nam->put(req, rq.body);
+            } else if (rq.verb == "PATCH") {
+                r = m_nam->sendCustomRequest(req, "PATCH", rq.body);
+            } else {
+                r = m_nam->post(req, rq.body); // POST and anything else
+            }
         }
         if (rq.progress) {
             connect(r, &QNetworkReply::uploadProgress, this, [p = rq.progress](qint64 s, qint64 t) { p(s, t); });

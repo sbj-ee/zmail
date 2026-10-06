@@ -1,0 +1,49 @@
+{
+    "basedOn": "badgers",
+    "fonts": {
+        "terminal": "DejaVu Sans Mono",
+        "terminalSize": 12
+    },
+    "format": "ztheme",
+    "name": "Badgers Night",
+    "palette": {
+        "accent": "#C5050C",
+        "background": "#121212",
+        "chrome": "#C5050C",
+        "chromeText": "#FFFFFF",
+        "foreground": "#FFFFFF",
+        "header": "#C5050C",
+        "headerText": "#FFFFFF",
+        "link": "#FF7B80",
+        "muted": "#ADB1B4",
+        "selection": "#9B0000",
+        "selectionText": "#FFFFFF",
+        "surface": "#1E1E1E"
+    },
+    "terminal": {
+        "ansi": [
+            "#2A2A2A",
+            "#F0474E",
+            "#7FC97F",
+            "#F2C14E",
+            "#7AB0F0",
+            "#D88AD8",
+            "#5CC8C8",
+            "#E1E5E7",
+            "#8A8D91",
+            "#FF7B80",
+            "#A8E6A3",
+            "#FFDA7A",
+            "#9DC4F5",
+            "#F0B0F0",
+            "#90E3E3",
+            "#FFFFFF"
+        ],
+        "cursor": "#C5050C",
+        "cursorBlink": false,
+        "cursorShape": "block",
+        "selection": "#9B0000",
+        "selectionText": "#FFFFFF"
+    },
+    "version": 1
+}

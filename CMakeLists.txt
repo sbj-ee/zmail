@@ -121,6 +121,10 @@ add_library(zmail_app STATIC
   src/ui/BrandThemes.h
   src/ui/Theme.cpp
   src/ui/Theme.h
+  src/ui/ThemeEditorDialog.cpp
+  src/ui/ThemeEditorDialog.h
+  src/ui/ThemeFile.cpp
+  src/ui/ThemeFile.h
 )
 
 # Bundled Lucide icons (ISC/MIT; see assets/icons/LICENSES) as :/icons/lucide/*.svg

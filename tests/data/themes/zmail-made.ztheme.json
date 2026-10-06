@@ -1,0 +1,27 @@
+{
+    "basedOn": "dark",
+    "fonts": {
+        "ui": "DejaVu Sans",
+        "uiSize": 11
+    },
+    "format": "ztheme",
+    "name": "Lakeside Dusk",
+    "palette": {
+        "accent": "#3FA796",
+        "background": "#1F2225",
+        "chrome": "#2A2D31",
+        "chromeText": "#E4E6E8",
+        "foreground": "#E4E6E8",
+        "header": "#33373C",
+        "headerText": "#E4E6E8",
+        "link": "#7AB4FF",
+        "muted": "#8A9097",
+        "selection": "#1F6F63",
+        "selectionText": "#FFFFFF",
+        "surface": "#2A2D31"
+    },
+    "ui": {
+        "rowStripes": 55
+    },
+    "version": 1
+}

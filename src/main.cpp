@@ -21,7 +21,7 @@ int main(int argc, char *argv[])
     cli.addHelpOption();
     cli.addVersionOption();
     QCommandLineOption theme(QStringLiteral("theme"),
-                             QStringLiteral("light, dark, system, boilermakers, badgers or packers "
+                             QStringLiteral("light, dark, system, boilermakers, badgers, packers or custom:<file stem> "
                                             "(default: the last one picked in View > Theme)."),
                              QStringLiteral("mode"));
     QCommandLineOption compose(QStringLiteral("compose"),
@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
     // --theme wins; otherwise View > Theme's last choice (QSettings ui/theme).
     const QString t = cli.isSet(theme) ? cli.value(theme)
                                        : QSettings().value(QLatin1String(zmail::ui::kThemeSettingKey)).toString();
-    zmail::ui::applyTheme(zmail::ui::themeFromId(t));
+    zmail::ui::applyThemeId(t); // built-in or custom (View > Theme > Theme Editor)
 
     MainWindow w;
     w.show();

@@ -29,6 +29,7 @@ class MessageListModel;
 class MessageFilterProxy;
 class NewMailSound;
 class SoundDialog;
+class ThemeEditorDialog;
 class SafeHtmlView;
 class MessageView;
 class MessageWindow;
@@ -86,6 +87,11 @@ public:
     zmail::ui::StripesDialog *showStripesDialog(); // non-modal; returned for tests
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
     zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
+    // Any theme id, built-in or custom ("custom:<stem>", "zterminal:<stem>");
+    // remembered. A theme with ui.rowStripes also sets the row stripes.
+    void setThemeId(const QString &id);
+    // View > Theme > Theme Editor (non-modal, shown; returned for tests).
+    zmail::ui::ThemeEditorDialog *showThemeEditor();
 
     // Preview pane under the list (Eudora) or to its right; remembered.
     void setPreviewRight(bool right);
@@ -157,6 +163,10 @@ private:
     zmail::ui::MessageFilterProxy *m_proxy = nullptr;
     UpdateChecker *m_updates = nullptr;
     QActionGroup *m_themeGroup = nullptr;
+    QMenu *m_themeMenu = nullptr;
+    QAction *m_themeEditorAction = nullptr;
+    QList<QAction *> m_customThemeActions; // rebuilt from the themes dirs
+    void rebuildCustomThemeActions();
     QList<ComposeWindow *> m_composers;
     zmail::MailSession *m_session = nullptr;
     zmail::ui::NewMailSound *m_sound = nullptr;

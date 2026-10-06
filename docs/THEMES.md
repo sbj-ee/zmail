@@ -91,6 +91,85 @@ Text pairs are >= 7:1 (WCAG AAA) except Badgers' white on Badger Red
 In zmail the message body keeps its own white page (or View → Dark Background
 for Messages), so mail stays readable in every theme.
 
+## Theme files (custom themes)
+
+Both apps have a **Theme Editor** (zmail: View → Theme → Theme Editor…;
+zterminal: Settings → Theme Editor…). It saves custom themes as small JSON
+files, `<name>.ztheme.json`, in the app's config dir:
+
+| App | Own themes (editable) | The other app's themes (listed read-only) |
+|---|---|---|
+| zmail | `~/.config/zmail/themes/` | `~/.config/zterminal/themes/` |
+| zterminal | `~/.config/zterminal/themes/` | `~/.config/zmail/themes/` |
+
+(`$XDG_CONFIG_HOME` replaces `~/.config` when set.) Custom themes appear in the
+theme menus next to the built-in ones; their ids are `custom:<file stem>` and,
+for the other app's, `zterminal:<stem>` / `zmail:<stem>`. Import copies a file
+into your own themes dir; Export writes the selected theme (built-ins too).
+
+The parser and writer are byte-identical in both repos (zmail
+`src/ui/ThemeFile.{h,cpp}`, zterminal `core/ThemeFile.{h,cpp}`), and both test
+suites read the same two fixtures in `tests/data/themes/`: one written by
+zmail's code, one by zterminal's.
+
+### Format (version 1)
+
+```json
+{
+    "format": "ztheme",
+    "version": 1,
+    "name": "Badgers Night",
+    "basedOn": "badgers",
+    "palette": {
+        "background": "#121212", "surface": "#1E1E1E", "foreground": "#FFFFFF",
+        "muted": "#ADB1B4", "accent": "#C5050C", "link": "#FF7B80",
+        "selection": "#9B0000", "selectionText": "#FFFFFF",
+        "chrome": "#C5050C", "chromeText": "#FFFFFF",
+        "header": "#C5050C", "headerText": "#FFFFFF"
+    },
+    "terminal": {
+        "ansi": ["#2A2A2A", "#F0474E", "... 16 colours, 0-15 ..."],
+        "cursor": "#C5050C", "selection": "#9B0000", "selectionText": "#FFFFFF",
+        "cursorShape": "block", "cursorBlink": false
+    },
+    "fonts": { "ui": "DejaVu Sans", "uiSize": 11, "terminal": "DejaVu Sans Mono", "terminalSize": 12 },
+    "ui": { "rowStripes": 55 }
+}
+```
+
+| Key | Required | Meaning |
+|---|---|---|
+| `format` | yes | Always `"ztheme"`. |
+| `version` | yes | Integer. 1 today; files with a newer version are refused ("newer than this app reads"). |
+| `name` | yes | 1-64 characters (trimmed). The file name is derived from it. |
+| `basedOn` | no | Id of the theme it was duplicated from (informational). |
+| `palette` | yes | The shared roles (see UI roles above), as `#RRGGBB` (or `#RGB`). `background` and `foreground` are required; missing roles are derived. |
+| `terminal` | no | zterminal: `ansi` (exactly 16 colours), `cursor`, `selection`, `selectionText`, `cursorShape` (`block`, `underline`, `bar`), `cursorBlink` (bool). Any part may be left out. zmail keeps but ignores it. |
+| `fonts` | no | `ui` / `uiSize` (zmail), `terminal` / `terminalSize` (zterminal). Sizes are whole points 4-72. Leave out to keep the app's font. |
+| `ui` | no | `rowStripes` 0-100: zmail's message-list stripes (Settings → Row Stripes); applying the theme sets it. |
+
+Unknown keys are ignored, so later versions can add blocks without breaking
+older apps. Files over 64 KB, malformed JSON and wrong types are refused
+with a one-line reason (Import shows it; bad files in a themes dir are skipped).
+Writers emit every palette role, sorted keys, 4-space indent.
+
+### Filling the gaps
+
+- **Missing palette roles** (only `background` and `foreground` are needed):
+  surface = 6% foreground over background; muted = 35% background over
+  foreground, lifted to 4.5:1; accent = link, else selection, else foreground;
+  link = accent lifted to 4.5:1; selection = accent, else 30% foreground over
+  background; chrome and header = surface; their text colours (and
+  selectionText) = whichever of foreground/background reads better.
+- **Missing `terminal` block** (e.g. a theme made in zmail): zterminal takes the
+  VS Code default ANSI hues and lifts each to >= 4.5:1 on the background;
+  0 = 12% foreground over background, 7 = 80% foreground, 8 = muted,
+  15 = foreground; cursor = accent; selection and selectionText from the
+  palette. A partial block keeps what it has and derives the rest.
+- **zmail** uses only `palette`, `fonts.ui` / `fonts.uiSize` and `ui`;
+  **zterminal** uses `palette.background` / `foreground`, `terminal` and
+  `fonts.terminal` / `fonts.terminalSize`.
+
 ## Screenshots
 
 One per theme per app (offline sample data). The files live in each repo's

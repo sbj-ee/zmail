@@ -47,6 +47,8 @@ add_library(zmail_app STATIC
   src/MainWindow.hpp
   src/UpdateChecker.cpp
   src/UpdateChecker.hpp
+  src/core/AddressGuard.cpp
+  src/core/AddressGuard.h
   src/core/AuthManager.cpp
   src/core/AuthManager.h
   src/core/ClientConfig.cpp

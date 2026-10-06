@@ -1,8 +1,11 @@
 #include "SafeHtmlView.h"
 
+#include "core/AddressGuard.h"
 #include "RemoteImages.h"
 
 #include <QDesktopServices>
+#include <QHostAddress>
+#include <QHostInfo>
 #include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -35,6 +38,23 @@ SafeHtmlView::SafeHtmlView(QWidget *parent)
 namespace {
 constexpr qint64 kMaxImageBytes = 10 * 1024 * 1024;
 constexpr int kMaxRemoteImages = 200;
+constexpr int kMaxRedirects = 5;
+bool s_loopbackForTests = false;
+
+bool addressAllowed(const QHostAddress &a)
+{
+    if (s_loopbackForTests && a.isLoopback()) {
+        return true;
+    }
+    return !net::isBlockedAddress(a);
+}
+
+QImage transparentPixel()
+{
+    QImage none(1, 1, QImage::Format_ARGB32);
+    none.fill(Qt::transparent);
+    return none;
+}
 } // namespace
 
 void SafeHtmlView::setRemoteImagesAllowed(bool allowed)
@@ -46,28 +66,98 @@ void SafeHtmlView::setRemoteImagesAllowed(bool allowed)
     }
 }
 
+void SafeHtmlView::setLoopbackAllowedForTests(bool on)
+{
+    s_loopbackForTests = on;
+}
+
 void SafeHtmlView::fetch(const QUrl &url)
 {
     if (m_pending.contains(url) || m_pending.size() + m_images.size() >= kMaxRemoteImages) {
         return;
     }
+    m_pending.insert(url);
+    fetchHop(url, url, 0);
+}
+
+// Give up on url (the image a message asked for): it shows as nothing.
+void SafeHtmlView::refuse(const QUrl &url)
+{
+    if (m_pending.remove(url)) {
+        ++m_refused;
+        m_images.insert(url, transparentPixel());
+    }
+}
+
+// One hop of fetching url: target is url itself or where a redirect sent it.
+void SafeHtmlView::fetchHop(const QUrl &url, const QUrl &target, int hops)
+{
+    const QString scheme = target.scheme().toLower();
+    if (scheme != QLatin1String("https") && !(scheme == QLatin1String("http") && RemoteImages::allowInsecureHttp())) {
+        refuse(url);
+        return;
+    }
     // RFC 2606 / 6761 names can't resolve: don't send them to DNS at all.
-    const QString host = url.host().toLower();
+    const QString host = target.host().toLower();
     for (const char *tld : {".example", ".test", ".invalid", ".localhost"}) {
+        if (s_loopbackForTests && host == QLatin1String("localhost")) {
+            break; // the tests' local server, looked up like any other name
+        }
         if (host.endsWith(QLatin1String(tld)) || host == QLatin1String(tld + 1)) {
-            QImage none(1, 1, QImage::Format_ARGB32);
-            none.fill(Qt::transparent);
-            m_images.insert(url, none);
+            m_pending.remove(url);
+            m_images.insert(url, transparentPixel());
             return;
         }
     }
+    if (host.isEmpty()) {
+        refuse(url);
+        return;
+    }
+    QHostAddress literal;
+    if (literal.setAddress(host)) {
+        if (addressAllowed(literal)) {
+            request(url, target, literal, hops);
+        } else {
+            refuse(url);
+        }
+        return;
+    }
+    QPointer<SafeHtmlView> self(this);
+    QHostInfo::lookupHost(host, this, [this, self, url, target, hops](const QHostInfo &info) {
+        if (!self || !m_pending.contains(url)) {
+            return;
+        }
+        // Connect only to an address that passed the check.
+        const QHostAddress pick = net::pickAllowed(info.addresses(), s_loopbackForTests);
+        if (pick.isNull()) {
+            refuse(url); // no address, or only private ones
+            return;
+        }
+        request(url, target, pick, hops);
+    });
+}
+
+void SafeHtmlView::request(const QUrl &url, const QUrl &target, const QHostAddress &address, int hops)
+{
     if (!m_nam) {
         m_nam = new QNetworkAccessManager(this);
-        m_nam->setRedirectPolicy(QNetworkRequest::NoLessSafeRedirectPolicy);
+        m_nam->setRedirectPolicy(QNetworkRequest::ManualRedirectPolicy);
     }
-    m_pending.insert(url);
     ++m_fetchesStarted;
-    QNetworkRequest req(url);
+    QUrl direct = target;
+    direct.setHost(address.toString()); // the address we checked, not a second lookup
+    QNetworkRequest req(direct);
+    QByteArray hostHeader = target.host(QUrl::FullyEncoded).toLatin1();
+    if (hostHeader.contains(':')) {
+        hostHeader = '[' + hostHeader + ']'; // IPv6 literal
+    }
+    if (target.port() != -1) {
+        hostHeader += ':' + QByteArray::number(target.port());
+    }
+    req.setRawHeader("Host", hostHeader);
+    req.setPeerVerifyName(target.host()); // TLS SNI and certificate name
+    req.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
     req.setTransferTimeout(15000);
     req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
     req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
@@ -80,20 +170,31 @@ void SafeHtmlView::fetch(const QUrl &url)
             reply->abort();
         }
     });
-    connect(reply, &QNetworkReply::finished, this, [this, self, reply, url]() {
+    connect(reply, &QNetworkReply::finished, this, [this, self, reply, url, target, hops]() {
         reply->deleteLater();
-        if (!self || !m_pending.remove(url) || !m_allowRemote) {
+        if (!self || !m_pending.contains(url)) {
             return;
         }
+        if (!m_allowRemote) {
+            m_pending.remove(url);
+            return;
+        }
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QUrl location = reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+        if (status >= 300 && status < 400 && location.isValid()) {
+            if (hops >= kMaxRedirects) {
+                refuse(url);
+            } else {
+                fetchHop(url, target.resolved(location), hops + 1); // scheme and address checked again
+            }
+            return;
+        }
+        m_pending.remove(url);
         QImage img;
         if (reply->error() == QNetworkReply::NoError) {
             img.loadFromData(reply->read(kMaxImageBytes));
         }
-        if (img.isNull()) {
-            img = QImage(1, 1, QImage::Format_ARGB32);
-            img.fill(Qt::transparent);
-        }
-        m_images.insert(url, img);
+        m_images.insert(url, img.isNull() ? transparentPixel() : img);
         emit remoteImageArrived();
     });
 }

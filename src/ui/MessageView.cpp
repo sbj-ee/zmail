@@ -130,6 +130,7 @@ MessageView::MessageView(QWidget *parent)
     ib->setContentsMargins(12, 4, 8, 4);
     m_imagesText = new QLabel(m_imagesBar);
     m_imagesText->setForegroundRole(QPalette::ToolTipText);
+    m_imagesText->setWordWrap(true); // Ask is the default: don't hold a narrow pane wide
     ib->addWidget(m_imagesText, 1);
     m_loadImages = new QPushButton(tr("Load images"), m_imagesBar);
     m_loadImages->setObjectName(QStringLiteral("loadImagesButton"));

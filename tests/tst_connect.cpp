@@ -11,7 +11,9 @@
 #include "ui/ConnectDialog.h"
 #include "ui/NewMailSound.h"
 #include "ui/SafeHtmlView.h"
+#include "ui/Theme.h"
 
+#include <QColor>
 #include <QFile>
 #include <QLabel>
 #include <QNetworkAccessManager>
@@ -197,6 +199,55 @@ private slots:
         for (const char *secret : {MockGoogle::kClientSecret, MockGoogle::kRefreshToken, MockGoogle::kAccessPrefix}) {
             QVERIFY2(!log.all().contains(QLatin1String(secret)), secret);
         }
+    }
+
+    void accountStatusCircleIsGreenWhenConnected()
+    {
+        MockGoogle g;
+        QVERIFY(g.listen());
+        g.seedDemo(5);
+        MemoryTokenStore store;
+        MailSession session(mockOptions(g, &store));
+        MainWindow w;
+        w.setSession(&session);
+        w.show();
+        auto *dot = w.findChild<QLabel *>(QStringLiteral("accountStatus"));
+        QVERIFY(dot);
+        QCOMPARE(dot->palette().color(QPalette::WindowText), ui::disconnectedForeground(QApplication::palette()));
+        QCOMPARE(dot->toolTip(), QStringLiteral("Disconnected"));
+
+        session.signIn();
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), MailSession::State::SignedIn, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(session.cache()->count(QStringLiteral("INBOX")) > 0 && !session.sync()->isBusy(), 20000);
+        QTRY_COMPARE(dot->toolTip(), QStringLiteral("Connected"));
+        QCOMPARE(dot->palette().color(QPalette::WindowText), ui::connectedForeground(QApplication::palette()));
+        QVERIFY(w.findChild<QLabel *>(QStringLiteral("syncLabel"))->text().contains(g.email));
+        QVERIFY(!w.findChild<QLabel *>(QStringLiteral("syncLabel"))->text().startsWith(QStringLiteral("\u25cf")));
+    }
+
+    void accountStatusCircleIsRedOnSyncError()
+    {
+        MockGoogle g;
+        QVERIFY(g.listen());
+        g.seedDemo(5);
+        MemoryTokenStore store;
+        MailSession session(mockOptions(g, &store));
+        MainWindow w;
+        w.setSession(&session);
+        w.show();
+        session.signIn();
+        QTRY_COMPARE_WITH_TIMEOUT(session.state(), MailSession::State::SignedIn, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!session.sync()->isBusy(), 20000);
+        auto *dot = w.findChild<QLabel *>(QStringLiteral("accountStatus"));
+        QTRY_COMPARE(dot->toolTip(), QStringLiteral("Connected"));
+
+        g.addFault({QStringLiteral("/gmail/v1/users/me/history"), 500, 100, -1});
+        QSignalSpy err(session.sync(), &SyncEngine::syncError);
+        session.sync()->pollNow(true);
+        QTRY_VERIFY_WITH_TIMEOUT(err.count() >= 1, 10000);
+        QTRY_VERIFY(dot->toolTip().startsWith(QStringLiteral("Sync error:")));
+        QCOMPARE(dot->palette().color(QPalette::WindowText), ui::suspiciousForeground(QApplication::palette()));
+        QVERIFY(w.findChild<QLabel *>(QStringLiteral("syncLabel"))->text().contains(QStringLiteral("Checking for new mail failed")));
     }
 
     void signInTimeoutShowsBannerWithRetry()

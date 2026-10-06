@@ -99,6 +99,11 @@ int stripeStrengthFromSetting(const QVariant &v);
 QColor suspiciousForeground(const QPalette &p);
 QColor suspiciousBackground(const QPalette &p);
 
+// Status-bar account circle: green when signed in and syncing, grey when
+// offline / signed out, red (suspiciousForeground) on sync error.
+QColor connectedForeground(const QPalette &p);
+QColor disconnectedForeground(const QPalette &p);
+
 // Colour emoji. Qt 6.4's fontconfig fallback doesn't reach the colour emoji
 // font for emoji (Unicode "Common" script), so subjects showed tofu boxes
 // even with fonts-noto-color-emoji installed. emojiFamily() is the first

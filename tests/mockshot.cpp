@@ -3,6 +3,8 @@
 //   zmail_mockshot signin   sign-in page of the dialog
 //   zmail_mockshot synced   signed in, INBOX synced, an HTML message open
 //   zmail_mockshot compose  Reply to a synced message: signature, attachments, quote
+//   zmail_mockshot offline  sample data, grey account circle (not signed in)
+//   zmail_mockshot error    signed in, then a forced sync failure (red circle)
 //   zmail_mockshot multiselect          three rows selected (Shift-range)
 //   zmail_mockshot multiselect-deleted  same, then Delete on the selection
 // Prints "READY" on stdout once the requested state is on screen.
@@ -18,6 +20,8 @@
 #include "ui/Theme.h"
 
 #include <QAction>
+#include <QLabel>
+#include <QStatusBar>
 #include <QApplication>
 #include <QSettings>
 #include <QTextEdit>
@@ -86,6 +90,9 @@ int main(int argc, char *argv[])
         ui::ConnectDialog *dlg = w.showConnectDialog();
         dlg->move(260, 90);
         QTimer::singleShot(800, ready);
+    } else if (mode == QLatin1String("offline")) {
+        w.resize(1100, 720);
+        QTimer::singleShot(800, ready);
     } else {
         QObject::connect(&session, &MailSession::ready, &w, [&] {
             QObject::connect(session.sync(), &SyncEngine::idle, &w, [&] {
@@ -94,6 +101,23 @@ int main(int argc, char *argv[])
                     return;
                 }
                 once = true;
+                if (mode == QLatin1String("error")) {
+                    g.addFault({QStringLiteral("/gmail/v1/users/me/history"), 500, 100, -1});
+                    QObject::connect(session.sync(), &SyncEngine::syncError, &w, [ready, &w](const QString &) {
+                        // Wait a tick so the status circle paints red after the paired idle.
+                        QTimer::singleShot(400, &w, [ready, &w] {
+                            w.statusBar()->clearMessage();
+                            auto *dot = w.findChild<QLabel *>(QStringLiteral("accountStatus"));
+                            if (dot && dot->toolTip().startsWith(QStringLiteral("Sync error:"))) {
+                                ready();
+                            } else {
+                                QTimer::singleShot(400, ready);
+                            }
+                        });
+                    }, Qt::SingleShotConnection);
+                    session.sync()->pollNow(true);
+                    return;
+                }
                 // Open an HTML newsletter with a (blocked) tracking pixel once
                 // the list has been rebuilt from the cache.
                 const bool compose = mode == QLatin1String("compose");

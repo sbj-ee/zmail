@@ -149,7 +149,7 @@ private slots:
         QCOMPARE(list->currentIndex().row(), 1);
         const QStringList names = actionNames(menu);
         for (const char *n : {"actionOpenMessage", "menuActionReply", "menuActionReplyAll", "menuActionForward",
-                              "menuActionDelete", "actionCopyAddress"}) {
+                              "menuActionJunk", "menuActionDelete", "actionCopyAddress"}) {
             QVERIFY2(names.contains(QLatin1String(n)), n);
         }
         // Exactly one of Mark Read / Mark Unread, matching the row.

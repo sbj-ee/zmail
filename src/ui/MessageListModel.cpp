@@ -256,6 +256,15 @@ void MessageFilterProxy::setSearchText(const QString &text)
     invalidateFilter();
 }
 
+void MessageFilterProxy::setHideSpam(bool hide)
+{
+    if (m_hideSpam == hide) {
+        return;
+    }
+    m_hideSpam = hide;
+    invalidateFilter();
+}
+
 QList<SearchTerm> MessageFilterProxy::parseSearch(const QString &text)
 {
     // Split on whitespace, keeping "quoted phrases" (also after an operator:
@@ -373,11 +382,16 @@ QString MessageFilterProxy::searchHelp()
 bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) const
 {
     const QModelIndex idx = sourceModel()->index(row, 0, parent);
+    const QStringList boxes = idx.data(MessageListModel::MailboxesRole).toStringList();
+    // Hide Spam: keep SPAM out of every mailbox except Junk itself.
+    if (m_hideSpam && m_mailbox != QLatin1String("Junk") && boxes.contains(QStringLiteral("Junk"))) {
+        return false;
+    }
     if (m_mailbox.startsWith(QLatin1String("label:"))) {
         if (idx.data(MessageListModel::LabelRole).toString() != m_mailbox.mid(6)) {
             return false;
         }
-    } else if (!idx.data(MessageListModel::MailboxesRole).toStringList().contains(m_mailbox)) {
+    } else if (!boxes.contains(m_mailbox)) {
         return false;
     }
     if (!m_terms.isEmpty()) {

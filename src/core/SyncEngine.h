@@ -52,6 +52,10 @@ public:
     void fetchBody(const QString &id, MessageCb cb);
     void markRead(const QString &id);
     void markUnread(const QString &id); // messages.modify addLabelIds: ["UNREAD"]
+    // Move to Gmail Spam: add SPAM, remove INBOX (optimistic, rolled back on error).
+    void markJunk(const QString &id);
+    // Leave Spam: remove SPAM, add INBOX (optimistic, rolled back on error).
+    void markNotJunk(const QString &id);
     // Move to Gmail's Trash (users.messages.trash): optimistic cache update,
     // rolled back if the call fails.
     void trash(const QString &id);

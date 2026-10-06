@@ -462,6 +462,62 @@ void SyncEngine::markRead(const QString &id)
     });
 }
 
+void SyncEngine::markJunk(const QString &id)
+{
+    const CachedMessage m = m_cache->message(id);
+    if (m.id.isEmpty() || m.labels.contains(QStringLiteral("SPAM"))) {
+        return;
+    }
+    const QStringList before = m.labels;
+    m_cache->modifyLabels(id, {QStringLiteral("SPAM")}, {QStringLiteral("INBOX")});
+    emit messagesChanged();
+    m_api->modifyLabels(id, {QStringLiteral("SPAM")}, {QStringLiteral("INBOX")},
+                        [this, id, before](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            m_cache->setLabels(id, before);
+            reportError(err, tr("Marking as Junk"));
+            emit messagesChanged();
+            return;
+        }
+        QStringList labels;
+        for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+            labels.append(l.toString());
+        }
+        if (!labels.isEmpty()) {
+            m_cache->setLabels(id, labels);
+            emit messagesChanged();
+        }
+    });
+}
+
+void SyncEngine::markNotJunk(const QString &id)
+{
+    const CachedMessage m = m_cache->message(id);
+    if (m.id.isEmpty() || !m.labels.contains(QStringLiteral("SPAM"))) {
+        return;
+    }
+    const QStringList before = m.labels;
+    m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {QStringLiteral("SPAM")});
+    emit messagesChanged();
+    m_api->modifyLabels(id, {QStringLiteral("INBOX")}, {QStringLiteral("SPAM")},
+                        [this, id, before](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            m_cache->setLabels(id, before);
+            reportError(err, tr("Marking as Not Junk"));
+            emit messagesChanged();
+            return;
+        }
+        QStringList labels;
+        for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+            labels.append(l.toString());
+        }
+        if (!labels.isEmpty()) {
+            m_cache->setLabels(id, labels);
+            emit messagesChanged();
+        }
+    });
+}
+
 void SyncEngine::trash(const QString &id)
 {
     const CachedMessage m = m_cache->message(id);

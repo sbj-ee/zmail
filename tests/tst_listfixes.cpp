@@ -190,7 +190,7 @@ private slots:
             QVERIFY(list->model()->index(r, MessageListModel::Attachment).data(Qt::DecorationRole).isValid());
         }
         search->clear();
-        QCOMPARE(list->model()->rowCount(), 12);
+        QCOMPARE(list->model()->rowCount(), 11); // Hide Spam filters Contoso out of In
     }
 
     void selectedRowsMeetAaContrast()
@@ -227,7 +227,7 @@ private slots:
     void placeholdersAndSendLaterAreHidden()
     {
         MainWindow w;
-        // The 8 not-yet-implemented menu items: hidden, not greyed out.
+        // Not-yet-implemented menu items: hidden, not greyed out.
         int placeholders = 0;
         for (QMenu *m : w.menuBar()->findChildren<QMenu *>()) {
             for (QAction *a : m->actions()) {
@@ -237,9 +237,9 @@ private slots:
                 }
             }
         }
-        QCOMPARE(placeholders, 8);
+        QCOMPARE(placeholders, 7); // Mark as Suspicious became Mark as Junk
         for (const char *gone : {"&Save Attachments\u2026", "&Print\u2026", "&Copy", "View as &Plain Text",
-                                 "Mark as &Suspicious", "S&nooze\u2026", "&Account\u2026"}) {
+                                 "S&nooze\u2026", "&Account\u2026"}) {
             for (QAction *a : w.findChildren<QAction *>()) {
                 if (a->text() == QString::fromUtf8(gone)) {
                     QVERIFY2(!a->isVisible(), gone);

@@ -98,6 +98,9 @@ public:
     void setMailbox(const QString &mailbox);
     QString mailbox() const { return m_mailbox; }
     void setSearchText(const QString &text);
+    // When true (default), spam stays out of In / Out / labels; only Junk shows it.
+    void setHideSpam(bool hide);
+    bool hideSpam() const { return m_hideSpam; }
 
     static QList<SearchTerm> parseSearch(const QString &text);
     static bool matches(const QList<SearchTerm> &terms, const MailItem &m);
@@ -110,6 +113,7 @@ protected:
 private:
     QString m_mailbox = QStringLiteral("In");
     QList<SearchTerm> m_terms;
+    bool m_hideSpam = true;
 };
 
 // Fake, realistic-looking sample data (fictional people and companies only).

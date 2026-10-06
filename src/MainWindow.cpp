@@ -140,6 +140,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_model->setItems(sampleMail());
     m_proxy = new MessageFilterProxy(this);
     m_proxy->setSourceModel(m_model);
+    m_proxy->setHideSpam(QSettings().value(QStringLiteral("mail/hideSpam"), true).toBool());
 
     m_sound = new NewMailSound(this);
     m_reloadTimer = new QTimer(this);
@@ -255,6 +256,16 @@ void MainWindow::buildMenus()
     connect(dark, &QAction::toggled, this, [this](bool on) { m_view->setDarkMail(on); });
     view->addAction(soundAction()); // Play Sound for New Mail (also on the toolbar)
     view->addSeparator();
+    m_hideSpamAction = view->addAction(tr("&Hide Spam from Folders"));
+    m_hideSpamAction->setObjectName(QStringLiteral("actionHideSpam"));
+    m_hideSpamAction->setCheckable(true);
+    m_hideSpamAction->setChecked(hideSpam());
+    m_hideSpamAction->setToolTip(tr("Hide the Spam folder and keep spam out of Inbox and other views"));
+    connect(m_hideSpamAction, &QAction::toggled, this, &MainWindow::setHideSpam);
+    QAction *showSpam = view->addAction(tr("Show &Spam"), this, &MainWindow::showSpamFolder);
+    showSpam->setObjectName(QStringLiteral("actionShowSpam"));
+    showSpam->setToolTip(tr("Open the Spam / Junk mailbox"));
+    view->addSeparator();
     QMenu *theme = view->addMenu(tr("&Theme"));
     theme->setObjectName(QStringLiteral("menuTheme"));
     m_themeGroup = new QActionGroup(this);
@@ -303,7 +314,17 @@ void MainWindow::buildMenus()
     del->setProperty("lucide", QStringLiteral("trash"));
     del->setShortcuts({QKeySequence::Delete});
     message->addSeparator();
-    later(message, tr("Mark as &Suspicious"));
+    QAction *junk = message->addAction(icon(QStringLiteral("shield-alert")), tr("Mark as &Junk"), this,
+                                       [this]() { junkMessage(m_shownId); });
+    junk->setObjectName(QStringLiteral("menuActionJunk"));
+    junk->setProperty("lucide", QStringLiteral("shield-alert"));
+    junk->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_J));
+    QAction *notJunk = message->addAction(icon(QStringLiteral("mail")), tr("Not &Junk"), this,
+                                          [this]() { notJunkMessage(m_shownId); });
+    notJunk->setObjectName(QStringLiteral("menuActionNotJunk"));
+    notJunk->setProperty("lucide", QStringLiteral("mail"));
+    notJunk->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));
+    notJunk->setVisible(false);
     later(message, tr("S&nooze\u2026"));
 
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
@@ -346,6 +367,8 @@ void MainWindow::buildToolbar()
          QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R)},
         {"actionForward", "forward", tr("Forward"), tr("Forward this message"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F)},
         {"actionDelete", "trash", tr("Delete"), tr("Move to Trash"), QKeySequence(QKeySequence::Delete)},
+        {"actionJunk", "shield-alert", tr("Junk"), tr("Mark as Junk (move to Spam)"),
+         QKeySequence(Qt::CTRL | Qt::Key_J)},
         {"actionAttach", "paperclip", tr("Attach"), tr("New message with an attachment"), {}},
     };
     for (const B &b : buttons) {
@@ -376,6 +399,13 @@ void MainWindow::buildToolbar()
             &MainWindow::checkMail);
     connect(findChild<QAction *>(QStringLiteral("actionDelete")), &QAction::triggered, this,
             [this]() { trashMessage(m_shownId); });
+    connect(findChild<QAction *>(QStringLiteral("actionJunk")), &QAction::triggered, this, [this]() {
+        if (m_proxy->mailbox() == QLatin1String("Junk")) {
+            notJunkMessage(m_shownId);
+        } else {
+            junkMessage(m_shownId);
+        }
+    });
     addSoundButton(tb);
 
     auto *spacer = new QWidget(tb);
@@ -458,15 +488,16 @@ void MainWindow::buildPanes()
     populateMailboxes();
     connect(m_mailboxes, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *it) {
         if (it && !it->data(0, Qt::UserRole).toString().isEmpty()) {
-            m_proxy->setMailbox(it->data(0, Qt::UserRole).toString());
-            if (m_live && m_session->sync()) {
-                m_session->sync()->ensureLabel(labelForMailbox(m_proxy->mailbox()));
+            const QString key = it->data(0, Qt::UserRole).toString();
+            if (key == m_proxy->mailbox()) {
+                return; // selectMailbox already set this (avoids a rebuild loop)
             }
-            updateCounts();
+            selectMailbox(key);
+            if (m_live && m_session->sync()) {
+                m_session->sync()->ensureLabel(labelForMailbox(key));
+            }
             // Live mail: don't auto-open (that would mark the newest message read).
-            if (!m_live && m_proxy->rowCount() > 0) {
-                m_list->setCurrentIndex(m_proxy->index(0, 0));
-            } else {
+            if (m_live) {
                 m_view->clear();
                 m_shownId.clear();
                 updateMessageActions();
@@ -510,7 +541,11 @@ void MainWindow::populateMailboxes()
     m_mailboxes->clear();
     auto countFor = [this](const QString &key, bool unreadOnly) {
         int n = 0;
+        const bool hide = hideSpam();
         for (const MailItem &m : m_model->items()) {
+            if (hide && key != QLatin1String("Junk") && m.mailboxes.contains(QStringLiteral("Junk"))) {
+                continue;
+            }
             const bool in = key.startsWith(QLatin1String("label:")) ? m.label == key.mid(6)
                                                                      : m.mailboxes.contains(key);
             if (in && (!unreadOnly || m.status == MailStatus::Unread)) {
@@ -519,6 +554,7 @@ void MainWindow::populateMailboxes()
         }
         return n;
     };
+    const bool showJunkFolder = !hideSpam() || m_proxy->mailbox() == QLatin1String("Junk");
     auto add = [&](QTreeWidgetItem *parent, const QString &name, const QIcon &ic, const QString &key,
                    bool countUnread = true, int forced = -1) {
         auto *it = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(m_mailboxes);
@@ -551,11 +587,13 @@ void MainWindow::populateMailboxes()
         add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), true, unread(QStringLiteral("INBOX")));
         QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false, 0);
         out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
-        QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
-                                    icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
-                                    QStringLiteral("Junk"), false, 0);
-        junk->setForeground(0, suspiciousForeground(pal));
-        junk->setToolTip(0, tr("Gmail Spam"));
+        if (showJunkFolder) {
+            QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
+                                        icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
+                                        QStringLiteral("Junk"), false, unread(QStringLiteral("SPAM")));
+            junk->setForeground(0, suspiciousForeground(pal));
+            junk->setToolTip(0, tr("Gmail Spam"));
+        }
         add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false, 0);
 
         auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
@@ -602,10 +640,13 @@ void MainWindow::populateMailboxes()
     add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"));
     QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"), false);
     out->setToolTip(0, tr("Queued and sent mail"));
-    QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
-                                icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
-                                QStringLiteral("Junk"), false);
-    junk->setForeground(0, suspiciousForeground(pal));
+    if (showJunkFolder) {
+        QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
+                                    icon(QStringLiteral("shield-alert"), suspiciousForeground(pal)),
+                                    QStringLiteral("Junk"), false);
+        junk->setForeground(0, suspiciousForeground(pal));
+        junk->setToolTip(0, tr("Gmail Spam"));
+    }
     add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false);
 
     auto *labels = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
@@ -661,6 +702,12 @@ void MainWindow::updateCounts()
 
 void MainWindow::selectMailbox(const QString &key)
 {
+    const QString prev = m_proxy->mailbox();
+    m_proxy->setMailbox(key);
+    // Hide Spam omits Junk from the tree unless it is the current mailbox.
+    if (hideSpam() && (prev == QLatin1String("Junk")) != (key == QLatin1String("Junk"))) {
+        populateMailboxes();
+    }
     {
         const QSignalBlocker block(m_mailboxes);
         QTreeWidgetItemIterator it(m_mailboxes);
@@ -672,7 +719,6 @@ void MainWindow::selectMailbox(const QString &key)
             ++it;
         }
     }
-    m_proxy->setMailbox(key);
     updateCounts();
     if (!m_live && m_proxy->rowCount() > 0) {
         m_list->setCurrentIndex(m_proxy->index(0, 0));
@@ -808,13 +854,31 @@ void MainWindow::updateMessageActions()
             a->setEnabled(on);
         }
     }
-    // Delete / Mark: only with a message actually selected (so never in an
+    // Delete / Mark / Junk: only with a message actually selected (so never in an
     // empty mailbox), in sample mode too.
     const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
-    for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread"}) {
+    for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread",
+                          "actionJunk", "menuActionJunk", "menuActionNotJunk"}) {
         if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             a->setEnabled(selected);
         }
+    }
+    const bool onJunk = m_proxy && m_proxy->mailbox() == QLatin1String("Junk");
+    if (QAction *j = findChild<QAction *>(QStringLiteral("menuActionJunk"))) {
+        j->setVisible(!onJunk);
+    }
+    if (QAction *nj = findChild<QAction *>(QStringLiteral("menuActionNotJunk"))) {
+        nj->setVisible(onJunk);
+    }
+    if (QAction *tb = findChild<QAction *>(QStringLiteral("actionJunk"))) {
+        const QString name = onJunk ? QStringLiteral("mail") : QStringLiteral("shield-alert");
+        tb->setText(onJunk ? tr("Not Junk") : tr("Junk"));
+        tb->setIconText(onJunk ? tr("Not Junk") : tr("Junk"));
+        tb->setProperty("lucide", name);
+        tb->setIcon(icon(name));
+        tb->setToolTip(withShortcut(onJunk ? tr("Not Junk (move out of Spam)") : tr("Mark as Junk (move to Spam)"),
+                                    QKeySequence(onJunk ? (Qt::CTRL | Qt::SHIFT | Qt::Key_J)
+                                                        : (Qt::CTRL | Qt::Key_J))));
     }
 }
 
@@ -1304,6 +1368,62 @@ void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, c
     offerUndoDelete(id);
 }
 
+void MainWindow::junkMessage(QString id)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || id.isEmpty()) {
+        statusBar()->showMessage(
+            m_live ? tr("Select a message to mark as Junk.") : tr("Sign in to Gmail to mark Junk."), 5000);
+        return;
+    }
+    sync->markJunk(id);
+    if (m_shownId == id) {
+        m_view->clear();
+        m_shownId.clear();
+        updateMessageActions();
+    }
+    statusBar()->showMessage(tr("Moved to Spam."), 5000);
+}
+
+void MainWindow::notJunkMessage(QString id)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || id.isEmpty()) {
+        statusBar()->showMessage(
+            m_live ? tr("Select a message to mark as Not Junk.") : tr("Sign in to Gmail to mark Not Junk."), 5000);
+        return;
+    }
+    sync->markNotJunk(id);
+    statusBar()->showMessage(tr("Moved out of Spam."), 5000);
+}
+
+bool MainWindow::hideSpam() const
+{
+    return m_proxy && m_proxy->hideSpam();
+}
+
+void MainWindow::setHideSpam(bool hide)
+{
+    QSettings().setValue(QStringLiteral("mail/hideSpam"), hide);
+    if (m_proxy) {
+        m_proxy->setHideSpam(hide);
+    }
+    if (m_hideSpamAction && m_hideSpamAction->isChecked() != hide) {
+        const QSignalBlocker block(m_hideSpamAction);
+        m_hideSpamAction->setChecked(hide);
+    }
+    const QString box = m_proxy ? m_proxy->mailbox() : QStringLiteral("In");
+    populateMailboxes();
+    selectMailbox(box);
+    updateCounts();
+    statusBar()->showMessage(hide ? tr("Spam folder hidden.") : tr("Spam folder shown."), 3000);
+}
+
+void MainWindow::showSpamFolder()
+{
+    selectMailbox(QStringLiteral("Junk"));
+}
+
 void MainWindow::setStripeStrength(int strength)
 {
     m_stripes = std::clamp(strength, 0, kStripeMax);
@@ -1461,7 +1581,8 @@ QMenu *MainWindow::buildListMenu()
     auto *menu = new QMenu(this);
     menu->setObjectName(QStringLiteral("messageListMenu"));
     for (const char *n : {"actionOpenMessage", "", "menuActionReply", "menuActionReplyAll", "menuActionForward", "",
-                          "actionMarkRead", "actionMarkUnread", "", "menuActionDelete"}) {
+                          "actionMarkRead", "actionMarkUnread", "", "menuActionJunk", "menuActionNotJunk", "",
+                          "menuActionDelete"}) {
         if (!*n) {
             menu->addSeparator();
         } else if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
@@ -1490,6 +1611,7 @@ QMenu *MainWindow::buildListMenu()
                 a->setVisible(true);
             }
         }
+        updateMessageActions(); // Junk / Not Junk visibility follows the mailbox
     });
     return menu;
 }

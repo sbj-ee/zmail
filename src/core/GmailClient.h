@@ -25,8 +25,11 @@ struct ApiError
 };
 
 // Minimal Gmail REST v1 client: bearer auth with one retry on 401, a quota
-// token bucket (6,000 units/min/user), and exponential backoff with jitter on
-// 429 / 5xx / rate-limit 403s, honouring Retry-After.
+// token bucket (6,000 units/min/user), a hard in-flight concurrency cap (so a
+// labels.get burst cannot stampede), pump() yields to the event loop each
+// tick, and exponential backoff with jitter on 429 / 5xx / rate-limit 403s,
+// honouring Retry-After. A 429 also arms a client-wide cooldown so retries
+// do not keep hammering while the bucket still has tokens.
 class GmailClient : public QObject
 {
     Q_OBJECT
@@ -92,9 +95,17 @@ public:
     void setBackoffBaseMs(int ms) { m_backoffBaseMs = ms; }
     void setMaxAttempts(int n) { m_maxAttempts = n; }
     void setQuota(int unitsPerMinute, int burst);
+    // Cap outstanding HTTP calls. The token bucket alone still allowed a
+    // 600-unit burst of parallel GETs (labels.get storm → HTTP 429 livelock).
+    void setMaxInFlight(int n);
+    // How many requests one pump() tick may start before yielding to the
+    // event loop (keeps the UI thread from busy-draining the queue).
+    void setMaxSendsPerPump(int n);
 
     int requestsSent() const { return m_sent; }
     int retries() const { return m_retries; }
+    int inFlight() const { return m_inFlight; }
+    int maxInFlight() const { return m_maxInFlight; }
 
 private:
     struct Call
@@ -125,6 +136,12 @@ private:
     qint64 m_lastRefill = 0;
     QList<Call> m_queue;
     QTimer *m_pumpTimer = nullptr;
+
+    // Concurrency + 429 cooldown (in addition to the token bucket).
+    int m_maxInFlight = 4;
+    int m_maxSendsPerPump = 1;
+    int m_inFlight = 0;
+    qint64 m_cooldownUntilMs = 0; // pump() stays idle until nowMs() passes this
 };
 
 } // namespace zmail

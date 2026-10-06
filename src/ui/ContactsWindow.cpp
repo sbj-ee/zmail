@@ -88,6 +88,11 @@ void ContactsWindow::refresh()
 
 void ContactsWindow::syncNow()
 {
+    // Match Settings → Sync Contacts: request contact scopes / re-auth when needed.
+    if (m_syncTrigger) {
+        m_syncTrigger();
+        return;
+    }
     if (m_sync) {
         m_sync->sync();
     }

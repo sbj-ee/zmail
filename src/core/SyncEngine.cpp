@@ -87,24 +87,49 @@ void SyncEngine::stop()
     m_poll->stop();
     m_fetchQueue.clear();
     m_busy = false;
+    m_labelsRefreshing = false;
 }
 
-void SyncEngine::refreshLabels(std::function<void()> then)
+void SyncEngine::refreshLabels(std::function<void()> then, bool force)
 {
     const int gen = m_generation;
+    if (!force && m_lastLabelsRefreshMs != 0
+        && monoMs() - m_lastLabelsRefreshMs < kLabelRefreshMinIntervalMs) {
+        if (then) {
+            then();
+        }
+        return;
+    }
+    // Coalesce overlapping refreshes (startup + history can race).
+    if (m_labelsRefreshing) {
+        if (then) {
+            then();
+        }
+        return;
+    }
+    m_labelsRefreshing = true;
+    m_lastLabelsRefreshMs = monoMs();
+
     // labels.list returns id/name/type/color only on real Gmail. Message
     // counts (messagesTotal / messagesUnread) require labels.get per label.
-    // We list first, then get each label through the client's quota queue so
-    // a mailbox with dozens of labels does not burst past the token bucket.
+    // Fetch counts with low concurrency (kLabelGetConcurrency) so we never
+    // enqueue an N-wide parallel flood into the client — that storm + 429
+    // retries busy-spun the UI thread on vertex.
     m_api->listLabels([this, gen, then](const QJsonObject &json, const ApiError &err) {
+        auto finishRefresh = [this, gen, then] {
+            if (gen == m_generation) {
+                m_labelsRefreshing = false;
+            }
+            if (then) {
+                then();
+            }
+        };
         if (gen != m_generation) {
             return;
         }
         if (err.isError) {
             reportError(err, tr("Listing labels"));
-            if (then) {
-                then();
-            }
+            finishRefresh();
             return;
         }
         auto labels = std::make_shared<QList<CachedLabel>>();
@@ -125,45 +150,66 @@ void SyncEngine::refreshLabels(std::function<void()> then)
         if (labels->isEmpty()) {
             m_cache->replaceLabels(*labels);
             emit labelsChanged();
-            if (then) {
-                then();
-            }
+            finishRefresh();
             return;
         }
-        auto remaining = std::make_shared<int>(labels->size());
-        for (int i = 0; i < labels->size(); ++i) {
-            const QString id = labels->at(i).id;
-            m_api->getLabel(id, [this, gen, then, labels, remaining, i](const QJsonObject &o, const ApiError &getErr) {
-                if (gen != m_generation) {
-                    return;
-                }
-                if (!getErr.isError) {
-                    CachedLabel &l = (*labels)[i];
-                    l.unread = o.value(QStringLiteral("messagesUnread")).toInt();
-                    l.total = o.value(QStringLiteral("messagesTotal")).toInt();
-                    const QString color =
-                        o.value(QStringLiteral("color")).toObject().value(QStringLiteral("backgroundColor")).toString();
-                    if (!color.isEmpty()) {
-                        l.color = color;
+
+        // Publish names/colors immediately; counts fill in as gets complete.
+        m_cache->replaceLabels(*labels);
+        emit labelsChanged();
+
+        auto next = std::make_shared<int>(0);
+        auto inFlight = std::make_shared<int>(0);
+        auto completed = std::make_shared<int>(0);
+        const int total = labels->size();
+        auto pumpGets = std::make_shared<std::function<void()>>();
+        *pumpGets = [this, gen, labels, next, inFlight, completed, total, finishRefresh,
+                     pumpGets]() {
+            if (gen != m_generation) {
+                return;
+            }
+            while (*inFlight < kLabelGetConcurrency && *next < total) {
+                const int i = (*next)++;
+                ++(*inFlight);
+                const QString id = labels->at(i).id;
+                m_api->getLabel(id, [this, gen, labels, i, inFlight, completed, total, finishRefresh,
+                                     pumpGets](const QJsonObject &o, const ApiError &getErr) {
+                    if (gen != m_generation) {
+                        return;
                     }
-                    if (!o.value(QStringLiteral("name")).toString().isEmpty()) {
-                        l.name = o.value(QStringLiteral("name")).toString();
+                    if (!getErr.isError) {
+                        CachedLabel &l = (*labels)[i];
+                        l.unread = o.value(QStringLiteral("messagesUnread")).toInt();
+                        l.total = o.value(QStringLiteral("messagesTotal")).toInt();
+                        const QString color = o.value(QStringLiteral("color"))
+                                                  .toObject()
+                                                  .value(QStringLiteral("backgroundColor"))
+                                                  .toString();
+                        if (!color.isEmpty()) {
+                            l.color = color;
+                        }
+                        if (!o.value(QStringLiteral("name")).toString().isEmpty()) {
+                            l.name = o.value(QStringLiteral("name")).toString();
+                        }
+                        if (!o.value(QStringLiteral("type")).toString().isEmpty()) {
+                            l.type = o.value(QStringLiteral("type")).toString();
+                        }
                     }
-                    if (!o.value(QStringLiteral("type")).toString().isEmpty()) {
-                        l.type = o.value(QStringLiteral("type")).toString();
+                    // A single get failure leaves that label's counts at the list
+                    // values (usually 0); the rest of the tree still refreshes.
+                    --(*inFlight);
+                    ++(*completed);
+                    if (*completed == total) {
+                        m_cache->replaceLabels(*labels);
+                        emit labelsChanged();
+                        finishRefresh();
+                        return;
                     }
-                }
-                // A single get failure leaves that label's counts at the list
-                // values (usually 0); the rest of the tree still refreshes.
-                if (--(*remaining) == 0) {
-                    m_cache->replaceLabels(*labels);
-                    emit labelsChanged();
-                    if (then) {
-                        then();
-                    }
-                }
-            });
-        }
+                    (*pumpGets)();
+                });
+            }
+        };
+        (*pumpGets)();
     });
 }
 
@@ -171,6 +217,7 @@ void SyncEngine::fullSync(const QString &reason)
 {
     ++m_fullSyncs;
     ++m_generation;
+    m_labelsRefreshing = false;
     const int gen = m_generation;
     m_fetchQueue.clear();
     setBusy(true, tr("Syncing Inbox (%1)\u2026").arg(reason));
@@ -456,7 +503,9 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
             emit idle();
         };
         if (run->changed) {
-            refreshLabels(finish); // unread counts
+            // Debounced: history polls must not re-stampede labels.get for every
+            // tiny change (that was a major source of 429 storms on vertex).
+            refreshLabels(finish, /*force=*/false);
         } else {
             finish();
         }

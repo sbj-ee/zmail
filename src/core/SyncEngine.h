@@ -102,7 +102,9 @@ signals:
 
 private:
     void fullSync(const QString &reason);
-    void refreshLabels(std::function<void()> then = {});
+    // force=true: always re-fetch counts (startup / full sync / folder CRUD).
+    // force=false: skip if a full label-count refresh ran recently (history poll).
+    void refreshLabels(std::function<void()> then = {}, bool force = true);
     void listPage(const QString &labelId, const QString &pageToken, int remaining, std::function<void(bool ok)> done);
     void historyPage(qint64 start, const QString &pageToken, std::shared_ptr<struct HistoryRun> run);
     void finishHistory(std::shared_ptr<struct HistoryRun> run);
@@ -136,6 +138,10 @@ private:
     QList<Fetch> m_fetchQueue;
     int m_inFlight = 0;
     QSet<QString> m_loadingLabels;
+    qint64 m_lastLabelsRefreshMs = 0;
+    bool m_labelsRefreshing = false;
+    static constexpr qint64 kLabelRefreshMinIntervalMs = 60000;
+    static constexpr int kLabelGetConcurrency = 2;
 };
 
 } // namespace zmail

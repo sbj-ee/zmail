@@ -47,6 +47,16 @@ void GmailClient::setQuota(int unitsPerMinute, int burst)
     m_refillPerMs = double(std::max(0, unitsPerMinute - burst)) / 60000.0;
 }
 
+void GmailClient::setMaxInFlight(int n)
+{
+    m_maxInFlight = std::max(1, n);
+}
+
+void GmailClient::setMaxSendsPerPump(int n)
+{
+    m_maxSendsPerPump = std::max(1, n);
+}
+
 void GmailClient::getProfile(JsonCb cb)
 {
     call("GET", QStringLiteral("/profile"), {}, {}, 1, std::move(cb));
@@ -211,14 +221,39 @@ void GmailClient::enqueue(Call c)
 void GmailClient::pump()
 {
     const qint64 now = nowMs();
+    // Client-wide cooldown after 429 / rate-limit: do not start new work (or
+    // stampede retries) until Retry-After / backoff elapses.
+    if (now < m_cooldownUntilMs) {
+        if (!m_pumpTimer->isActive()) {
+            m_pumpTimer->start(int(m_cooldownUntilMs - now));
+        }
+        return;
+    }
     m_tokens = std::min(m_capacity, m_tokens + double(now - m_lastRefill) * m_refillPerMs);
     m_lastRefill = now;
-    while (!m_queue.isEmpty() && m_tokens >= m_queue.first().rq.units) {
+
+    // Drain at most maxSendsPerPump requests per tick so a large queue cannot
+    // busy-spin the UI thread (the old while-loop could fire hundreds of
+    // nam->get() calls synchronously via a cached accessToken).
+    int sentThisTick = 0;
+    while (!m_queue.isEmpty() && m_inFlight < m_maxInFlight && m_tokens >= m_queue.first().rq.units
+           && sentThisTick < m_maxSendsPerPump) {
         Call c = m_queue.takeFirst();
         m_tokens -= c.rq.units;
+        ++m_inFlight;
+        ++sentThisTick;
         send(std::move(c));
     }
-    if (!m_queue.isEmpty() && !m_pumpTimer->isActive()) {
+
+    if (m_queue.isEmpty() || m_inFlight >= m_maxInFlight) {
+        return; // in-flight completions will pump again
+    }
+    if (!m_pumpTimer->isActive()) {
+        if (sentThisTick >= m_maxSendsPerPump) {
+            // Yield to the event loop so paint / input can run.
+            m_pumpTimer->start(0);
+            return;
+        }
         const double need = m_queue.first().rq.units - m_tokens;
         const int wait = m_refillPerMs > 0 ? int(need / m_refillPerMs) + 1 : 1000;
         m_pumpTimer->start(std::max(1, wait));
@@ -236,12 +271,14 @@ void GmailClient::send(Call c)
 {
     m_auth->accessToken([this, c = std::move(c)](const QString &token, const QString &authErr) mutable {
         if (token.isEmpty()) {
+            --m_inFlight;
             RawReply rr;
             rr.err.isError = true;
             rr.err.httpStatus = 401;
             rr.err.reason = QStringLiteral("unauthenticated");
             rr.err.message = authErr;
             c.cb(rr);
+            QTimer::singleShot(0, this, &GmailClient::pump);
             return;
         }
         const Request &rq = c.rq;
@@ -285,6 +322,7 @@ void GmailClient::send(Call c)
         ++m_sent;
         connect(r, &QNetworkReply::finished, this, [this, r, c = std::move(c)]() mutable {
             r->deleteLater();
+            --m_inFlight;
             const int status = r->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
             const QByteArray body = r->readAll();
             const QJsonObject json = QJsonDocument::fromJson(body).object();
@@ -295,8 +333,10 @@ void GmailClient::send(Call c)
             for (const auto &h : r->rawHeaderPairs()) {
                 rr.headers.insert(h.first.toLower(), h.second);
             }
+            auto resumePump = [this] { QTimer::singleShot(0, this, &GmailClient::pump); };
             if (r->error() == QNetworkReply::NoError && status >= 200 && status < 300) {
                 c.cb(rr);
+                resumePump();
                 return;
             }
             const QJsonObject err = json.value(QStringLiteral("error")).toObject();
@@ -308,14 +348,14 @@ void GmailClient::send(Call c)
             if (status == 401 && !c.reauthed) {
                 m_auth->invalidateAccessToken();
                 c.reauthed = true;
-                enqueue(std::move(c));
+                enqueue(std::move(c)); // enqueue -> pump; inFlight already released
                 return;
             }
             const bool rateLimited403 = status == 403 && (reason == QLatin1String("rateLimitExceeded") ||
                                                           reason == QLatin1String("userRateLimitExceeded"));
-            const bool transient = status == 429 || status == 500 || status == 502 || status == 503 ||
-                                   status == 504 || rateLimited403 ||
-                                   (status == 0 && r->error() != QNetworkReply::OperationCanceledError);
+            const bool rateLimited = status == 429 || rateLimited403;
+            const bool transient = rateLimited || status == 500 || status == 502 || status == 503 || status == 504
+                                   || (status == 0 && r->error() != QNetworkReply::OperationCanceledError);
             if (transient && c.rq.retryTransient && c.attempt + 1 < m_maxAttempts) {
                 int delay = std::min(64000, m_backoffBaseMs * (1 << c.attempt));
                 delay += QRandomGenerator::global()->bounded(std::max(1, m_backoffBaseMs));
@@ -324,9 +364,15 @@ void GmailClient::send(Call c)
                 if (ok && retryAfter > 0) {
                     delay = std::max(delay, std::min(120, retryAfter) * 1000);
                 }
+                // Floor tiny delays so a 429 with Retry-After: 0 cannot micro-spin the event loop.
+                delay = std::max(delay, rateLimited ? std::max(200, m_backoffBaseMs) : 1);
+                if (rateLimited) {
+                    m_cooldownUntilMs = std::max(m_cooldownUntilMs, nowMs() + delay);
+                }
                 qCInfo(lcGmail) << "HTTP" << status << "for" << c.rq.path << "; retry" << (c.attempt + 1) << "in"
                                 << delay << "ms";
                 retryLater(std::move(c), delay);
+                resumePump(); // may be no-op until cooldown elapses
                 return;
             }
             ApiError &e = rr.err;
@@ -342,6 +388,7 @@ void GmailClient::send(Call c)
             }
             rr.json = {};
             c.cb(rr);
+            resumePump();
         });
     });
 }

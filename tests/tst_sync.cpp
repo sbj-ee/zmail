@@ -19,6 +19,8 @@
 #include <QNetworkAccessManager>
 #include <QSignalSpy>
 #include <QTest>
+#include <QTimer>
+#include <algorithm>
 #include <memory>
 
 using namespace zmail;
@@ -348,6 +350,61 @@ private slots:
         }
         QTRY_COMPARE_WITH_TIMEOUT(done, 6, 10000);
         QVERIFY2(t.elapsed() >= 30, qPrintable(QString::number(t.elapsed())));
+    }
+
+    void inFlightCapPreventsParallelFlood()
+    {
+        Rig r;
+        r.api->setMaxInFlight(2);
+        r.api->setMaxSendsPerPump(1);
+        r.g.seedSystemLabels();
+        for (int i = 0; i < 20; ++i) {
+            r.g.addLabel({QStringLiteral("Label_%1").arg(100 + i), QStringLiteral("L%1").arg(i),
+                          QStringLiteral("user"), {}});
+        }
+        int done = 0;
+        int peak = 0;
+        QTimer sampler;
+        QObject::connect(&sampler, &QTimer::timeout, &sampler, [&] {
+            peak = std::max(peak, r.api->inFlight());
+        });
+        sampler.start(0);
+        // Fire many 1-unit GETs the way refreshLabels used to (all at once).
+        for (int i = 0; i < 20; ++i) {
+            r.api->getLabel(QStringLiteral("Label_%1").arg(100 + i),
+                            [&](const QJsonObject &, const ApiError &) { ++done; });
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(done, 20, 20000);
+        sampler.stop();
+        peak = std::max(peak, r.api->inFlight());
+        QVERIFY2(peak <= 2, qPrintable(QStringLiteral("peak inFlight=%1").arg(peak)));
+        QVERIFY(peak >= 1);
+        QCOMPARE(r.api->inFlight(), 0);
+    }
+
+    void labelsGet429RetriesWithCooldown()
+    {
+        Rig r;
+        r.api->setMaxInFlight(2);
+        r.api->setBackoffBaseMs(20);
+        r.g.seedSystemLabels();
+        // First three GETs under /labels/ fail with 429 (+ Retry-After); then succeed.
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/"), 429, 3, 0});
+        int done = 0;
+        int errors = 0;
+        for (int i = 0; i < 3; ++i) {
+            r.api->getLabel(QStringLiteral("INBOX"), [&](const QJsonObject &, const ApiError &e) {
+                ++done;
+                if (e.isError) {
+                    ++errors;
+                }
+            });
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(done, 3, 20000);
+        QCOMPARE(errors, 0);
+        QVERIFY(r.api->retries() >= 3);
+        // list + gets: at least the three successes plus three 429s
+        QVERIFY(r.g.count(QStringLiteral("GET /gmail/v1/users/me/labels/INBOX")) >= 6);
     }
 };
 

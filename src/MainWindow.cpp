@@ -721,13 +721,23 @@ void MainWindow::populateMailboxes()
 
 void MainWindow::buildStatusBar()
 {
-    m_syncLabel = new QLabel(this);
+    auto *row = new QWidget(this);
+    row->setObjectName(QStringLiteral("accountStatusRow"));
+    auto *lay = new QHBoxLayout(row);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(6);
+    m_accountStatus = new QLabel(QStringLiteral("\u25cf"), row);
+    m_accountStatus->setObjectName(QStringLiteral("accountStatus"));
+    m_accountStatus->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    m_syncLabel = new QLabel(row);
     m_syncLabel->setObjectName(QStringLiteral("syncLabel"));
-    m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 not signed in \u00b7 last sync: never"));
+    lay->addWidget(m_accountStatus, 0);
+    lay->addWidget(m_syncLabel, 1);
     m_countLabel = new QLabel(this);
     m_countLabel->setObjectName(QStringLiteral("countLabel"));
-    statusBar()->addWidget(m_syncLabel, 1);
+    statusBar()->addWidget(row, 1);
     statusBar()->addPermanentWidget(m_countLabel);
+    updateSyncLabel();
 }
 
 void MainWindow::updateCounts()
@@ -846,6 +856,7 @@ void MainWindow::refreshIcons()
         m_list->setCurrentIndex(cur);
     }
     showMessage(m_list->currentIndex());
+    updateAccountStatus();
 }
 
 void MainWindow::setTheme(ThemeMode mode)
@@ -1084,10 +1095,22 @@ void MainWindow::attachSync()
     connect(sync, &zmail::SyncEngine::statusChanged, this, [this](const QString &s) { updateSyncLabel(s); });
     connect(sync, &zmail::SyncEngine::idle, this, [this]() {
         m_lastSync = QLocale(QLocale::English).toString(QTime::currentTime(), QStringLiteral("h:mm AP"));
+        // syncError is followed by setBusy(false) -> idle; keep the red circle
+        // until a later idle that was not paired with an error.
+        if (m_keepSyncErrorAcrossIdle) {
+            m_keepSyncErrorAcrossIdle = false;
+        } else {
+            m_syncError.clear();
+        }
         updateSyncLabel();
     });
-    connect(sync, &zmail::SyncEngine::syncError, this,
-            [this](const QString &e) { statusBar()->showMessage(e, 10000); });
+    connect(sync, &zmail::SyncEngine::syncError, this, [this](const QString &e) {
+        m_syncError = e;
+        m_keepSyncErrorAcrossIdle = true;
+        // Keep the permanent account row visible (showMessage would hide it).
+        statusBar()->clearMessage();
+        updateSyncLabel();
+    });
     connect(sync, &zmail::SyncEngine::trashFailed, this, [this](const QString &id) { onTrashFailed(id); });
     connect(sync, &zmail::SyncEngine::trashSucceeded, this, [this](const QString &id) { m_pendingTrash.remove(id); });
     connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
@@ -1236,7 +1259,8 @@ void MainWindow::checkMail()
     } else if (m_session) {
         showConnectDialog();
     } else {
-        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 not signed in"));
+        m_syncLabel->setText(tr("Offline sample data \u00b7 not signed in"));
+        updateAccountStatus();
     }
 }
 
@@ -1247,33 +1271,74 @@ void MainWindow::updateSyncLabel(const QString &status)
     }
     using State = zmail::MailSession::State;
     if (!m_session) {
-        m_syncLabel->setText(tr("\u25cf Offline sample data \u00b7 not signed in \u00b7 last sync: never"));
+        m_syncLabel->setText(tr("Offline sample data \u00b7 not signed in \u00b7 last sync: never"));
+        updateAccountStatus();
         return;
     }
     switch (m_session->state()) {
     case State::NeedsClient:
-        m_syncLabel->setText(tr("\u25cf Sample data \u00b7 not connected \u00b7 File \u2192 Sign In to Gmail\u2026 to set up"));
+        m_syncLabel->setText(tr("Sample data \u00b7 not connected \u00b7 File \u2192 Sign In to Gmail\u2026 to set up"));
+        updateAccountStatus();
         return;
     case State::SignedOut:
-        m_syncLabel->setText(tr("\u25cf Sample data \u00b7 signed out \u00b7 last sync: never"));
+        m_syncError.clear();
+        m_syncLabel->setText(tr("Sample data \u00b7 signed out \u00b7 last sync: never"));
+        updateAccountStatus();
         return;
     case State::Restoring:
-        m_syncLabel->setText(tr("\u25cf Restoring sign-in\u2026"));
+        m_syncLabel->setText(tr("Restoring sign-in\u2026"));
+        updateAccountStatus();
         return;
     case State::SigningIn:
-        m_syncLabel->setText(tr("\u25cf Waiting for Google sign-in in your browser\u2026"));
+        m_syncLabel->setText(tr("Waiting for Google sign-in in your browser\u2026"));
+        updateAccountStatus();
         return;
     case State::SignedIn:
         break;
     }
-    QString text = QStringLiteral("\u25cf %1").arg(m_session->account());
+    QString text = m_session->account();
     if (!status.isEmpty()) {
         text += QStringLiteral(" \u00b7 ") + status;
+    } else if (!m_syncError.isEmpty()) {
+        text += QStringLiteral(" \u00b7 ") + m_syncError;
     }
     text += QStringLiteral(" \u00b7 ") +
             (m_lastSync.isEmpty() ? tr("last sync: never")
                                   : tr("last sync %1 %2").arg(m_lastSync, QDateTime::currentDateTime().timeZoneAbbreviation()));
     m_syncLabel->setText(text);
+    updateAccountStatus();
+}
+
+void MainWindow::updateAccountStatus()
+{
+    if (!m_accountStatus) {
+        return;
+    }
+    using State = zmail::MailSession::State;
+    const QPalette pal = QApplication::palette();
+    QColor color = disconnectedForeground(pal);
+    QString tip = tr("Disconnected");
+    if (m_session && m_session->state() == State::SignedIn) {
+        if (m_syncError.isEmpty()) {
+            color = connectedForeground(pal);
+            tip = tr("Connected");
+        } else {
+            color = suspiciousForeground(pal);
+            tip = tr("Sync error: %1").arg(m_syncError);
+        }
+    } else if (m_session && m_session->state() == State::SigningIn) {
+        tip = tr("Signing in\u2026");
+    } else if (m_session && m_session->state() == State::Restoring) {
+        tip = tr("Restoring sign-in\u2026");
+    } else if (m_session && m_session->state() == State::NeedsClient) {
+        tip = tr("Not connected");
+    }
+    QPalette lp = m_accountStatus->palette();
+    lp.setColor(QPalette::WindowText, color);
+    lp.setColor(QPalette::Text, color);
+    m_accountStatus->setPalette(lp);
+    m_accountStatus->setToolTip(tip);
+    m_accountStatus->setAccessibleName(tip);
 }
 
 ConnectDialog *MainWindow::showConnectDialog(const QString &notice)

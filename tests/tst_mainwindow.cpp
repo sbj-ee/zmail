@@ -8,6 +8,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QColor>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -202,8 +203,13 @@ private slots:
         MainWindow w;
         auto *sync = w.findChild<QLabel *>(QStringLiteral("syncLabel"));
         auto *counts = w.findChild<QLabel *>(QStringLiteral("countLabel"));
-        QVERIFY(sync && counts);
+        auto *dot = w.findChild<QLabel *>(QStringLiteral("accountStatus"));
+        QVERIFY(sync && counts && dot);
         QVERIFY(sync->text().contains(QStringLiteral("sync")));
+        QVERIFY(!sync->text().startsWith(QStringLiteral("\u25cf"))); // circle is its own widget
+        QCOMPARE(dot->text(), QStringLiteral("\u25cf"));
+        QCOMPARE(dot->toolTip(), QStringLiteral("Disconnected"));
+        QCOMPARE(dot->palette().color(QPalette::WindowText), disconnectedForeground(QApplication::palette()));
         // Hide Spam drops the sample Contoso phish from In (was 12 / 4 unread).
         QVERIFY(counts->text().startsWith(QStringLiteral("In: 11 messages, 3 unread")));
     }

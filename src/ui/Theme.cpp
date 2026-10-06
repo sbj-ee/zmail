@@ -539,6 +539,17 @@ QColor suspiciousForeground(const QPalette &p)
     return isDark(p) ? QColor(0xff, 0x8a, 0x80) : QColor(0xb7, 0x1c, 0x1c);
 }
 
+QColor connectedForeground(const QPalette &p)
+{
+    // Material-ish greens that stay >= 4.5:1 on typical status-bar greys.
+    return isDark(p) ? QColor(0x81, 0xc7, 0x84) : QColor(0x2e, 0x7d, 0x32);
+}
+
+QColor disconnectedForeground(const QPalette &p)
+{
+    return p.color(QPalette::Disabled, QPalette::WindowText);
+}
+
 QColor suspiciousBackground(const QPalette &p)
 {
     return isDark(p) ? QColor(0x4a, 0x1f, 0x22) : QColor(0xfd, 0xe7, 0xe9);

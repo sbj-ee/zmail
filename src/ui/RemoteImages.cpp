@@ -11,6 +11,7 @@ namespace {
 const QString kModeKey = QStringLiteral("privacy/remoteImages");
 const QString kSendersKey = QStringLiteral("privacy/remoteImageSenders");
 const QString kTrackersKey = QStringLiteral("privacy/blockTrackers");
+const QString kHttpKey = QStringLiteral("privacy/allowHttpImages");
 
 QStringList normalised(const QStringList &in)
 {
@@ -48,12 +49,22 @@ RemoteImageMode modeFromKey(const QString &key)
     if (k == QLatin1String("never")) {
         return RemoteImageMode::Never;
     }
-    return RemoteImageMode::Always;
+    if (k == QLatin1String("always")) {
+        return RemoteImageMode::Always;
+    }
+    return RemoteImageMode::Ask;
 }
 
 RemoteImageMode mode()
 {
-    return modeFromKey(QSettings().value(kModeKey, QStringLiteral("always")).toString());
+    // Default Ask (security review of 0.3.x; was Always). A saved choice,
+    // including "always", is kept as it is.
+    return modeFromKey(QSettings().value(kModeKey, QStringLiteral("ask")).toString());
+}
+
+bool allowInsecureHttp()
+{
+    return QSettings().value(kHttpKey, false).toBool();
 }
 
 void setMode(RemoteImageMode m)

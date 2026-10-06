@@ -142,6 +142,14 @@ private:
     QByteArray m_png;
 };
 
+// ImageServer is plain http on 127.0.0.1, which zmail refuses for mail
+// images; let these tests through.
+void serveImagesLocally()
+{
+    QSettings().setValue(QStringLiteral("privacy/allowHttpImages"), true);
+    zmail::ui::SafeHtmlView::setLoopbackAllowedForTests(true);
+}
+
 } // namespace
 
 class TstViewer : public QObject
@@ -158,6 +166,7 @@ private slots:
     void init() { QSettings().clear(); }
     void cleanup()
     {
+        zmail::ui::SafeHtmlView::setLoopbackAllowedForTests(false);
         for (QWidget *w : QApplication::topLevelWidgets()) {
             w->close();
         }
@@ -438,18 +447,28 @@ private slots:
         return m;
     }
 
-    void remoteImagesLoadByDefault()
+    void remoteImagesAskByDefaultAlwaysLoads()
     {
-        // No setting at all: Always load (Stephen's default), trackers dropped.
-        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Always);
+        // No setting at all: Ask (security review; Always until then).
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Ask);
         QVERIFY(RemoteImages::blockTrackers());
+        serveImagesLocally();
         ImageServer server;
         const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
         MessageView v;
         v.resize(600, 400);
         v.show();
-        v.setMessage(imageMessage(base, QStringLiteral("a"), QStringLiteral("Shop <news@shop.example.com>")));
+        v.setMessage(imageMessage(base, QStringLiteral("a0"), QStringLiteral("Shop <news@shop.example.com>")));
         auto *bar = v.findChild<QWidget *>(QStringLiteral("remoteImagesBar"));
+        QVERIFY(!bar->isHidden());
+        QVERIFY(!v.imagesLoaded());
+        QTest::qWait(200);
+        QVERIFY(server.paths.isEmpty());
+
+        // Always (a saved choice, e.g. from before the default changed):
+        // loads, trackers dropped.
+        QSettings().setValue(QStringLiteral("privacy/remoteImages"), QStringLiteral("always"));
+        v.setMessage(imageMessage(base, QStringLiteral("a"), QStringLiteral("Shop <news@shop.example.com>")));
         QVERIFY(bar->isHidden());
         QVERIFY(v.imagesLoaded());
         QCOMPARE(v.trackersBlocked(), 2);
@@ -497,6 +516,7 @@ private slots:
 
     void remoteImagesAskModeBarAndSenderList()
     {
+        serveImagesLocally();
         RemoteImages::setMode(RemoteImageMode::Ask);
         ImageServer server;
         const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
@@ -547,6 +567,7 @@ private slots:
 
     void remoteImagesNeverMode()
     {
+        serveImagesLocally();
         ImageServer server;
         const QString base = QStringLiteral("http://127.0.0.1:%1/").arg(server.serverPort());
         RemoteImages::allowSender(QStringLiteral("friend@example.com")); // the list doesn't override Never
@@ -582,7 +603,7 @@ private slots:
 
         RemoteImages::setAllowedSenders({QStringLiteral("b@example.com"), QStringLiteral("A <a@example.com>")});
         PrivacyDialog *dlg = w.showPrivacyDialog();
-        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAlways"))->isChecked()); // default
+        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAsk"))->isChecked()); // default
         QVERIFY(dlg->findChild<QCheckBox *>(QStringLiteral("blockTrackers"))->isChecked());
         QCOMPARE(dlg->senders(), (QStringList{QStringLiteral("a@example.com"), QStringLiteral("b@example.com")}));
 
@@ -598,19 +619,20 @@ private slots:
         dlg->senderList()->setCurrentRow(0); // a@example.com
         dlg->findChild<QPushButton *>(QStringLiteral("removeSenderButton"))->click();
         QCOMPARE(dlg->senders(), (QStringList{QStringLiteral("b@example.com"), QStringLiteral("pat@example.com")}));
-        dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAsk"))->click();
+        dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAlways"))->click();
 
         // Nothing is saved before OK.
-        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Always);
-        dlg->save();
         QCOMPARE(RemoteImages::mode(), RemoteImageMode::Ask);
+        QVERIFY(!QSettings().contains(QStringLiteral("privacy/remoteImages")));
+        dlg->save();
+        QCOMPARE(RemoteImages::mode(), RemoteImageMode::Always);
         QCOMPARE(RemoteImages::allowedSenders(),
                  (QStringList{QStringLiteral("b@example.com"), QStringLiteral("pat@example.com")}));
         delete dlg;
 
         // Clear all, Never, OK.
         dlg = w.showPrivacyDialog();
-        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAsk"))->isChecked());
+        QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesAlways"))->isChecked());
         dlg->findChild<QPushButton *>(QStringLiteral("clearSendersButton"))->click();
         QCOMPARE(dlg->senderList()->count(), 0);
         dlg->findChild<QRadioButton *>(QStringLiteral("remoteImagesNever"))->click();
@@ -629,7 +651,7 @@ private slots:
         QCOMPARE(senderAddress(QStringLiteral("mailto:x@y.example")), QStringLiteral("x@y.example"));
         QVERIFY(senderAddress(QStringLiteral("Undisclosed recipients")).isEmpty());
         QVERIFY(senderAddress(QString()).isEmpty());
-        QCOMPARE(RemoteImages::modeFromKey(QStringLiteral("bogus")), RemoteImageMode::Always);
+        QCOMPARE(RemoteImages::modeFromKey(QStringLiteral("bogus")), RemoteImageMode::Ask);
     }
 
     void zoomShortcutsAndZoomToFit()

@@ -7,13 +7,15 @@
 namespace zmail::ui {
 
 // Settings > Privacy > Remote images. Stored in QSettings:
-//   privacy/remoteImages        "always" (default) | "ask" | "never"
+//   privacy/remoteImages        "always" | "ask" (default) | "never"
 //   privacy/remoteImageSenders  addresses whose mail loads images in Ask mode
 //   privacy/blockTrackers       bool, default true: known tracking pixels are
 //                               dropped even when images load
+//   privacy/allowHttpImages     bool, default false, not in the UI: also fetch
+//                               plain http:// images (normally HTTPS only)
 // Whatever the mode, fetches never send or store cookies or credentials, are
-// capped in size and count, and cid:/file: images are never fetched
-// (SafeHtmlView).
+// capped in size and count, only go to public addresses over HTTPS, and
+// cid:/file: images are never fetched (SafeHtmlView).
 enum class RemoteImageMode { Always, Ask, Never };
 
 namespace RemoteImages {
@@ -21,7 +23,10 @@ namespace RemoteImages {
 RemoteImageMode mode();
 void setMode(RemoteImageMode m);
 QString modeKey(RemoteImageMode m);              // "always" / "ask" / "never"
-RemoteImageMode modeFromKey(const QString &key); // unknown -> Always
+RemoteImageMode modeFromKey(const QString &key); // unknown -> Ask
+
+// The hidden privacy/allowHttpImages setting.
+bool allowInsecureHttp();
 
 bool blockTrackers();
 void setBlockTrackers(bool on);

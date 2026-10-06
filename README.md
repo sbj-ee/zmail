@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.4.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.4.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -12,8 +12,10 @@ menus with Undo Delete, a sign-in Retry banner, a new-mail sound mute
 0.4.0: Mark as Junk / Not Junk with a Hide Spam filter, Snooze (presets and a
 Snoozed mailbox), full-text search across the local cache, read-only Google
 Contacts, the Boilermakers, Badgers and Packers themes, and a Theme Editor
-for custom themes (`*.ztheme.json`, shared with zterminal). See
-[docs/PLAN.md](docs/PLAN.md).
+for custom themes (`*.ztheme.json`, shared with zterminal). New in 0.4.1:
+security hardening (no local file reads from mail or quoted replies, remote
+images default to Ask over HTTPS only with private addresses refused, OAuth
+state, header and `mailto:` fixes). See [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
 - Gmail over OAuth 2.0 only; no passwords are ever stored, and tokens live in
@@ -79,7 +81,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.4.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.4.1_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

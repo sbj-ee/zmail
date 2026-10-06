@@ -1,5 +1,6 @@
 #include "ReplyBuilder.h"
 
+#include "HtmlSanitizer.h"
 #include "MessageParser.h"
 #include "RichText.h"
 
@@ -91,7 +92,7 @@ ComposeDraft make(Kind kind, const CachedMessage &o, const QString &self)
         }
         d.quotedHtml = QStringLiteral("<p>") + hh + QStringLiteral("</p>") +
                        (o.bodyHtml.isEmpty() ? QStringLiteral("<p>") + body.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")) + QStringLiteral("</p>")
-                                             : o.bodyHtml);
+                                             : html::sanitize(o.bodyHtml, nullptr, true));
         // A forward starts a new thread but still points at the original.
         d.references = replyReferences(o.references, o.messageIdHeader);
         d.threadId.clear();
@@ -128,7 +129,9 @@ ComposeDraft make(Kind kind, const CachedMessage &o, const QString &self)
     const QString attr = attribution(o);
     d.quotedText = attr + QLatin1Char('\n') + richtext::quotePlain(body);
     d.quotedHtml = richtext::quoteHtml(
-        o.bodyHtml.isEmpty() ? body.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")) : o.bodyHtml, attr);
+        o.bodyHtml.isEmpty() ? body.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>"))
+                             : html::sanitize(o.bodyHtml, nullptr, true), // untrusted: no local files, scripts ...
+        attr);
     return d;
 }
 

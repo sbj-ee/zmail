@@ -1,6 +1,7 @@
 #include "ComposeWindow.h"
 
 #include "Icons.h"
+#include "SafeTextEdit.h"
 #include "SpellHighlighter.h"
 #include "Theme.h"
 #include "core/GmailClient.h"
@@ -113,7 +114,7 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     v->addWidget(m_banner);
 
     m_stack = new QStackedWidget(central);
-    m_body = new QTextEdit(m_stack);
+    m_body = new zmail::ui::SafeTextEdit(m_stack); // never reads files named in quoted/pasted HTML
     m_body->setObjectName(QStringLiteral("composeBody"));
     m_body->setFrameShape(QFrame::NoFrame);
     m_body->setAcceptRichText(true);

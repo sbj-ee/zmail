@@ -21,6 +21,7 @@
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QImage>
 #include <QTest>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -279,8 +280,13 @@ private slots:
         QCOMPARE(blocked, 2);
 
         ui::SafeHtmlView v;
-        QVERIFY(!v.loadResource(QTextDocument::ImageResource, QUrl(QStringLiteral("https://t.example/p.gif"))).isValid());
-        QVERIFY(!v.loadResource(QTextDocument::ImageResource, QUrl(QStringLiteral("file:///etc/passwd"))).isValid());
+        // Blocked resources come back as a 1x1 transparent image, never as a
+        // null QVariant (which would make QTextDocument read the file itself).
+        for (const char *u : {"https://t.example/p.gif", "file:///etc/passwd"}) {
+            const QVariant r = v.loadResource(QTextDocument::ImageResource, QUrl(QString::fromLatin1(u)));
+            QVERIFY2(r.canConvert<QImage>(), u);
+            QCOMPARE(r.value<QImage>().size(), QSize(1, 1));
+        }
         QVERIFY(!v.openLinks());
     }
 

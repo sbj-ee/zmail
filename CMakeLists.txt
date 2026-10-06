@@ -116,6 +116,10 @@ add_library(zmail_app STATIC
   src/ui/MessageWindow.h
   src/ui/SafeHtmlView.cpp
   src/ui/SafeHtmlView.h
+  src/core/HtmlSanitizer.cpp
+  src/core/HtmlSanitizer.h
+  src/ui/SafeTextEdit.cpp
+  src/ui/SafeTextEdit.h
   src/ui/PrivacyDialog.cpp
   src/ui/PrivacyDialog.h
   src/ui/SoundDialog.cpp

@@ -272,9 +272,17 @@ void MainWindow::buildMenus()
     struct T { const char *obj; QString text; ThemeMode mode; };
     for (const T &t : {T{"actionThemeLight", tr("&Light"), ThemeMode::Light},
                        T{"actionThemeDark", tr("&Dark"), ThemeMode::Dark},
-                       T{"actionThemeSystem", tr("Follow &System"), ThemeMode::System}}) {
+                       T{"actionThemeSystem", tr("Follow &System"), ThemeMode::System},
+                       // Brand themes shared with zterminal (ui/BrandThemes.h, docs/THEMES.md).
+                       T{"actionThemeBoilermakers", tr("&Boilermakers"), ThemeMode::Boilermakers},
+                       T{"actionThemeBadgers", tr("B&adgers"), ThemeMode::Badgers},
+                       T{"actionThemePackers", tr("&Packers"), ThemeMode::Packers}}) {
+        if (t.mode == ThemeMode::Boilermakers) {
+            theme->addSeparator();
+        }
         QAction *a = theme->addAction(t.text);
         a->setObjectName(QString::fromLatin1(t.obj));
+        a->setData(int(t.mode));
         a->setCheckable(true);
         a->setChecked(t.mode == currentTheme());
         m_themeGroup->addAction(a);
@@ -792,10 +800,9 @@ void MainWindow::refreshIcons()
 void MainWindow::setTheme(ThemeMode mode)
 {
     applyTheme(mode);
-    const char *want = mode == ThemeMode::Dark ? "actionThemeDark"
-                     : mode == ThemeMode::System ? "actionThemeSystem" : "actionThemeLight";
+    QSettings().setValue(QLatin1String(kThemeSettingKey), themeId(mode)); // restored by main()
     for (QAction *a : m_themeGroup->actions()) {
-        a->setChecked(a->objectName() == QLatin1String(want));
+        a->setChecked(a->data().toInt() == int(mode));
     }
     refreshIcons();
 }
@@ -1548,6 +1555,9 @@ void MainWindow::applyStripes()
         p.setColor(group, QPalette::AlternateBase, stripe);
     }
     m_list->setPalette(p);
+    // The list's palette would otherwise hide the header's class palette
+    // (brand themes colour the column headers; see applyTheme()).
+    m_list->header()->setPalette(QApplication::palette(m_list->header()));
     m_list->setAlternatingRowColors(m_stripes > 0);
     m_list->viewport()->update();
 }

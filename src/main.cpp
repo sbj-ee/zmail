@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QSettings>
 
 int main(int argc, char *argv[])
 {
@@ -19,8 +20,10 @@ int main(int argc, char *argv[])
     cli.setApplicationDescription(QStringLiteral("zmail: Gmail with Eudora-style sounds"));
     cli.addHelpOption();
     cli.addVersionOption();
-    QCommandLineOption theme(QStringLiteral("theme"), QStringLiteral("light, dark or system."),
-                             QStringLiteral("mode"), QStringLiteral("light"));
+    QCommandLineOption theme(QStringLiteral("theme"),
+                             QStringLiteral("light, dark, system, boilermakers, badgers or packers "
+                                            "(default: the last one picked in View > Theme)."),
+                             QStringLiteral("mode"));
     QCommandLineOption compose(QStringLiteral("compose"),
                                QStringLiteral("Open a sample reply in a compose window (preview)."));
     QCommandLineOption offline(QStringLiteral("offline"),
@@ -30,10 +33,10 @@ int main(int argc, char *argv[])
     cli.addOption(offline);
     cli.process(app);
 
-    const QString t = cli.value(theme).toLower();
-    zmail::ui::applyTheme(t == QLatin1String("dark")     ? zmail::ui::ThemeMode::Dark
-                          : t == QLatin1String("system") ? zmail::ui::ThemeMode::System
-                                                         : zmail::ui::ThemeMode::Light);
+    // --theme wins; otherwise View > Theme's last choice (QSettings ui/theme).
+    const QString t = cli.isSet(theme) ? cli.value(theme)
+                                       : QSettings().value(QLatin1String(zmail::ui::kThemeSettingKey)).toString();
+    zmail::ui::applyTheme(zmail::ui::themeFromId(t));
 
     MainWindow w;
     w.show();

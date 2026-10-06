@@ -118,6 +118,7 @@ add_library(zmail_app STATIC
   src/ui/SpellHighlighter.h
   src/ui/StripesDialog.cpp
   src/ui/StripesDialog.h
+  src/ui/BrandThemes.h
   src/ui/Theme.cpp
   src/ui/Theme.h
 )

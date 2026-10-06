@@ -103,6 +103,20 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - **Settings → Row Stripes** sets how strongly alternate rows in the message
   list are shaded (a slider with Off / Subtle / Normal / Strong presets).
 
+## Themes
+
+**View → Theme** offers Light (default), Dark, Follow System and three brand
+themes: **Boilermakers** (Purdue gold on black), **Badgers** (white on UW black
+with a Badger Red toolbar and headers) and **Packers** (white on Packers green
+with gold headers and selection). zmail remembers the choice (`ui/theme`);
+`zmail --theme packers` overrides it for one run. Messages keep their white
+page in every theme. The brand palette is shared with
+[zterminal](https://github.com/sbj-ee/zterminal); see
+[docs/THEMES.md](docs/THEMES.md) for every role, hex value, source and
+contrast ratio.
+
+![The Boilermakers, Badgers and Packers themes in zmail and zterminal](docs/screenshots/brand-themes.png)
+
 ## New-mail sound
 
 When new INBOX mail arrives (while zmail is already running), zmail plays a

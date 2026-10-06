@@ -11,7 +11,8 @@ menus with Undo Delete, a sign-in Retry banner, a new-mail sound mute
 (Ctrl+Shift+M), and Settings → Sounds (custom WAV, Test, Default). New in
 0.4.0: Mark as Junk / Not Junk with a Hide Spam filter, Snooze (presets and a
 Snoozed mailbox), full-text search across the local cache, read-only Google
-Contacts, and the Boilermakers, Badgers and Packers themes. See
+Contacts, the Boilermakers, Badgers and Packers themes, and a Theme Editor
+for custom themes (`*.ztheme.json`, shared with zterminal). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`

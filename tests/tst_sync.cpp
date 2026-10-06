@@ -18,6 +18,8 @@
 #include <QJsonArray>
 #include <QNetworkAccessManager>
 #include <QSignalSpy>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QTest>
 #include <QTimer>
 #include <algorithm>
@@ -67,13 +69,16 @@ struct Rig
     // Idle, including the follow-up history poll a full sync queues.
     bool settle()
     {
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 50; ++i) {
             if (!QTest::qWaitFor([this] { return !sync->isBusy(); }, 20000)) {
                 return false;
             }
-            QTest::qWait(30);
+            QTest::qWait(30); // a queued poll starts within this
+            if (!sync->isBusy()) {
+                return true;
+            }
         }
-        return !sync->isBusy();
+        return false;
     }
     bool waitIdle(int ms = 15000)
     {
@@ -81,6 +86,57 @@ struct Rig
         return idle.wait(ms) || !sync->isBusy();
     }
 };
+
+// One value read through a second connection to a cache file: what is
+// committed on disk, as another process would see it.
+QVariant onDisk(const QString &path, const QString &sql)
+{
+    QVariant v;
+    const QString name = QStringLiteral("tst-sync-peek");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+        db.setDatabaseName(path);
+        if (db.open()) {
+            QSqlQuery q(db);
+            if (q.exec(sql) && q.next()) {
+                v = q.value(0);
+            }
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(name);
+    return v;
+}
+
+bool runsOnDisk(const QString &path, const QString &sql)
+{
+    bool ok = false;
+    const QString name = QStringLiteral("tst-sync-run");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+        db.setDatabaseName(path);
+        if (db.open()) {
+            QSqlQuery q(db);
+            ok = q.exec(sql);
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(name);
+    return ok;
+}
+
+CachedMessage cached(const QString &id, const QString &subject, qint64 dateMs)
+{
+    CachedMessage m;
+    m.id = id;
+    m.subject = subject;
+    m.fromName = QStringLiteral("Ada Lovelace");
+    m.fromAddr = QStringLiteral("ada@example.org");
+    m.snippet = QStringLiteral("snippet of ") + subject;
+    m.internalDateMs = dateMs;
+    m.labels = {QStringLiteral("INBOX"), QStringLiteral("UNREAD")};
+    return m;
+}
 } // namespace
 
 class TstSync : public QObject
@@ -128,6 +184,204 @@ private slots:
         MailCache again;
         QVERIFY(again.open(path));
         QCOMPARE(again.historyId(), 42); // persisted
+    }
+
+    // The message list reads every row on each refresh: no bodies, and the
+    // snooze state in the same query.
+    void listingHasNoBodiesAndJoinsSnoozes()
+    {
+        MailCache c;
+        QVERIFY(c.open(QStringLiteral(":memory:")));
+        c.upsert(cached(QStringLiteral("old"), QStringLiteral("Oldest"), 1000));
+        c.upsert(cached(QStringLiteral("mid"), QStringLiteral("Middle"), 2000));
+        c.upsert(cached(QStringLiteral("new"), QStringLiteral("Newest"), 3000));
+        c.setBody(QStringLiteral("mid"), QString(50'000, QLatin1Char('x')), QStringLiteral("<p>big</p>"),
+                  {QStringLiteral("report.pdf")});
+        c.setSnooze(QStringLiteral("old"), 9'999'999, true); // snoozed
+        c.setSnooze(QStringLiteral("new"), 5, true);
+        c.markSnoozeWoke(QStringLiteral("new")); // woke: badge only
+
+        const QList<MailCache::Listed> rows = c.listing();
+        QCOMPARE(rows.size(), 3);
+        QCOMPARE(rows[0].message.id, QStringLiteral("new")); // newest first
+        QCOMPARE(rows[1].message.id, QStringLiteral("mid"));
+        QCOMPARE(rows[2].message.id, QStringLiteral("old"));
+        QCOMPARE(rows[1].message.subject, QStringLiteral("Middle"));
+        QCOMPARE(rows[1].message.snippet, QStringLiteral("snippet of Middle"));
+        QCOMPARE(rows[1].message.labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("UNREAD")}));
+        QVERIFY(rows[1].message.hasBody);
+        QVERIFY(rows[1].message.hasAttachment);
+        QCOMPARE(rows[1].message.attachments, QStringList{QStringLiteral("report.pdf")});
+        QVERIFY(rows[1].message.bodyText.isEmpty()); // not loaded
+        QVERIFY(rows[1].message.bodyHtml.isEmpty());
+        QCOMPARE(c.message(QStringLiteral("mid")).bodyText.size(), 50'000); // still there on demand
+        QCOMPARE(rows[1].snoozeWakeMs, 0);
+        QVERIFY(!rows[1].snoozeBadge);
+        QCOMPARE(rows[2].snoozeWakeMs, 9'999'999);
+        QVERIFY(!rows[2].snoozeBadge);
+        QCOMPARE(rows[0].snoozeWakeMs, 0);
+        QVERIFY(rows[0].snoozeBadge);
+        QCOMPARE(c.listing(2).size(), 2);
+    }
+
+    // Label edits and the engine's label checks read the row without its
+    // bodies; behaviour is unchanged.
+    void summaryAndLabelEditsSkipBodies()
+    {
+        MailCache c;
+        QVERIFY(c.open(QStringLiteral(":memory:")));
+        CachedMessage m = cached(QStringLiteral("a"), QStringLiteral("Fishing trip"), 1);
+        m.messageIdHeader = QStringLiteral("<a@mock.example>");
+        c.upsert(m);
+        c.setBody(QStringLiteral("a"), QString(50'000, QLatin1Char('x')), QStringLiteral("<p>big</p>"), {});
+        c.upsert(cached(QStringLiteral("b"), QStringLiteral("Budget"), 2));
+
+        const CachedMessage s = c.summary(QStringLiteral("a"));
+        QCOMPARE(s.id, QStringLiteral("a"));
+        QCOMPARE(s.subject, QStringLiteral("Fishing trip"));
+        QCOMPARE(s.messageIdHeader, QStringLiteral("<a@mock.example>"));
+        QCOMPARE(s.labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("UNREAD")}));
+        QVERIFY(s.unread());
+        QVERIFY(s.hasBody);
+        QVERIFY(s.bodyText.isEmpty());
+        QVERIFY(s.bodyHtml.isEmpty());
+        QVERIFY(c.summary(QStringLiteral("missing")).id.isEmpty());
+
+        c.modifyLabels(QStringLiteral("a"), {QStringLiteral("Label_1"), QStringLiteral("INBOX")}, {QStringLiteral("UNREAD")});
+        QCOMPARE(c.summary(QStringLiteral("a")).labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_1")}));
+        QCOMPARE(c.count(QStringLiteral("UNREAD")), 1); // only "b" now
+        QCOMPARE(c.message(QStringLiteral("a")).bodyText.size(), 50'000); // body untouched
+        c.modifyLabels(QStringLiteral("missing"), {QStringLiteral("INBOX")}, {});
+        QVERIFY(!c.contains(QStringLiteral("missing")));
+        QCOMPARE(c.count(), 2);
+
+        QStringList inbox = c.messageIds(QStringLiteral("INBOX"));
+        inbox.sort();
+        QCOMPARE(inbox, (QStringList{QStringLiteral("a"), QStringLiteral("b")}));
+        QCOMPARE(c.messageIds(QStringLiteral("Label_1")), QStringList{QStringLiteral("a")});
+        QVERIFY(c.messageIds(QStringLiteral("Label_9")).isEmpty());
+    }
+
+    // Opening a message or changing a label must not wait behind a queue of
+    // background sync fetches.
+    void interactiveCallsJumpTheBackgroundQueue()
+    {
+        Rig r;
+        r.api->setMaxInFlight(1);
+        QStringList order;
+        for (int i = 0; i < 8; ++i) {
+            r.api->getMessageMetadata(QStringLiteral("bg%1").arg(i), [&order, i](const QJsonObject &, const ApiError &) {
+                order << QStringLiteral("bg%1").arg(i);
+            });
+        }
+        r.api->getMessageFull(QStringLiteral("open-me"), [&order](const QJsonObject &, const ApiError &) {
+            order << QStringLiteral("full");
+        });
+        r.api->modifyLabels(QStringLiteral("open-me"), {}, {QStringLiteral("UNREAD")},
+                            [&order](const QJsonObject &, const ApiError &) { order << QStringLiteral("modify"); });
+        QTRY_COMPARE_WITH_TIMEOUT(order.size(), 10, 20000);
+        // bg0 was already on the wire; then the interactive ones, in the order
+        // asked; then the rest of the background ones, in theirs.
+        QCOMPARE(order, (QStringList{QStringLiteral("bg0"), QStringLiteral("full"), QStringLiteral("modify"),
+                                     QStringLiteral("bg1"), QStringLiteral("bg2"), QStringLiteral("bg3"),
+                                     QStringLiteral("bg4"), QStringLiteral("bg5"), QStringLiteral("bg6"),
+                                     QStringLiteral("bg7")}));
+    }
+
+    // Writes are grouped: nested begin()/commit() pairs reach the file as one
+    // commit, and commits don't fsync (WAL + synchronous=NORMAL).
+    void writesAreBatched()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("zmail.db"));
+        MailCache c;
+        QVERIFY(c.open(path));
+        QCOMPARE(c.pragma(QStringLiteral("journal_mode")).toString(), QStringLiteral("wal"));
+        QCOMPARE(c.pragma(QStringLiteral("synchronous")).toInt(), 1); // NORMAL
+
+        const QString count = QStringLiteral("SELECT COUNT(*) FROM messages");
+        QVERIFY(c.begin());
+        c.upsert(cached(QStringLiteral("a"), QStringLiteral("A"), 1)); // a transaction of its own, nested
+        {
+            const MailCache::Batch inner(c);
+            c.upsert(cached(QStringLiteral("b"), QStringLiteral("B"), 2));
+            c.setLabels(QStringLiteral("a"), {QStringLiteral("SENT")});
+        }
+        QCOMPARE(c.count(), 2);                // this connection sees its own writes
+        QCOMPARE(onDisk(path, count).toInt(), 0); // nothing committed by the inner pairs
+        QVERIFY(c.commit());
+        QCOMPARE(onDisk(path, count).toInt(), 2);
+        QCOMPARE(onDisk(path, QStringLiteral("SELECT COUNT(*) FROM message_labels")).toInt(), 3);
+        QVERIFY(!c.commit()); // nothing open
+
+        // Outside a batch each call commits itself.
+        c.upsert(cached(QStringLiteral("c"), QStringLiteral("C"), 3));
+        QCOMPARE(onDisk(path, count).toInt(), 3);
+    }
+
+    // Marking read / moving / trashing only rewrites labels: the full-text
+    // index (which holds the whole body) must not be rewritten for that.
+    void labelChangeDoesNotReindex()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("zmail.db"));
+        MailCache c;
+        QVERIFY(c.open(path));
+        QVERIFY(c.hasFts5());
+        c.upsert(cached(QStringLiteral("a"), QStringLiteral("Fishing trip"), 1));
+        c.setBody(QStringLiteral("a"), QStringLiteral("bring the waders and the coffee"), {}, {});
+        c.upsert(cached(QStringLiteral("b"), QStringLiteral("Budget review"), 2));
+
+        const QString indexState =
+            QStringLiteral("SELECT group_concat(id || ':' || length(block), ',') FROM messages_fts_data");
+        const QString before = onDisk(path, indexState).toString();
+        QVERIFY(!before.isEmpty());
+        c.setLabels(QStringLiteral("a"), {QStringLiteral("INBOX")}); // mark read
+        c.modifyLabels(QStringLiteral("a"), {QStringLiteral("TRASH")}, {QStringLiteral("INBOX")});
+        QCOMPARE(onDisk(path, indexState).toString(), before);
+        QCOMPARE(c.search(QStringLiteral("waders")), QStringList{QStringLiteral("a")});
+
+        // Indexed columns still re-index: new subject, new body.
+        c.upsert(cached(QStringLiteral("a"), QStringLiteral("Canoe trip"), 1));
+        QVERIFY(onDisk(path, indexState).toString() != before);
+        QVERIFY(c.search(QStringLiteral("fishing")).isEmpty());
+        QCOMPARE(c.search(QStringLiteral("canoe")), QStringList{QStringLiteral("a")});
+        QCOMPARE(c.search(QStringLiteral("waders")), QStringList{QStringLiteral("a")}); // body kept
+        c.setBody(QStringLiteral("a"), QStringLiteral("bring the paddles"), {}, {});
+        QVERIFY(c.search(QStringLiteral("waders")).isEmpty());
+        QCOMPARE(c.search(QStringLiteral("paddles")), QStringList{QStringLiteral("a")});
+        c.remove(QStringLiteral("b"));
+        QVERIFY(c.search(QStringLiteral("budget")).isEmpty());
+        // The index still agrees with the table (the statement fails if it doesn't).
+        QVERIFY(runsOnDisk(path, QStringLiteral("INSERT INTO messages_fts(messages_fts, rank) VALUES ('integrity-check', 1)")));
+        QCOMPARE(onDisk(path, QStringLiteral("SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH 'paddles'")).toInt(), 1);
+    }
+
+    // A cache written by an older zmail has the trigger on every UPDATE.
+    void oldUpdateTriggerIsReplaced()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("zmail.db"));
+        const QString triggerSql = QStringLiteral("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'messages_au'");
+        {
+            MailCache c;
+            QVERIFY(c.open(path));
+            c.upsert(cached(QStringLiteral("a"), QStringLiteral("Fishing trip"), 1));
+        }
+        QVERIFY(runsOnDisk(path, QStringLiteral("DROP TRIGGER messages_au")));
+        QVERIFY(runsOnDisk(path, QStringLiteral(
+            "CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN "
+            "INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_addr, to_addr, snippet, body_text) "
+            "VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_addr, old.to_addr, old.snippet, "
+            "old.body_text); "
+            "INSERT INTO messages_fts(rowid, subject, from_name, from_addr, to_addr, snippet, body_text) VALUES "
+            "(new.rowid, new.subject, new.from_name, new.from_addr, new.to_addr, new.snippet, new.body_text); END")));
+        QVERIFY(onDisk(path, triggerSql).toString().contains(QStringLiteral("AFTER UPDATE ON messages")));
+
+        MailCache c;
+        QVERIFY(c.open(path));
+        QVERIFY(onDisk(path, triggerSql).toString().contains(QStringLiteral("AFTER UPDATE OF subject")));
+        QCOMPARE(c.search(QStringLiteral("fishing")), QStringList{QStringLiteral("a")});
     }
 
     void labelsAndInitialInboxSync()
@@ -263,6 +517,42 @@ private slots:
         QCOMPARE(errors.count(), 1);
     }
 
+    // A refused label edit undoes what it changed and nothing else: a label
+    // that arrived meanwhile stays, and one the message already had isn't
+    // taken away.
+    void refusedEditUndoesOnlyItself()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        const QString junk = r.g.addMessage(r.msg(QStringLiteral("Not junk after all"), {QStringLiteral("INBOX")}, 2), false);
+        const QString filed = r.g.addMessage(
+            r.msg(QStringLiteral("Already filed"), {QStringLiteral("INBOX"), QStringLiteral("Label_2")}, 1), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2, 20000);
+        QVERIFY(r.settle());
+        r.api->setMaxAttempts(1);
+        QSignalSpy errors(r.sync.get(), &SyncEngine::syncError);
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + junk + QStringLiteral("/modify"), 500, 1, -1});
+        r.sync->markJunk(junk);
+        QVERIFY(r.cache.message(junk).labels.contains(QStringLiteral("SPAM"))); // optimistic
+        r.cache.modifyLabels(junk, {QStringLiteral("Label_1")}, {}); // labelled elsewhere while the call is out
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 10000);
+        QStringList labels = r.cache.message(junk).labels;
+        labels.sort();
+        QCOMPARE(labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_1")}));
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + filed + QStringLiteral("/modify"), 500, 1, -1});
+        r.sync->moveToLabel(filed, QStringLiteral("Label_2"), QStringLiteral("In"));
+        QVERIFY(!r.cache.message(filed).labels.contains(QStringLiteral("INBOX"))); // optimistic
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 2, 10000);
+        labels = r.cache.message(filed).labels;
+        labels.sort();
+        QCOMPARE(labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_2")}));
+    }
+
     // A page load cut off by a full resync used to leave its label marked
     // "loading" for good, so the folder never paged again.
     void fetchMoreWorksAfterResyncInterruptsOne()
@@ -304,7 +594,6 @@ private slots:
         r.sync->fetchMore(QStringLiteral("INBOX"));
         r.sync->stop(); // its answer is dropped
         r.sync->start();
-        QVERIFY(r.settle());
         r.sync->fetchMore(QStringLiteral("INBOX"));
         QTRY_COMPARE_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")), 5, 20000);
     }

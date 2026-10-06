@@ -115,7 +115,10 @@ public:
     void setHideSpam(bool hide);
     bool hideSpam() const { return m_hideSpam; }
     // Global FTS hit list for the Search mailbox (empty = sample / operator-only).
-    void setSearchIds(const QStringList &ids);
+    // fullText: the ids come from the full-text index, which has already
+    // matched the words to find (in the bodies too, which rows don't carry),
+    // so only operators and exclusions are checked against the row.
+    void setSearchIds(const QStringList &ids, bool fullText = false);
     QStringList searchIds() const { return m_searchIds; }
 
     static QList<SearchTerm> parseSearch(const QString &text);
@@ -129,6 +132,8 @@ protected:
 private:
     QString m_mailbox = QStringLiteral("In");
     QList<SearchTerm> m_terms;
+    QList<SearchTerm> m_fieldTerms; // m_terms without the plain words to find
+    bool m_searchIdsFullText = false;
     bool m_hideSpam = true;
     QStringList m_searchIds;
 };

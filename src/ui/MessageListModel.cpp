@@ -315,6 +315,12 @@ void MessageListModel::setStatus(int row, MailStatus status)
 void MessageFilterProxy::setSearchText(const QString &text)
 {
     m_terms = parseSearch(text);
+    m_fieldTerms.clear();
+    for (const SearchTerm &t : std::as_const(m_terms)) {
+        if (t.field != SearchTerm::Any || t.negate) {
+            m_fieldTerms << t;
+        }
+    }
     invalidateFilter();
 }
 
@@ -327,12 +333,13 @@ void MessageFilterProxy::setHideSpam(bool hide)
     invalidateFilter();
 }
 
-void MessageFilterProxy::setSearchIds(const QStringList &ids)
+void MessageFilterProxy::setSearchIds(const QStringList &ids, bool fullText)
 {
-    if (m_searchIds == ids) {
+    if (m_searchIds == ids && m_searchIdsFullText == fullText) {
         return;
     }
     m_searchIds = ids;
+    m_searchIdsFullText = fullText;
     invalidateFilter();
 }
 
@@ -494,10 +501,14 @@ bool MessageFilterProxy::filterAcceptsRow(int row, const QModelIndex &parent) co
         && idx.data(MessageListModel::SnoozeWakeRole).toLongLong() > 0) {
         return false;
     }
-    if (!m_terms.isEmpty()) {
+    // The full-text hit list already matched the words to find (over the
+    // bodies too, which list rows don't carry): operators and exclusions are left.
+    const bool ftsHits = m_mailbox == QLatin1String("Search") && m_searchIdsFullText && !m_searchIds.isEmpty();
+    const QList<SearchTerm> &terms = ftsHits ? m_fieldTerms : m_terms;
+    if (!terms.isEmpty()) {
         const auto *model = qobject_cast<const MessageListModel *>(sourceModel());
         if (model && row < model->rowCount()) {
-            return matches(m_terms, model->item(row));
+            return matches(terms, model->item(row));
         }
     }
     return true;

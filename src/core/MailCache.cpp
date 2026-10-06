@@ -45,6 +45,10 @@ CachedMessage fromRow(const QSqlQuery &q)
 const char *kCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
                     "size, labels, has_attachment, has_body, body_text, body_html, attachments, cc_addr, reply_to, "
                     "message_id_hdr, references_hdr";
+// The same row without the bodies (fromRow() reads them as empty).
+const char *kListCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
+                        "size, labels, has_attachment, has_body, '', '', attachments, cc_addr, reply_to, "
+                        "message_id_hdr, references_hdr";
 } // namespace
 
 MailCache::MailCache()
@@ -104,6 +108,9 @@ bool MailCache::open(const QString &path)
         QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
     exec(QStringLiteral("PRAGMA journal_mode=WAL"));
+    // WAL + NORMAL: commits don't fsync (checkpoints do). The file stays
+    // consistent; a power cut can lose the last commits, which a sync refetches.
+    exec(QStringLiteral("PRAGMA synchronous=NORMAL"));
     if (path != QLatin1String(":memory:")) {
         for (const char *suffix : {"-wal", "-shm"}) {
             QFile::setPermissions(path + QLatin1String(suffix), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
@@ -146,8 +153,13 @@ bool MailCache::open(const QString &path)
             "INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_addr, to_addr, snippet, body_text) "
             "VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_addr, old.to_addr, old.snippet, "
             "old.body_text); END"));
+        // Only when an indexed column is written: a label change (mark read,
+        // move, trash) must not re-index the whole body. Caches from before
+        // that have the trigger on every UPDATE, so it is always recreated.
+        exec(QStringLiteral("DROP TRIGGER IF EXISTS messages_au"));
         exec(QStringLiteral(
-            "CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN "
+            "CREATE TRIGGER messages_au AFTER UPDATE OF subject, from_name, from_addr, to_addr, snippet, body_text "
+            "ON messages BEGIN "
             "INSERT INTO messages_fts(messages_fts, rowid, subject, from_name, from_addr, to_addr, snippet, body_text) "
             "VALUES ('delete', old.rowid, old.subject, old.from_name, old.from_addr, old.to_addr, old.snippet, "
             "old.body_text); "
@@ -191,12 +203,30 @@ bool MailCache::migrate()
 
 bool MailCache::begin()
 {
+    if (m_txDepth++ > 0) {
+        return true;
+    }
     return QSqlDatabase::database(m_conn).transaction();
 }
 
 bool MailCache::commit()
 {
+    if (m_txDepth == 0) {
+        return false;
+    }
+    if (--m_txDepth > 0) {
+        return true;
+    }
     return QSqlDatabase::database(m_conn).commit();
+}
+
+QVariant MailCache::pragma(const QString &name) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("PRAGMA ") + name) && q.next()) {
+        return q.value(0);
+    }
+    return {};
 }
 
 QString MailCache::meta(const QString &key) const
@@ -222,9 +252,8 @@ void MailCache::setMeta(const QString &key, const QString &value)
 
 void MailCache::replaceLabels(const QList<CachedLabel> &labels)
 {
-    QSqlDatabase db = QSqlDatabase::database(m_conn);
-    db.transaction();
-    QSqlQuery q(db);
+    const Batch batch(*this);
+    QSqlQuery q(QSqlDatabase::database(m_conn));
     q.exec(QStringLiteral("DELETE FROM labels"));
     q.prepare(QStringLiteral("INSERT INTO labels(id, name, type, unread, total, color) VALUES (?, ?, ?, ?, ?, ?)"));
     for (const CachedLabel &l : labels) {
@@ -236,7 +265,6 @@ void MailCache::replaceLabels(const QList<CachedLabel> &labels)
         q.addBindValue(l.color);
         q.exec();
     }
-    db.commit();
 }
 
 QList<CachedLabel> MailCache::labels() const
@@ -253,6 +281,7 @@ QList<CachedLabel> MailCache::labels() const
 
 void MailCache::upsert(const CachedMessage &m)
 {
+    const Batch batch(*this); // the row and its labels together
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     QSqlQuery q(db);
     q.prepare(QStringLiteral(
@@ -305,6 +334,7 @@ void MailCache::setBody(const QString &id, const QString &text, const QString &h
 
 void MailCache::setLabels(const QString &id, const QStringList &labels)
 {
+    const Batch batch(*this);
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     QSqlQuery q(db);
     q.prepare(QStringLiteral("UPDATE messages SET labels = ? WHERE id = ?"));
@@ -324,10 +354,17 @@ void MailCache::setLabels(const QString &id, const QStringList &labels)
 
 void MailCache::modifyLabels(const QString &id, const QStringList &add, const QStringList &remove)
 {
-    if (!contains(id)) {
-        return;
+    // Just the labels column: this runs for every label change in a history page.
+    QStringList labels;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        q.prepare(QStringLiteral("SELECT labels FROM messages WHERE id = ?"));
+        q.addBindValue(id);
+        if (!q.exec() || !q.next()) {
+            return; // not cached
+        }
+        labels = q.value(0).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
     }
-    QStringList labels = message(id).labels;
     for (const QString &r : remove) {
         labels.removeAll(r);
     }
@@ -349,6 +386,7 @@ void MailCache::remove(const QString &id)
 
 void MailCache::clearMessages(bool keepSnoozed)
 {
+    const Batch batch(*this);
     if (keepSnoozed) {
         exec(QStringLiteral("DELETE FROM message_labels WHERE message_id NOT IN (SELECT message_id FROM snoozes)"));
         exec(QStringLiteral("DELETE FROM messages WHERE id NOT IN (SELECT message_id FROM snoozes)"));
@@ -380,6 +418,31 @@ CachedMessage MailCache::message(const QString &id) const
     return {};
 }
 
+CachedMessage MailCache::summary(const QString &id) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT %1 FROM messages WHERE id = ?").arg(QLatin1String(kListCols)));
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        return fromRow(q);
+    }
+    return {};
+}
+
+QStringList MailCache::messageIds(const QString &labelId) const
+{
+    QStringList ids;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT message_id FROM message_labels WHERE label_id = ?"));
+    q.addBindValue(labelId);
+    if (q.exec()) {
+        while (q.next()) {
+            ids.append(q.value(0).toString());
+        }
+    }
+    return ids;
+}
+
 QList<CachedMessage> MailCache::messages(const QString &labelId, int limit) const
 {
     QList<CachedMessage> out;
@@ -396,6 +459,27 @@ QList<CachedMessage> MailCache::messages(const QString &labelId, int limit) cons
     if (q.exec()) {
         while (q.next()) {
             out.append(fromRow(q));
+        }
+    }
+    return out;
+}
+
+QList<MailCache::Listed> MailCache::listing(int limit) const
+{
+    QList<Listed> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.setForwardOnly(true);
+    q.prepare(QStringLiteral("SELECT %1, s.wake_ms, s.badge FROM messages LEFT JOIN snoozes s ON s.message_id = id "
+                             "ORDER BY internal_date DESC LIMIT ?")
+                  .arg(QLatin1String(kListCols)));
+    q.addBindValue(limit);
+    if (q.exec()) {
+        while (q.next()) {
+            Listed l;
+            l.message = fromRow(q);
+            l.snoozeWakeMs = q.value(20).toLongLong();
+            l.snoozeBadge = q.value(21).toBool() && l.snoozeWakeMs == 0;
+            out.append(std::move(l));
         }
     }
     return out;
@@ -446,9 +530,13 @@ void MailCache::backfillFtsIfNeeded()
     setMeta(QStringLiteral("fts_backfill"), QStringLiteral("1"));
 }
 
-QStringList MailCache::search(const QString &userText, int limit) const
+QStringList MailCache::search(const QString &userText, int limit, bool *fullText) const
 {
     QStringList ids;
+    bool viaFts = false;
+    if (fullText) {
+        *fullText = false;
+    }
     if (userText.trimmed().isEmpty()) {
         return ids;
     }
@@ -478,6 +566,7 @@ QStringList MailCache::search(const QString &userText, int limit) const
         q.addBindValue(limit);
     }
     if (q.exec()) {
+        viaFts = m_fts5;
         while (q.next()) {
             ids.append(q.value(0).toString());
         }
@@ -501,6 +590,9 @@ QStringList MailCache::search(const QString &userText, int limit) const
                 }
             }
         }
+    }
+    if (fullText) {
+        *fullText = viaFts;
     }
     return ids;
 }

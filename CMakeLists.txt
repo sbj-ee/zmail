@@ -16,6 +16,18 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(ZMAIL_BUILD_TESTS "Build the Qt Test suite" ON)
+# CI turns these on; see .github/workflows/ci.yml.
+option(ZMAIL_WERROR "Treat compiler warnings in zmail's own code as errors" OFF)
+option(ZMAIL_SANITIZE "Build everything with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(ZMAIL_SANITIZE)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(FATAL_ERROR "ZMAIL_SANITIZE needs GCC or Clang")
+  endif()
+  # Global, before any target: the app library, the tests and the mock must
+  # all be instrumented. A UBSan report fails the test instead of only printing.
+  add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
 
 # Ubuntu 24.04 ships Qt 6.4.2; that is the floor.
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Svg Sql Multimedia)
@@ -45,6 +57,10 @@ add_library(zmail_app STATIC
   src/AboutDialog.hpp
   src/MainWindow.cpp
   src/MainWindow.hpp
+  src/MainWindowDetail.h
+  src/MainWindowMailboxes.cpp
+  src/MainWindowMessageActions.cpp
+  src/MainWindowSession.cpp
   src/UpdateChecker.cpp
   src/UpdateChecker.hpp
   src/core/AddressGuard.cpp
@@ -170,6 +186,9 @@ else()
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(zmail_app PRIVATE -Wall -Wextra -Wpedantic)
+  if(ZMAIL_WERROR)
+    target_compile_options(zmail_app PRIVATE -Werror)
+  endif()
 endif()
 
 add_executable(zmail src/main.cpp)

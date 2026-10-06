@@ -10,6 +10,7 @@
 #include <QNetworkAccessManager>
 #include <QSignalSpy>
 #include <QTest>
+#include <algorithm>
 #include <memory>
 
 using namespace zmail;
@@ -120,7 +121,8 @@ private slots:
         const int afterCreate = spy.count();
         r.sync->renameLabel(id, QStringLiteral("Projects/Beta"));
         QTRY_VERIFY_WITH_TIMEOUT(spy.count() > afterCreate, 10000);
-        QCOMPARE(idOf(QStringLiteral("Projects/Beta")), id);
+        // (labelsChanged also fires for the create's own refresh finishing.)
+        QTRY_COMPARE_WITH_TIMEOUT(idOf(QStringLiteral("Projects/Beta")), id, 10000);
         QVERIFY(idOf(QStringLiteral("Projects/Alpha")).isEmpty());
 
         const QString mid =
@@ -136,7 +138,7 @@ private slots:
         const int afterRename = spy.count();
         r.sync->deleteLabel(id);
         QTRY_VERIFY_WITH_TIMEOUT(spy.count() > afterRename, 10000);
-        QVERIFY(idOf(QStringLiteral("Projects/Beta")).isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(idOf(QStringLiteral("Projects/Beta")).isEmpty(), 10000);
         QVERIFY(r.g.messages().contains(mid));
         QVERIFY(!r.g.messages().value(mid).labels.contains(id));
         QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("INBOX")));
@@ -181,6 +183,129 @@ private slots:
         QVERIFY(local.contains(QStringLiteral("Label_2")));
         QVERIFY(!local.contains(QStringLiteral("INBOX")));
         QVERIFY(!local.contains(QStringLiteral("Label_1")));
+    }
+
+    // A multi-select move sends one modify per message; the sidebar counts are
+    // refreshed once afterwards, not once per message (each refresh is a
+    // labels.list plus a labels.get per label).
+    void movingSeveralMessagesRefreshesLabelsOnce()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        QStringList ids;
+        for (int i = 0; i < 8; ++i) {
+            ids << r.g.addMessage(r.msg(QStringLiteral("Move %1").arg(i), {QStringLiteral("INBOX")}, i), false);
+        }
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 8 && !r.sync->isBusy(), 20000);
+        QTest::qWait(100); // the follow-up history poll
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+
+        auto labelLists = [&r] {
+            int n = 0;
+            for (const QString &rq : r.g.requests) {
+                if (rq == QLatin1String("GET /gmail/v1/users/me/labels")) {
+                    ++n;
+                }
+            }
+            return n;
+        };
+        const int before = labelLists();
+        QVERIFY(before >= 1);
+        for (const QString &id : std::as_const(ids)) {
+            r.sync->moveToLabel(id, QStringLiteral("Label_2"), QStringLiteral("In"));
+        }
+        QCOMPARE(r.cache.count(QStringLiteral("Label_2")), 8); // optimistic
+        QTRY_VERIFY_WITH_TIMEOUT(std::all_of(ids.begin(), ids.end(), [&r](const QString &id) {
+            return r.g.messages().value(id).labels.contains(QStringLiteral("Label_2"));
+        }), 20000);
+        QTRY_COMPARE_WITH_TIMEOUT(labelLists(), before + 1, 10000);
+        QTest::qWait(1000); // and no more follow
+        QCOMPARE(labelLists(), before + 1);
+        QCOMPARE(r.cache.count(QStringLiteral("INBOX")), 0);
+        QCOMPARE(r.cache.count(QStringLiteral("Label_2")), 8);
+    }
+
+    // A folder renamed or deleted while a label refresh is under way: that
+    // refresh has already listed the labels, and the change's own refresh used
+    // to be folded into it, so the sidebar kept the old name (or the deleted
+    // folder) until some later refresh.
+    void folderChangeDuringLabelRefreshIsNotLost()
+    {
+        Rig r;
+        r.api->setBackoffBaseMs(200);
+        r.g.seedSystemLabels();
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy() && r.cache.historyId() > 0, 20000);
+        QTest::qWait(100); // the follow-up history poll
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+
+        auto idOf = [&r](const QString &name) {
+            for (const CachedLabel &l : r.cache.labels()) {
+                if (l.name == name && l.type == QLatin1String("user")) {
+                    return l.id;
+                }
+            }
+            return QString();
+        };
+        // The refresh after the create lists the labels, then can't finish
+        // for a while: one labels.get keeps failing.
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/INBOX"), 503, 2, -1});
+        r.sync->createLabel(QStringLiteral("Alpha"));
+        QTRY_VERIFY_WITH_TIMEOUT(!idOf(QStringLiteral("Alpha")).isEmpty(), 10000); // listed; counts still coming
+        const QString id = idOf(QStringLiteral("Alpha"));
+
+        r.sync->renameLabel(id, QStringLiteral("Beta"));
+        QTRY_COMPARE_WITH_TIMEOUT(idOf(QStringLiteral("Beta")), id, 10000);
+        QVERIFY(idOf(QStringLiteral("Alpha")).isEmpty());
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/INBOX"), 503, 2, -1});
+        r.sync->createLabel(QStringLiteral("Gamma"));
+        QTRY_VERIFY_WITH_TIMEOUT(!idOf(QStringLiteral("Gamma")).isEmpty(), 10000);
+        r.sync->deleteLabel(id);
+        QTRY_VERIFY_WITH_TIMEOUT(idOf(QStringLiteral("Beta")).isEmpty(), 10000);
+        QVERIFY(!idOf(QStringLiteral("Gamma")).isEmpty());
+    }
+
+    // A move that lands while a label refresh is under way used to be folded
+    // into that refresh, which may already have read the folder's old count:
+    // the sidebar then stayed wrong until some later refresh.
+    void moveDuringLabelRefreshStillUpdatesCounts()
+    {
+        Rig r;
+        r.api->setBackoffBaseMs(200);
+        // First in the list, so its count is the first one a refresh reads.
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_slow"), QStringLiteral("Slow"), QStringLiteral("user"), {}});
+        const QString a = r.g.addMessage(r.msg(QStringLiteral("Move A"), {QStringLiteral("INBOX")}, 1), false);
+        const QString b = r.g.addMessage(r.msg(QStringLiteral("Move B"), {QStringLiteral("INBOX")}, 2), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2 && !r.sync->isBusy(), 20000);
+        QTest::qWait(100); // the follow-up history poll
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+
+        auto cachedTotal = [&r] {
+            for (const CachedLabel &l : r.cache.labels()) {
+                if (l.id == QLatin1String("Label_2")) {
+                    return l.total;
+                }
+            }
+            return -1;
+        };
+        const QString getTarget = QStringLiteral("GET /gmail/v1/users/me/labels/Label_2");
+        QCOMPARE(cachedTotal(), 0);
+        const int gets = r.g.count(getTarget);
+
+        // The refresh after move A can't finish for a while: one labels.get keeps failing.
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/Label_slow"), 503, 2, -1});
+        r.sync->moveToLabel(a, QStringLiteral("Label_2"), QStringLiteral("In"));
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.count(getTarget) > gets, 10000); // it has read Label_2: 1 message
+        r.sync->moveToLabel(b, QStringLiteral("Label_2"), QStringLiteral("In"));
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(b).labels.contains(QStringLiteral("Label_2")), 10000);
+
+        QTRY_COMPARE_WITH_TIMEOUT(cachedTotal(), 2, 10000);
     }
 
     void moveFromInboxKeepsOtherUserLabels()

@@ -59,12 +59,12 @@ void GmailClient::setMaxSendsPerPump(int n)
 
 void GmailClient::getProfile(JsonCb cb)
 {
-    call("GET", QStringLiteral("/profile"), {}, {}, 1, std::move(cb));
+    call("GET", QStringLiteral("/profile"), {}, {}, 1, std::move(cb), Priority::Background);
 }
 
 void GmailClient::listLabels(JsonCb cb)
 {
-    call("GET", QStringLiteral("/labels"), {}, {}, 1, std::move(cb));
+    call("GET", QStringLiteral("/labels"), {}, {}, 1, std::move(cb), Priority::Background);
 }
 
 void GmailClient::getLabel(const QString &id, JsonCb cb)
@@ -72,7 +72,7 @@ void GmailClient::getLabel(const QString &id, JsonCb cb)
     // Label ids are usually [A-Za-z0-9_]+ (INBOX, Label_12); percent-encode
     // anyway so odd ids never break the path.
     const QString enc = QString::fromUtf8(QUrl::toPercentEncoding(id));
-    call("GET", QStringLiteral("/labels/") + enc, {}, {}, 1, std::move(cb));
+    call("GET", QStringLiteral("/labels/") + enc, {}, {}, 1, std::move(cb), Priority::Background);
 }
 
 void GmailClient::createLabel(const QString &name, const QString &backgroundColor, JsonCb cb)
@@ -118,7 +118,7 @@ void GmailClient::listMessages(const QString &labelId, int maxResults, const QSt
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);
     }
-    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb));
+    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb), Priority::Background);
 }
 
 void GmailClient::getMessageMetadata(const QString &id, JsonCb cb)
@@ -128,7 +128,7 @@ void GmailClient::getMessageMetadata(const QString &id, JsonCb cb)
     for (const char *h : {"From", "To", "Cc", "Reply-To", "Subject", "Date", "Message-ID", "References"}) {
         q.addQueryItem(QStringLiteral("metadataHeaders"), QString::fromLatin1(h));
     }
-    call("GET", QStringLiteral("/messages/") + id, q, {}, 5, std::move(cb));
+    call("GET", QStringLiteral("/messages/") + id, q, {}, 5, std::move(cb), Priority::Background);
 }
 
 void GmailClient::getMessageFull(const QString &id, JsonCb cb)
@@ -168,7 +168,7 @@ void GmailClient::listHistory(const QString &startHistoryId, const QString &page
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);
     }
-    call("GET", QStringLiteral("/history"), q, {}, 2, std::move(cb));
+    call("GET", QStringLiteral("/history"), q, {}, 2, std::move(cb), Priority::Background);
 }
 
 void GmailClient::listSendAs(JsonCb cb)
@@ -193,7 +193,8 @@ QUrl GmailClient::uploadBaseUrl() const
     return u;
 }
 
-void GmailClient::call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb)
+void GmailClient::call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb,
+                       Priority priority)
 {
     Request rq;
     rq.verb = std::move(verb);
@@ -201,6 +202,7 @@ void GmailClient::call(QByteArray verb, QString path, QUrlQuery q, QByteArray bo
     rq.query = std::move(q);
     rq.body = std::move(body);
     rq.units = units;
+    rq.priority = priority;
     request(std::move(rq), [cb = std::move(cb)](const RawReply &r) { cb(r.json, r.err); });
 }
 
@@ -214,7 +216,15 @@ void GmailClient::request(Request rq, RawCb cb)
 
 void GmailClient::enqueue(Call c)
 {
-    m_queue.append(std::move(c));
+    if (c.rq.priority == Priority::Interactive) {
+        // After the interactive calls already waiting, before any background one.
+        auto firstBackground = std::find_if(m_queue.begin(), m_queue.end(), [](const Call &q) {
+            return q.rq.priority == Priority::Background;
+        });
+        m_queue.insert(firstBackground, std::move(c));
+    } else {
+        m_queue.append(std::move(c));
+    }
     pump();
 }
 

@@ -24,8 +24,10 @@ class AuthManager : public QObject
     Q_OBJECT
 
 public:
-    // The only scopes zmail asks for (PLAN.md §2 decision: gmail.modify only).
+    // Sign-in scopes (PLAN.md §2): gmail.modify + openid email.
     static QStringList scopes();
+    // Added later via incremental consent when Contacts sync is enabled.
+    static QStringList contactScopes();
 
     using BrowserOpener = std::function<bool(const QUrl &)>;
     using TokenCb = std::function<void(const QString &accessToken, const QString &error)>;
@@ -43,6 +45,11 @@ public:
 
     // Interactive sign-in. Emits signedIn() or signInFailed().
     void startSignIn(const QString &loginHint = {});
+    // Incremental consent for People API scopes (include_granted_scopes=true).
+    // Existing Gmail grants are kept; user is only asked for Contacts.
+    void requestContactScopes();
+    bool hasContactScopes() const;
+    QStringList grantedScopes() const { return m_grantedScopes; }
     void cancelSignIn();
     // How long startSignIn() waits for the browser (0 = the default,
     // LoopbackServer::kDefaultTimeoutMs, 15 minutes). For tests.
@@ -95,7 +102,9 @@ private:
     QString m_refreshToken;
     QString m_accessToken;
     QDateTime m_accessExpiry;
+    QStringList m_grantedScopes;
     bool m_refreshing = false;
+    bool m_requestingContacts = false;
     QList<TokenCb> m_waiters;
 };
 

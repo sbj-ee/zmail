@@ -51,6 +51,8 @@ add_library(zmail_app STATIC
   src/core/AuthManager.h
   src/core/ClientConfig.cpp
   src/core/ClientConfig.h
+  src/core/ContactStore.cpp
+  src/core/ContactStore.h
   src/core/GmailClient.cpp
   src/core/GmailClient.h
   src/core/Limits.h
@@ -70,6 +72,8 @@ add_library(zmail_app STATIC
   src/core/MimeBuilder.h
   src/core/Pkce.cpp
   src/core/Pkce.h
+  src/core/PeopleClient.cpp
+  src/core/PeopleClient.h
   src/core/ReplyBuilder.cpp
   src/core/ReplyBuilder.h
   src/core/RichText.cpp
@@ -94,6 +98,8 @@ add_library(zmail_app STATIC
   src/ui/ComposeWindow.cpp
   src/ui/ConnectDialog.cpp
   src/ui/ConnectDialog.h
+  src/ui/ContactsWindow.cpp
+  src/ui/ContactsWindow.h
   src/ui/ComposeWindow.h
   src/ui/Icons.cpp
   src/ui/Icons.h

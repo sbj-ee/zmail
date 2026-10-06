@@ -37,6 +37,7 @@ class ConnectDialog;
 enum class ThemeMode;
 class PrivacyDialog;
 class StripesDialog;
+class ContactsWindow;
 } // namespace zmail::ui
 
 // Eudora-inspired main window: mailbox tree on the left, a dense sortable
@@ -126,6 +127,8 @@ private:
     void updateMessageActions();
     void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
+    void showContacts();
+    void addSenderToContacts();
     void trashMessage(QString id);
     void runFullTextSearch(const QString &text);
     void junkMessage(QString id);

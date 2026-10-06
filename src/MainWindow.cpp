@@ -13,6 +13,9 @@
 #include "core/SnoozeTimes.h"
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
+#include "ui/ContactsWindow.h"
+#include "core/ContactStore.h"
+#include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
 #include "ui/SoundDialog.h"
 #include "ui/SafeHtmlView.h"
@@ -323,6 +326,8 @@ void MainWindow::buildMenus()
     del->setProperty("lucide", QStringLiteral("trash"));
     del->setShortcuts({QKeySequence::Delete});
     message->addSeparator();
+    QAction *addContact = message->addAction(tr("Add Sender to &Contacts"), this, &MainWindow::addSenderToContacts);
+    addContact->setObjectName(QStringLiteral("actionAddSenderToContacts"));
     QAction *junk = message->addAction(icon(QStringLiteral("shield-alert")), tr("Mark as &Junk"), this,
                                        [this]() { junkMessage(m_shownId); });
     junk->setObjectName(QStringLiteral("menuActionJunk"));
@@ -351,6 +356,16 @@ void MainWindow::buildMenus()
     privacy->setObjectName(QStringLiteral("actionPrivacy"));
     QAction *sounds = settings->addAction(tr("S&ounds\u2026"), this, [this]() { showSoundDialog()->open(); });
     sounds->setObjectName(QStringLiteral("actionSounds"));
+    QAction *contacts = settings->addAction(tr("&Contacts…"), this, &MainWindow::showContacts);
+    contacts->setObjectName(QStringLiteral("actionContacts"));
+    QAction *syncContacts = settings->addAction(tr("Sync &Contacts from Google"), this, [this]() {
+        if (m_session) {
+            m_session->enableContactsSync();
+        } else {
+            statusBar()->showMessage(tr("Sign in to Gmail to sync contacts."), 5000);
+        }
+    });
+    syncContacts->setObjectName(QStringLiteral("actionSyncContacts"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
@@ -1402,6 +1417,38 @@ void MainWindow::selectPastRemoved(const QStringList &ids)
     } else {
         m_list->setCurrentIndex(m_proxy->index(next.rowBefore, 0)); // shows it in the preview
     }
+}
+
+void MainWindow::showContacts()
+{
+    zmail::ContactStore *store = m_live && m_session ? m_session->contacts() : nullptr;
+    if (!store || !store->isOpen()) {
+        statusBar()->showMessage(tr("Sign in to Gmail to use Contacts."), 5000);
+        return;
+    }
+    auto *dlg = new ContactsWindow(store, m_session->contactsSync(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MainWindow::addSenderToContacts()
+{
+    zmail::ContactStore *store = m_live && m_session ? m_session->contacts() : nullptr;
+    if (!store || !store->isOpen()) {
+        statusBar()->showMessage(tr("Sign in to Gmail to save contacts."), 5000);
+        return;
+    }
+    if (m_shownId.isEmpty() || !m_session->cache()) {
+        statusBar()->showMessage(tr("Select a message first."), 5000);
+        return;
+    }
+    const zmail::CachedMessage c = m_session->cache()->message(m_shownId);
+    if (c.fromAddr.isEmpty()) {
+        statusBar()->showMessage(tr("This message has no From address."), 5000);
+        return;
+    }
+    store->addLocalContact(c.fromName, c.fromAddr);
+    statusBar()->showMessage(tr("Saved %1 locally (not uploaded to Google).").arg(c.fromAddr), 5000);
 }
 
 void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, cleared below

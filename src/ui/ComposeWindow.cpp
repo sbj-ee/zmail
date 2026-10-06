@@ -6,6 +6,7 @@
 #include "core/GmailClient.h"
 #include "core/Log.h"
 #include "core/MailSession.h"
+#include "core/ContactStore.h"
 #include "core/Markdown.h"
 #include "core/MessageParser.h"
 #include "core/RichText.h"
@@ -35,6 +36,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QCompleter>
+#include <QStringListModel>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
@@ -1085,6 +1088,33 @@ void ComposeWindow::setSession(MailSession *session)
         const int fmt = QSettings().value(QStringLiteral("compose/format"), 0).toInt();
         if (fmt != int(m_currentFormat) && fmt >= 0 && fmt <= 2) {
             setFormat(Format(fmt));
+        }
+        // To/Cc/Bcc autocomplete from the local contacts cache + sent-address frecency.
+        if (ContactStore *store = session->contacts()) {
+            auto install = [store](QLineEdit *edit) {
+                auto *model = new QStringListModel(edit);
+                auto *comp = new QCompleter(model, edit);
+                comp->setCaseSensitivity(Qt::CaseInsensitive);
+                comp->setFilterMode(Qt::MatchStartsWith);
+                edit->setCompleter(comp);
+                QObject::connect(edit, &QLineEdit::textEdited, edit, [store, model, edit](const QString &text) {
+                    // Complete the last address fragment after a comma.
+                    QString frag = text.section(QLatin1Char(','), -1).trimmed();
+                    if (frag.contains(QLatin1Char('<'))) {
+                        frag = frag.section(QLatin1Char('<'), -1);
+                    }
+                    QStringList rows;
+                    for (const AutocompleteHit &h : store->autocomplete(frag, 12)) {
+                        rows << (h.displayName.isEmpty()
+                                     ? h.email
+                                     : QStringLiteral("%1 <%2>").arg(h.displayName, h.email));
+                    }
+                    model->setStringList(rows);
+                });
+            };
+            install(m_to);
+            install(m_cc);
+            install(m_bcc);
         }
     }
 }

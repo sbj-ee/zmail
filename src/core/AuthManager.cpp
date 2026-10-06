@@ -14,6 +14,7 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrlQuery>
+#include <QSettings>
 
 namespace zmail {
 
@@ -40,6 +41,12 @@ QStringList AuthManager::scopes()
 {
     return {QStringLiteral("https://www.googleapis.com/auth/gmail.modify"), QStringLiteral("openid"),
             QStringLiteral("email")};
+}
+
+QStringList AuthManager::contactScopes()
+{
+    return {QStringLiteral("https://www.googleapis.com/auth/contacts.readonly"),
+            QStringLiteral("https://www.googleapis.com/auth/contacts.other.readonly")};
 }
 
 AuthManager::AuthManager(ClientConfig config, TokenStore *store, QNetworkAccessManager *nam, QObject *parent)
@@ -92,7 +99,12 @@ void AuthManager::startSignIn(const QString &loginHint)
     q.addQueryItem(QStringLiteral("client_id"), m_config.clientId);
     q.addQueryItem(QStringLiteral("redirect_uri"), m_redirect.toString());
     q.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
-    q.addQueryItem(QStringLiteral("scope"), scopes().join(QLatin1Char(' ')));
+    QStringList want = scopes();
+    if (m_requestingContacts) {
+        want += contactScopes();
+        q.addQueryItem(QStringLiteral("include_granted_scopes"), QStringLiteral("true"));
+    }
+    q.addQueryItem(QStringLiteral("scope"), want.join(QLatin1Char(' ')));
     q.addQueryItem(QStringLiteral("code_challenge"), QString::fromLatin1(pkce::challengeS256(m_verifier)));
     q.addQueryItem(QStringLiteral("code_challenge_method"), QStringLiteral("S256"));
     q.addQueryItem(QStringLiteral("state"), QString::fromLatin1(m_state));
@@ -107,10 +119,37 @@ void AuthManager::startSignIn(const QString &loginHint)
     qCInfo(lcAuth).noquote() << "Sign-in: waiting for the browser redirect on port" << m_listenPort << "(for up to"
                              << describeTimeout(m_loopback->timeoutMs()) + ')';
     emit signInStarted(url);
+    m_requestingContacts = false;
     if (!m_open(url)) {
         cancelSignIn(); // nothing will come back; don't leave the port open
         emit signInFailed(tr("Couldn't open the web browser for Google sign-in."));
     }
+}
+
+void AuthManager::requestContactScopes()
+{
+    if (hasContactScopes()) {
+        emit signedIn(m_account);
+        return;
+    }
+    if (signInInProgress()) {
+        return;
+    }
+    m_requestingContacts = true;
+    startSignIn(m_account);
+}
+
+bool AuthManager::hasContactScopes() const
+{
+    if (m_grantedScopes.isEmpty()) {
+        return false;
+    }
+    for (const QString &s : contactScopes()) {
+        if (!m_grantedScopes.contains(s)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void AuthManager::cancelSignIn()
@@ -220,6 +259,10 @@ void AuthManager::exchangeCode(const QString &code)
             return;
         }
         const QString granted = o.value(QStringLiteral("scope")).toString();
+        if (!granted.isEmpty()) {
+            m_grantedScopes = granted.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            QSettings().setValue(QStringLiteral("auth/grantedScopes"), m_grantedScopes);
+        }
         if (!granted.isEmpty() && !granted.contains(QLatin1String("https://www.googleapis.com/auth/gmail.modify"))) {
             emit signInFailed(tr("Gmail access wasn't granted. On Google's consent screen, tick the box that "
                                  "lets zmail read, compose and send your email, then try again."));
@@ -259,6 +302,7 @@ void AuthManager::restore(const QString &account, std::function<void(bool, const
         if (ok && !value.isEmpty()) {
             m_account = account;
             m_refreshToken = value;
+            m_grantedScopes = QSettings().value(QStringLiteral("auth/grantedScopes")).toStringList();
             m_accessToken.clear();
             qCInfo(lcAuth) << "Restored saved sign-in for" << account;
         }

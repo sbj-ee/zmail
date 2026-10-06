@@ -130,6 +130,7 @@ private:
     void selectPastRemoved(const QStringList &ids);
     void checkMail();
     void updateSyncLabel(const QString &status = {});
+    void updateAccountStatus(); // colours the bottom-left account circle
     QString labelForMailbox(const QString &key) const;
     void showLiveMessage(int row);
     void updateMessageActions();
@@ -175,6 +176,7 @@ private:
     QList<QPointer<zmail::ui::MessageWindow>> m_messageWindows;
     QLineEdit *m_search = nullptr;
     QString m_mailboxBeforeSearch; // restored when the search box is cleared
+    QLabel *m_accountStatus = nullptr; // coloured \u25cf next to the account line
     QLabel *m_syncLabel = nullptr;
     QLabel *m_countLabel = nullptr;
     zmail::ui::MessageListModel *m_model = nullptr;
@@ -207,6 +209,8 @@ private:
     int m_stripes = 40;
     void applyStripes();
     QString m_lastSync;     // "8:45 AM"
+    QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
+    bool m_keepSyncErrorAcrossIdle = false;
     QString m_shownId;      // message currently in the preview
     int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
     // A Delete still waiting on Gmail: if it fails, the next reload selects

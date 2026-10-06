@@ -69,6 +69,8 @@
 #include <QTextBrowser>
 #include <QToolBar>
 #include <QTreeView>
+#include <QItemSelectionModel>
+#include <QSet>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 #include <QUrl>
@@ -407,7 +409,7 @@ void MainWindow::buildMenus()
     markUnread->setObjectName(QStringLiteral("actionMarkUnread"));
     markUnread->setProperty("lucide", QStringLiteral("mail"));
     QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
-                                      [this]() { trashMessage(m_shownId); });
+                                      [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
     del->setProperty("lucide", QStringLiteral("trash"));
     del->setShortcuts({QKeySequence::Delete});
@@ -415,12 +417,12 @@ void MainWindow::buildMenus()
     QAction *addContact = message->addAction(tr("Add Sender to &Contacts"), this, &MainWindow::addSenderToContacts);
     addContact->setObjectName(QStringLiteral("actionAddSenderToContacts"));
     QAction *junk = message->addAction(icon(QStringLiteral("shield-alert")), tr("Mark as &Junk"), this,
-                                       [this]() { junkMessage(m_shownId); });
+                                       [this]() { junkSelected(); });
     junk->setObjectName(QStringLiteral("menuActionJunk"));
     junk->setProperty("lucide", QStringLiteral("shield-alert"));
     junk->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_J));
     QAction *notJunk = message->addAction(icon(QStringLiteral("mail")), tr("Not &Junk"), this,
-                                          [this]() { notJunkMessage(m_shownId); });
+                                          [this]() { notJunkSelected(); });
     notJunk->setObjectName(QStringLiteral("menuActionNotJunk"));
     notJunk->setProperty("lucide", QStringLiteral("mail"));
     notJunk->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_J));
@@ -429,7 +431,7 @@ void MainWindow::buildMenus()
     snoozeMenu->setTitle(tr("S&nooze"));
     snoozeMenu->setObjectName(QStringLiteral("menuSnooze"));
     message->addMenu(snoozeMenu);
-    QAction *unsnooze = message->addAction(tr("&Unsnooze"), this, [this]() { unsnoozeMessage(m_shownId); });
+    QAction *unsnooze = message->addAction(tr("&Unsnooze"), this, [this]() { unsnoozeSelected(); });
     unsnooze->setObjectName(QStringLiteral("menuActionUnsnooze"));
     unsnooze->setVisible(false);
 
@@ -514,12 +516,12 @@ void MainWindow::buildToolbar()
     connect(findChild<QAction *>(QStringLiteral("actionCheckMail")), &QAction::triggered, this,
             &MainWindow::checkMail);
     connect(findChild<QAction *>(QStringLiteral("actionDelete")), &QAction::triggered, this,
-            [this]() { trashMessage(m_shownId); });
+            [this]() { trashSelected(); });
     connect(findChild<QAction *>(QStringLiteral("actionJunk")), &QAction::triggered, this, [this]() {
         if (m_proxy->mailbox() == QLatin1String("Junk")) {
-            notJunkMessage(m_shownId);
+            notJunkSelected();
         } else {
-            junkMessage(m_shownId);
+            junkSelected();
         }
     });
     addSoundButton(tb);
@@ -582,6 +584,8 @@ void MainWindow::buildPanes()
     m_list->setSortingEnabled(true);
     m_list->setAllColumnsShowFocus(true);
     m_list->setSelectionBehavior(QAbstractItemView::SelectRows);
+    // Shift+click / Shift+arrows range-select; Ctrl/Cmd+click toggles a row.
+    m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_list->setDragEnabled(true);
     m_list->setDragDropMode(QAbstractItemView::DragOnly);
     m_list->setDefaultDropAction(Qt::MoveAction);
@@ -1053,7 +1057,7 @@ void MainWindow::updateMessageActions()
         }
     }
     // Delete / Mark / Junk: only with a message actually selected (so never in an
-    // empty mailbox), in sample mode too.
+    // empty mailbox), in sample mode too. Multi-select keeps a current index.
     const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
     for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread",
                           "actionJunk", "menuActionJunk", "menuActionNotJunk", "menuActionUnsnooze"}) {
@@ -1615,26 +1619,52 @@ void MainWindow::addSenderToContacts()
     statusBar()->showMessage(tr("Saved %1 locally (not uploaded to Google).").arg(c.fromAddr), 5000);
 }
 
-void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, cleared below
+void MainWindow::trashMessage(QString id) // by value: Message window / single-id callers
 {
+    if (!id.isEmpty()) {
+        trashMessages({id});
+    }
+}
+
+void MainWindow::trashSelected()
+{
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    trashMessages(ids);
+}
+
+void MainWindow::trashMessages(const QStringList &idsIn)
+{
+    QStringList ids;
+    for (const QString &id : idsIn) {
+        if (!id.isEmpty() && !ids.contains(id)) {
+            ids.append(id);
+        }
+    }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    if (!sync || id.isEmpty()) {
+    if (!sync || ids.isEmpty()) {
         statusBar()->showMessage(m_live ? tr("Select a message to delete.") : tr("Sign in to Gmail to delete mail."),
                                  5000);
         return;
     }
-    const bool wasCurrent = currentListId() == id;
-    selectPastRemoved({id});
-    if (wasCurrent) {
-        m_pendingTrash.insert(id, {m_proxy->mailbox(), currentListId()});
+    const QString currentId = currentListId();
+    const bool currentInBatch = ids.contains(currentId);
+    selectPastRemoved(ids);
+    if (currentInBatch) {
+        // One pending entry is enough to reselect the neighbour if Gmail refuses.
+        m_pendingTrash.insert(currentId, {m_proxy->mailbox(), currentListId()});
     }
-    sync->trash(id); // optimistic; rolled back (onTrashFailed) if Gmail refuses
-    if (m_shownId == id) {
+    for (const QString &id : ids) {
+        sync->trash(id); // optimistic; rolled back (onTrashFailed) if Gmail refuses
+    }
+    if (ids.contains(m_shownId)) {
         m_view->clear();
         m_shownId.clear();
         updateMessageActions();
     }
-    offerUndoDelete(id);
+    offerUndoDelete(ids);
 }
 
 QString MainWindow::currentListId() const
@@ -1643,19 +1673,55 @@ QString MainWindow::currentListId() const
     return cur.isValid() ? m_model->item(m_proxy->mapToSource(cur).row()).id : QString();
 }
 
+QList<int> MainWindow::selectedSourceRows() const
+{
+    QList<int> rows;
+    if (!m_list || !m_list->selectionModel() || !m_proxy || !m_model) {
+        return rows;
+    }
+    QSet<int> seen;
+    for (const QModelIndex &pi : m_list->selectionModel()->selectedRows(0)) {
+        if (!pi.isValid()) {
+            continue;
+        }
+        const int sr = m_proxy->mapToSource(pi).row();
+        if (sr < 0 || seen.contains(sr)) {
+            continue;
+        }
+        seen.insert(sr);
+        rows.append(sr);
+    }
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
+QStringList MainWindow::selectedMessageIds() const
+{
+    QStringList ids;
+    for (int r : selectedSourceRows()) {
+        const QString id = m_model->item(r).id;
+        if (!id.isEmpty()) {
+            ids.append(id);
+        }
+    }
+    return ids;
+}
+
 void MainWindow::onTrashFailed(const QString &id)
 {
     // The row comes back with the rollback's refresh; the error itself is
     // already in the status bar (syncError). Nothing is left to undo.
-    if (m_lastTrashed == id) {
-        m_lastTrashed.clear();
-        if (m_undoTimer) {
-            m_undoTimer->stop();
+    if (m_lastTrashed.contains(id)) {
+        m_lastTrashed.removeAll(id);
+        if (m_lastTrashed.isEmpty()) {
+            if (m_undoTimer) {
+                m_undoTimer->stop();
+            }
+            if (m_undoBar) {
+                m_undoBar->hide();
+            }
+            m_undoDeleteAction->setEnabled(false);
         }
-        if (m_undoBar) {
-            m_undoBar->hide();
-        }
-        m_undoDeleteAction->setEnabled(false);
     }
     const auto it = m_pendingTrash.constFind(id);
     if (it == m_pendingTrash.constEnd()) {
@@ -1702,8 +1768,28 @@ void MainWindow::runFullTextSearch(const QString &text)
 
 void MainWindow::junkMessage(QString id)
 {
+    junkSelectedIds(id.isEmpty() ? QStringList{} : QStringList{id});
+}
+
+void MainWindow::junkSelected()
+{
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    junkSelectedIds(ids);
+}
+
+void MainWindow::junkSelectedIds(const QStringList &idsIn)
+{
+    QStringList ids;
+    for (const QString &id : idsIn) {
+        if (!id.isEmpty() && !ids.contains(id)) {
+            ids.append(id);
+        }
+    }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    if (!sync || id.isEmpty()) {
+    if (!sync || ids.isEmpty()) {
         statusBar()->showMessage(
             m_live ? tr("Select a message to mark as Junk.") : tr("Sign in to Gmail to mark Junk."), 5000);
         return;
@@ -1711,30 +1797,56 @@ void MainWindow::junkMessage(QString id)
     // Spam leaves In, and every view but Junk while Hide Spam is on.
     if (m_proxy->mailbox() == QLatin1String("In")
         || (m_proxy->hideSpam() && m_proxy->mailbox() != QLatin1String("Junk"))) {
-        selectPastRemoved({id});
+        selectPastRemoved(ids);
     }
-    sync->markJunk(id);
-    if (m_shownId == id) {
+    for (const QString &id : ids) {
+        sync->markJunk(id);
+    }
+    if (ids.contains(m_shownId)) {
         m_view->clear();
         m_shownId.clear();
         updateMessageActions();
     }
-    statusBar()->showMessage(tr("Moved to Spam."), 5000);
+    statusBar()->showMessage(
+        ids.size() == 1 ? tr("Moved to Spam.") : tr("Moved %1 messages to Spam.").arg(ids.size()), 5000);
 }
 
 void MainWindow::notJunkMessage(QString id)
 {
+    notJunkSelectedIds(id.isEmpty() ? QStringList{} : QStringList{id});
+}
+
+void MainWindow::notJunkSelected()
+{
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    notJunkSelectedIds(ids);
+}
+
+void MainWindow::notJunkSelectedIds(const QStringList &idsIn)
+{
+    QStringList ids;
+    for (const QString &id : idsIn) {
+        if (!id.isEmpty() && !ids.contains(id)) {
+            ids.append(id);
+        }
+    }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    if (!sync || id.isEmpty()) {
+    if (!sync || ids.isEmpty()) {
         statusBar()->showMessage(
             m_live ? tr("Select a message to mark as Not Junk.") : tr("Sign in to Gmail to mark Not Junk."), 5000);
         return;
     }
     if (m_proxy->mailbox() == QLatin1String("Junk")) {
-        selectPastRemoved({id}); // no longer spam: gone from the Junk list
+        selectPastRemoved(ids); // no longer spam: gone from the Junk list
     }
-    sync->markNotJunk(id);
-    statusBar()->showMessage(tr("Moved out of Spam."), 5000);
+    for (const QString &id : ids) {
+        sync->markNotJunk(id);
+    }
+    statusBar()->showMessage(
+        ids.size() == 1 ? tr("Moved out of Spam.") : tr("Moved %1 messages out of Spam.").arg(ids.size()), 5000);
 }
 
 bool MainWindow::hideSpam() const
@@ -1775,7 +1887,7 @@ QMenu *MainWindow::buildSnoozeMenu(QWidget *parent)
                        P{"nextWeek", QT_TR_NOOP("Next Week (Mon 8:00 AM)")}}) {
         QAction *a = menu->addAction(tr(p.text), this, [this, id = QByteArray(p.id)]() {
             const QDateTime wake = zmail::SnoozeTimes::wakeFor(id.constData(), QDateTime::currentDateTime());
-            snoozeMessage(m_shownId, wake.toMSecsSinceEpoch());
+            snoozeSelected(wake.toMSecsSinceEpoch());
         });
         a->setObjectName(QStringLiteral("snooze_") + QString::fromLatin1(p.id));
     }
@@ -1787,36 +1899,84 @@ QMenu *MainWindow::buildSnoozeMenu(QWidget *parent)
 
 void MainWindow::snoozeMessage(QString id, qint64 wakeMs)
 {
+    snoozeMessages(id.isEmpty() ? QStringList{} : QStringList{id}, wakeMs);
+}
+
+void MainWindow::snoozeSelected(qint64 wakeMs)
+{
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    snoozeMessages(ids, wakeMs);
+}
+
+void MainWindow::snoozeMessages(const QStringList &idsIn, qint64 wakeMs)
+{
+    QStringList ids;
+    for (const QString &id : idsIn) {
+        if (!id.isEmpty() && !ids.contains(id)) {
+            ids.append(id);
+        }
+    }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    if (!sync || id.isEmpty() || wakeMs <= 0) {
+    if (!sync || ids.isEmpty() || wakeMs <= 0) {
         statusBar()->showMessage(
             m_live ? tr("Select a message to snooze.") : tr("Sign in to Gmail to snooze mail."), 5000);
         return;
     }
-    selectPastRemoved({id}); // it leaves every view but Snoozed
-    sync->snooze(id, wakeMs);
-    if (m_shownId == id) {
+    selectPastRemoved(ids); // they leave every view but Snoozed
+    for (const QString &id : ids) {
+        sync->snooze(id, wakeMs);
+    }
+    if (ids.contains(m_shownId)) {
         m_view->clear();
         m_shownId.clear();
         updateMessageActions();
     }
     const QString when = MessageListModel::formatDate(QDateTime::fromMSecsSinceEpoch(wakeMs).toLocalTime());
-    statusBar()->showMessage(tr("Snoozed until %1.").arg(when), 5000);
+    statusBar()->showMessage(
+        ids.size() == 1 ? tr("Snoozed until %1.").arg(when)
+                        : tr("Snoozed %1 messages until %2.").arg(ids.size()).arg(when),
+        5000);
 }
 
 void MainWindow::unsnoozeMessage(QString id)
 {
+    unsnoozeMessages(id.isEmpty() ? QStringList{} : QStringList{id});
+}
+
+void MainWindow::unsnoozeSelected()
+{
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    unsnoozeMessages(ids);
+}
+
+void MainWindow::unsnoozeMessages(const QStringList &idsIn)
+{
+    QStringList ids;
+    for (const QString &id : idsIn) {
+        if (!id.isEmpty() && !ids.contains(id)) {
+            ids.append(id);
+        }
+    }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    if (!sync || id.isEmpty()) {
+    if (!sync || ids.isEmpty()) {
         statusBar()->showMessage(
             m_live ? tr("Select a snoozed message.") : tr("Sign in to Gmail to unsnooze."), 5000);
         return;
     }
     if (m_proxy->mailbox() == QLatin1String("Snoozed")) {
-        selectPastRemoved({id}); // back to In: gone from the Snoozed list
+        selectPastRemoved(ids); // back to In: gone from the Snoozed list
     }
-    sync->unsnooze(id);
-    statusBar()->showMessage(tr("Unsnoozed."), 5000);
+    for (const QString &id : ids) {
+        sync->unsnooze(id);
+    }
+    statusBar()->showMessage(
+        ids.size() == 1 ? tr("Unsnoozed.") : tr("Unsnoozed %1 messages.").arg(ids.size()), 5000);
 }
 
 void MainWindow::customSnooze()
@@ -1838,7 +1998,7 @@ void MainWindow::customSnooze()
     if (dlg.exec() != QDialog::Accepted) {
         return;
     }
-    snoozeMessage(m_shownId, edit->dateTime().toMSecsSinceEpoch());
+    snoozeSelected(edit->dateTime().toMSecsSinceEpoch());
 }
 
 void MainWindow::checkSnoozeWakes()
@@ -2026,9 +2186,16 @@ QMenu *MainWindow::buildListMenu()
         const MailItem &m = m_model->item(m_proxy->mapToSource(cur).row());
         QAction *read = findChild<QAction *>(QStringLiteral("actionMarkRead"));
         QAction *unread = findChild<QAction *>(QStringLiteral("actionMarkUnread"));
-        read->setVisible(m.status == MailStatus::Unread);
-        unread->setVisible(m.status != MailStatus::Unread);
-        if (!m.address.isEmpty()) {
+        const int nSel = m_list->selectionModel()->selectedRows().size();
+        if (nSel > 1) {
+            // Mixed selection: offer both so the user can force either state.
+            read->setVisible(true);
+            unread->setVisible(true);
+        } else {
+            read->setVisible(m.status == MailStatus::Unread);
+            unread->setVisible(m.status != MailStatus::Unread);
+        }
+        if (nSel == 1 && !m.address.isEmpty()) {
             menu->addSeparator();
             const QString addr = m.address;
             QAction *copy = menu->addAction(icon(QStringLiteral("copy")), tr("Copy Address"), menu,
@@ -2054,8 +2221,13 @@ void MainWindow::showListMenu(const QPoint &pos)
     if (!at.isValid()) {
         return;
     }
-    if (at.row() != m_list->currentIndex().row()) {
-        m_list->setCurrentIndex(at); // right-click selects the row, then acts on it
+    QItemSelectionModel *sm = m_list->selectionModel();
+    // Right-click outside the selection: select that row alone. On a selected
+    // row: keep the multi-selection so Delete / Junk / … apply to all of it.
+    if (!sm->isRowSelected(at.row(), QModelIndex())) {
+        m_list->setCurrentIndex(at);
+    } else if (m_list->currentIndex().row() != at.row()) {
+        sm->setCurrentIndex(at, QItemSelectionModel::NoUpdate);
     }
     QMenu *menu = buildListMenu();
     menu->setAttribute(Qt::WA_DeleteOnClose);
@@ -2247,20 +2419,26 @@ void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QStrin
 
 void MainWindow::setCurrentRead(bool read)
 {
-    const QModelIndex cur = m_list->currentIndex();
-    if (!cur.isValid()) {
-        return;
+    QList<int> rows = selectedSourceRows();
+    if (rows.isEmpty()) {
+        const QModelIndex cur = m_list->currentIndex();
+        if (!cur.isValid()) {
+            return;
+        }
+        rows.append(m_proxy->mapToSource(cur).row());
     }
-    const int row = m_proxy->mapToSource(cur).row();
-    const MailItem &m = m_model->item(row);
-    if (zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr) {
-        read ? sync->markRead(m.id) : sync->markUnread(m.id);
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    for (int row : rows) {
+        const MailItem &m = m_model->item(row);
+        if (sync && !m.id.isEmpty()) {
+            read ? sync->markRead(m.id) : sync->markUnread(m.id);
+        }
+        m_model->setStatus(row, read ? MailStatus::Read : MailStatus::Unread);
     }
-    m_model->setStatus(row, read ? MailStatus::Read : MailStatus::Unread);
     updateCounts();
 }
 
-void MainWindow::offerUndoDelete(const QString &id)
+void MainWindow::offerUndoDelete(const QStringList &ids)
 {
     if (!m_undoBar) {
         // "Moved to Trash.  [Undo]" at the right of the status bar for a few
@@ -2290,8 +2468,9 @@ void MainWindow::offerUndoDelete(const QString &id)
             m_lastTrashed.clear();
         });
     }
-    m_lastTrashed = id;
-    m_undoLabel->setText(tr("Moved to Trash."));
+    m_lastTrashed = ids;
+    m_undoLabel->setText(ids.size() <= 1 ? tr("Moved to Trash.")
+                                         : tr("Moved %1 messages to Trash.").arg(ids.size()));
     m_undoBar->show();
     m_undoDeleteAction->setEnabled(true);
     m_undoTimer->start(kUndoDeleteMs);
@@ -2300,7 +2479,7 @@ void MainWindow::offerUndoDelete(const QString &id)
 void MainWindow::undoDelete()
 {
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
-    const QString id = m_lastTrashed;
+    const QStringList ids = m_lastTrashed;
     m_lastTrashed.clear();
     if (m_undoTimer) {
         m_undoTimer->stop();
@@ -2309,9 +2488,19 @@ void MainWindow::undoDelete()
         m_undoBar->hide();
     }
     m_undoDeleteAction->setEnabled(false);
-    if (!sync || id.isEmpty() || !sync->untrash(id)) {
+    if (!sync || ids.isEmpty()) {
         return;
     }
-    statusBar()->showMessage(tr("Message restored."), 4000);
+    int restored = 0;
+    for (const QString &id : ids) {
+        if (sync->untrash(id)) {
+            ++restored;
+        }
+    }
+    if (restored <= 0) {
+        return;
+    }
+    statusBar()->showMessage(
+        restored == 1 ? tr("Message restored.") : tr("%1 messages restored.").arg(restored), 4000);
 }
 

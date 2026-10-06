@@ -2,6 +2,8 @@
 // list and the mailboxes, Enter to open, Delete with Undo (users.messages
 // .untrash against the mock), Delete disabled in an empty mailbox, Mark
 // Read/Unread, compose Ctrl+B/I/U/K and shortcut hints in tooltips.
+// Multi-select (ExtendedSelection): Shift/Ctrl range+toggle; bulk Delete /
+// Mark Read/Unread on the selection.
 #include "MainWindow.hpp"
 #include "core/AuthManager.h"
 #include "core/MailCache.h"
@@ -27,6 +29,8 @@
 #include <QTextEdit>
 #include <QToolButton>
 #include <QTreeView>
+#include <QItemSelectionModel>
+#include <QAbstractItemView>
 #include <QTreeWidget>
 #include <QtTest>
 #include <memory>
@@ -617,6 +621,143 @@ private slots:
         QVERIFY(!list->currentIndex().isValid());
         QVERIFY(!w.findChild<QAction *>(QStringLiteral("actionDelete"))->isEnabled());
     }
+
+    // ---- multi-select (Shift / Ctrl, ExtendedSelection) ---------------------
+
+    void listUsesExtendedSelection()
+    {
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QCOMPARE(list->selectionMode(), QAbstractItemView::ExtendedSelection);
+        QCOMPARE(list->selectionBehavior(), QAbstractItemView::SelectRows);
+    }
+
+    void ctrlClickTogglesRowsSample()
+    {
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QVERIFY(list->model()->rowCount() >= 3);
+        list->setFocus();
+        const QModelIndex a = list->model()->index(0, 0);
+        const QModelIndex b = list->model()->index(1, 0);
+        const QModelIndex c = list->model()->index(2, 0);
+        list->setCurrentIndex(a);
+        QCOMPARE(list->selectionModel()->selectedRows().size(), 1);
+        // Ctrl+click row 2: add to selection (Qt ExtendedSelection).
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::ControlModifier,
+                          list->visualRect(c).center());
+        QTRY_VERIFY(list->selectionModel()->selectedRows().size() >= 2);
+        QVERIFY(list->selectionModel()->isRowSelected(0, {}));
+        QVERIFY(list->selectionModel()->isRowSelected(2, {}));
+        // Shift+click from current toward row 1 expands the range.
+        list->setCurrentIndex(a);
+        list->selectionModel()->select(a, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::ShiftModifier,
+                          list->visualRect(b).center());
+        QTRY_COMPARE(list->selectionModel()->selectedRows().size(), 2);
+        QVERIFY(list->selectionModel()->isRowSelected(0, {}));
+        QVERIFY(list->selectionModel()->isRowSelected(1, {}));
+    }
+
+    void markReadUnreadMultiSample()
+    {
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        auto *model = w.findChild<MessageListModel *>();
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        QVERIFY(list->model()->rowCount() >= 3);
+        // Select first three rows.
+        QItemSelection sel(proxy->index(0, 0), proxy->index(2, proxy->columnCount() - 1));
+        list->selectionModel()->select(sel, QItemSelectionModel::ClearAndSelect);
+        list->selectionModel()->setCurrentIndex(proxy->index(0, 0), QItemSelectionModel::NoUpdate);
+        QCOMPARE(list->selectionModel()->selectedRows().size(), 3);
+        w.findChild<QAction *>(QStringLiteral("actionMarkUnread"))->trigger();
+        for (int r = 0; r < 3; ++r) {
+            QCOMPARE(model->item(proxy->mapToSource(proxy->index(r, 0)).row()).status, MailStatus::Unread);
+        }
+        w.findChild<QAction *>(QStringLiteral("actionMarkRead"))->trigger();
+        for (int r = 0; r < 3; ++r) {
+            QCOMPARE(model->item(proxy->mapToSource(proxy->index(r, 0)).row()).status, MailStatus::Read);
+        }
+    }
+
+    void deleteMultiLive()
+    {
+        Live L;
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        auto seed = [&](const QString &subject, int minutesAgo) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+            m.to = QStringLiteral("Demo User <demo.user@example.com>");
+            m.subject = subject;
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {QStringLiteral("INBOX")};
+            m.date = now.addSecs(-60 * minutesAgo);
+            return L.g.addMessage(m, true);
+        };
+        const QString a = seed(QStringLiteral("Alpha"), 1);
+        const QString b = seed(QStringLiteral("Bravo"), 2);
+        const QString c = seed(QStringLiteral("Charlie"), 3);
+        const QString d = seed(QStringLiteral("Delta"), 4);
+        QVERIFY(L.start());
+        MainWindow w;
+        w.setSession(L.session.get());
+        QMetaObject::invokeMethod(L.session.get(), "ready");
+        w.show();
+        QVERIFY(QTest::qWaitForWindowActive(&w));
+        QTRY_VERIFY(w.isLive());
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QTRY_COMPARE(list->model()->rowCount(), 4);
+        list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        auto *model = w.findChild<MessageListModel *>();
+        auto idAt = [&](int r) { return model->item(proxy->mapToSource(proxy->index(r, 0)).row()).id; };
+        QCOMPARE((QStringList{idAt(0), idAt(1), idAt(2), idAt(3)}), (QStringList{a, b, c, d}));
+
+        // Select Alpha + Bravo + Charlie; Delete → only Delta left, selected.
+        QItemSelection sel(proxy->index(0, 0), proxy->index(2, proxy->columnCount() - 1));
+        list->selectionModel()->select(sel, QItemSelectionModel::ClearAndSelect);
+        list->selectionModel()->setCurrentIndex(proxy->index(1, 0), QItemSelectionModel::NoUpdate);
+        QCOMPARE(list->selectionModel()->selectedRows().size(), 3);
+        w.findChild<QAction *>(QStringLiteral("actionDelete"))->trigger();
+        QCOMPARE(list->currentIndex().row(), 3); // Delta was below the bottom-most removed
+        // After selectPastRemoved, current is Delta (row 3 before removal → row 0 after).
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        QCOMPARE(idAt(0), d);
+        QCOMPARE(w.shownMessageId(), d);
+        QTRY_VERIFY(L.g.trashCalls.contains(a));
+        QTRY_VERIFY(L.g.trashCalls.contains(b));
+        QTRY_VERIFY(L.g.trashCalls.contains(c));
+        QCOMPARE(L.g.trashCalls.size(), 3);
+
+        // Undo restores all three.
+        w.findChild<QAction *>(QStringLiteral("actionUndoDelete"))->trigger();
+        QTRY_COMPARE(list->model()->rowCount(), 4);
+    }
+
+    void rightClickKeepsMultiSelection()
+    {
+        MainWindow w;
+        w.show();
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        QVERIFY(proxy->rowCount() >= 3);
+        QItemSelection sel(proxy->index(0, 0), proxy->index(2, proxy->columnCount() - 1));
+        list->selectionModel()->select(sel, QItemSelectionModel::ClearAndSelect);
+        list->selectionModel()->setCurrentIndex(proxy->index(0, 0), QItemSelectionModel::NoUpdate);
+        QCOMPARE(list->selectionModel()->selectedRows().size(), 3);
+        // Right-click on row 1 (already selected): must not collapse the selection.
+        const QRect r = list->visualRect(proxy->index(1, 0));
+        emit list->customContextMenuRequested(r.center());
+        QMenu *menu = waitMenu("messageListMenu");
+        QVERIFY(menu);
+        QCOMPARE(list->selectionModel()->selectedRows().size(), 3);
+        menu->close();
+    }
+
 };
 
 QTEST_MAIN(TstListActions)

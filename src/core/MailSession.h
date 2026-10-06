@@ -13,6 +13,9 @@ namespace zmail {
 
 class GmailClient;
 class MailCache;
+class ContactStore;
+class PeopleClient;
+class ContactsSync;
 class Sender;
 class SyncEngine;
 class TokenStore;
@@ -24,6 +27,7 @@ struct SessionOptions
     QUrl apiBase;                                    // empty = Gmail
     QUrl revokeUri;                                  // empty = Google
     QString cachePathOverride;                       // ":memory:" in tests
+    QString contactsPathOverride;                    // ":memory:" in tests
     AuthManager::BrowserOpener browserOpener;        // empty = QDesktopServices
     bool rememberAccount = true;                     // QSettings "account/email"
     int pollIntervalMs = 30000;
@@ -64,7 +68,11 @@ public:
     AuthManager *auth() const { return m_auth.get(); }
     GmailClient *api() const { return m_api.get(); }
     MailCache *cache() const { return m_cache.get(); }
+    ContactStore *contacts() const { return m_contacts.get(); }
+    ContactsSync *contactsSync() const { return m_contactsSync.get(); }
+    PeopleClient *people() const { return m_people.get(); }
     SyncEngine *sync() const { return m_sync.get(); }
+    void enableContactsSync(); // incremental consent if needed, then sync
     QNetworkAccessManager *network() const { return m_nam; }
     Sender *sender() const { return m_sender.get(); }
 
@@ -95,6 +103,9 @@ private:
     std::unique_ptr<AuthManager> m_auth;
     std::unique_ptr<GmailClient> m_api;
     std::unique_ptr<MailCache> m_cache;
+    std::unique_ptr<ContactStore> m_contacts;
+    std::unique_ptr<PeopleClient> m_people;
+    std::unique_ptr<ContactsSync> m_contactsSync;
     std::unique_ptr<SyncEngine> m_sync;
     std::unique_ptr<Sender> m_sender;
     QString m_displayName;

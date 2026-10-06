@@ -5,6 +5,8 @@
 #include "GmailClient.h"
 #include "Log.h"
 #include "MailCache.h"
+#include "ContactStore.h"
+#include "PeopleClient.h"
 #include "SyncEngine.h"
 #include "TokenStore.h"
 
@@ -164,6 +166,14 @@ void MailSession::startAccount(const QString &account)
     if (!m_cache->open(path)) {
         qCWarning(lcSync) << "Couldn't open the mail cache:" << m_cache->lastError();
     }
+    m_contacts = std::make_unique<ContactStore>();
+    const QString cpath = m_opts.contactsPathOverride.isEmpty() ? ContactStore::defaultPath(account)
+                                                                : m_opts.contactsPathOverride;
+    if (!m_contacts->open(cpath)) {
+        qCWarning(lcSync) << "Couldn't open the contacts cache:" << m_contacts->lastError();
+    }
+    m_people = std::make_unique<PeopleClient>(m_auth.get(), m_nam);
+    m_contactsSync = std::make_unique<ContactsSync>(m_people.get(), m_contacts.get());
     m_api = std::make_unique<GmailClient>(m_auth.get(), m_nam,
                                           m_opts.apiBase.isValid() ? m_opts.apiBase : GmailClient::defaultBaseUrl());
     m_api->setBackoffBaseMs(m_opts.backoffBaseMs);
@@ -213,8 +223,29 @@ void MailSession::stopAccount()
     }
     m_sync.reset();
     m_sender.reset();
+    m_contactsSync.reset();
+    m_people.reset();
+    m_contacts.reset();
     m_api.reset();
     m_cache.reset();
+}
+
+void MailSession::enableContactsSync()
+{
+    if (!m_auth || !m_contactsSync) {
+        return;
+    }
+    if (m_auth->hasContactScopes()) {
+        m_contactsSync->sync();
+        return;
+    }
+    // Incremental consent; sync once the new scopes are granted.
+    connect(m_auth.get(), &AuthManager::signedIn, this, [this](const QString &) {
+        if (m_auth->hasContactScopes() && m_contactsSync) {
+            m_contactsSync->sync();
+        }
+    }, Qt::SingleShotConnection);
+    m_auth->requestContactScopes();
 }
 
 } // namespace zmail

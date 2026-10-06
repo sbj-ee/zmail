@@ -122,6 +122,7 @@ private:
     QSet<QString> m_untrashQueued;                   // ... and already undone
     MailCache *m_cache;
     QTimer *m_poll;
+    QTimer *m_labelsRefreshSoon; // one label refresh after a burst of moves
     int m_initialCount = 500;
     int m_pageSize = 100;
     int m_maxInFlight = 8;
@@ -145,6 +146,7 @@ private:
     bool m_labelsRefreshing = false;
     static constexpr qint64 kLabelRefreshMinIntervalMs = 60000;
     static constexpr int kLabelGetConcurrency = 2;
+    static constexpr int kLabelRefreshSoonMs = 400; // restarted by each move that lands
 };
 
 } // namespace zmail

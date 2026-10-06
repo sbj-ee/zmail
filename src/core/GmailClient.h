@@ -37,6 +37,11 @@ class GmailClient : public QObject
 public:
     using JsonCb = std::function<void(const QJsonObject &json, const ApiError &err)>;
 
+    // Interactive calls (opening a message, a label change, sending) go ahead
+    // of queued Background ones (sync listings and metadata), so the user
+    // never waits behind a bulk fetch. First in, first out within each.
+    enum class Priority { Interactive, Background };
+
     // Low-level request, for uploads and anything needing headers/status.
     struct Request
     {
@@ -51,6 +56,7 @@ public:
         int units = 5;
         bool retryTransient = true;     // false: caller handles failures (resumable PUT)
         int timeoutMs = 60000;
+        Priority priority = Priority::Interactive;
         std::function<void(qint64 sent, qint64 total)> progress;
     };
     struct RawReply
@@ -115,7 +121,8 @@ private:
         bool reauthed = false;
         RawCb cb;
     };
-    void call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb);
+    void call(QByteArray verb, QString path, QUrlQuery q, QByteArray body, int units, JsonCb cb,
+              Priority priority = Priority::Interactive);
     void enqueue(Call c);
     void pump();
     void send(Call c);

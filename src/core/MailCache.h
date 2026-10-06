@@ -101,6 +101,11 @@ public:
     bool contains(const QString &id) const;
 
     CachedMessage message(const QString &id) const;
+    // message() without the bodies (bodyText / bodyHtml stay empty; hasBody
+    // still says whether one is cached): for callers after labels or headers.
+    CachedMessage summary(const QString &id) const;
+    // Ids of the cached messages carrying a label.
+    QStringList messageIds(const QString &labelId) const;
     // The message list's rows, newest first, in one query: metadata only
     // (bodyText / bodyHtml stay empty; hasBody still says whether one is
     // cached) with each message's snooze joined in.

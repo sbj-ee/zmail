@@ -221,6 +221,70 @@ private slots:
         QCOMPARE(c.listing(2).size(), 2);
     }
 
+    // Label edits and the engine's label checks read the row without its
+    // bodies; behaviour is unchanged.
+    void summaryAndLabelEditsSkipBodies()
+    {
+        MailCache c;
+        QVERIFY(c.open(QStringLiteral(":memory:")));
+        CachedMessage m = cached(QStringLiteral("a"), QStringLiteral("Fishing trip"), 1);
+        m.messageIdHeader = QStringLiteral("<a@mock.example>");
+        c.upsert(m);
+        c.setBody(QStringLiteral("a"), QString(50'000, QLatin1Char('x')), QStringLiteral("<p>big</p>"), {});
+        c.upsert(cached(QStringLiteral("b"), QStringLiteral("Budget"), 2));
+
+        const CachedMessage s = c.summary(QStringLiteral("a"));
+        QCOMPARE(s.id, QStringLiteral("a"));
+        QCOMPARE(s.subject, QStringLiteral("Fishing trip"));
+        QCOMPARE(s.messageIdHeader, QStringLiteral("<a@mock.example>"));
+        QCOMPARE(s.labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("UNREAD")}));
+        QVERIFY(s.unread());
+        QVERIFY(s.hasBody);
+        QVERIFY(s.bodyText.isEmpty());
+        QVERIFY(s.bodyHtml.isEmpty());
+        QVERIFY(c.summary(QStringLiteral("missing")).id.isEmpty());
+
+        c.modifyLabels(QStringLiteral("a"), {QStringLiteral("Label_1"), QStringLiteral("INBOX")}, {QStringLiteral("UNREAD")});
+        QCOMPARE(c.summary(QStringLiteral("a")).labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_1")}));
+        QCOMPARE(c.count(QStringLiteral("UNREAD")), 1); // only "b" now
+        QCOMPARE(c.message(QStringLiteral("a")).bodyText.size(), 50'000); // body untouched
+        c.modifyLabels(QStringLiteral("missing"), {QStringLiteral("INBOX")}, {});
+        QVERIFY(!c.contains(QStringLiteral("missing")));
+        QCOMPARE(c.count(), 2);
+
+        QStringList inbox = c.messageIds(QStringLiteral("INBOX"));
+        inbox.sort();
+        QCOMPARE(inbox, (QStringList{QStringLiteral("a"), QStringLiteral("b")}));
+        QCOMPARE(c.messageIds(QStringLiteral("Label_1")), QStringList{QStringLiteral("a")});
+        QVERIFY(c.messageIds(QStringLiteral("Label_9")).isEmpty());
+    }
+
+    // Opening a message or changing a label must not wait behind a queue of
+    // background sync fetches.
+    void interactiveCallsJumpTheBackgroundQueue()
+    {
+        Rig r;
+        r.api->setMaxInFlight(1);
+        QStringList order;
+        for (int i = 0; i < 8; ++i) {
+            r.api->getMessageMetadata(QStringLiteral("bg%1").arg(i), [&order, i](const QJsonObject &, const ApiError &) {
+                order << QStringLiteral("bg%1").arg(i);
+            });
+        }
+        r.api->getMessageFull(QStringLiteral("open-me"), [&order](const QJsonObject &, const ApiError &) {
+            order << QStringLiteral("full");
+        });
+        r.api->modifyLabels(QStringLiteral("open-me"), {}, {QStringLiteral("UNREAD")},
+                            [&order](const QJsonObject &, const ApiError &) { order << QStringLiteral("modify"); });
+        QTRY_COMPARE_WITH_TIMEOUT(order.size(), 10, 20000);
+        // bg0 was already on the wire; then the interactive ones, in the order
+        // asked; then the rest of the background ones, in theirs.
+        QCOMPARE(order, (QStringList{QStringLiteral("bg0"), QStringLiteral("full"), QStringLiteral("modify"),
+                                     QStringLiteral("bg1"), QStringLiteral("bg2"), QStringLiteral("bg3"),
+                                     QStringLiteral("bg4"), QStringLiteral("bg5"), QStringLiteral("bg6"),
+                                     QStringLiteral("bg7")}));
+    }
+
     // Writes are grouped: nested begin()/commit() pairs reach the file as one
     // commit, and commits don't fsync (WAL + synchronous=NORMAL).
     void writesAreBatched()

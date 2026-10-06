@@ -354,10 +354,17 @@ void MailCache::setLabels(const QString &id, const QStringList &labels)
 
 void MailCache::modifyLabels(const QString &id, const QStringList &add, const QStringList &remove)
 {
-    if (!contains(id)) {
-        return;
+    // Just the labels column: this runs for every label change in a history page.
+    QStringList labels;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        q.prepare(QStringLiteral("SELECT labels FROM messages WHERE id = ?"));
+        q.addBindValue(id);
+        if (!q.exec() || !q.next()) {
+            return; // not cached
+        }
+        labels = q.value(0).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
     }
-    QStringList labels = message(id).labels;
     for (const QString &r : remove) {
         labels.removeAll(r);
     }
@@ -409,6 +416,31 @@ CachedMessage MailCache::message(const QString &id) const
         return fromRow(q);
     }
     return {};
+}
+
+CachedMessage MailCache::summary(const QString &id) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT %1 FROM messages WHERE id = ?").arg(QLatin1String(kListCols)));
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        return fromRow(q);
+    }
+    return {};
+}
+
+QStringList MailCache::messageIds(const QString &labelId) const
+{
+    QStringList ids;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT message_id FROM message_labels WHERE label_id = ?"));
+    q.addBindValue(labelId);
+    if (q.exec()) {
+        while (q.next()) {
+            ids.append(q.value(0).toString());
+        }
+    }
+    return ids;
 }
 
 QList<CachedMessage> MailCache::messages(const QString &labelId, int limit) const

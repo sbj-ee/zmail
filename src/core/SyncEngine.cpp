@@ -38,9 +38,24 @@ SyncEngine::SyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
     , m_api(api)
     , m_cache(cache)
     , m_poll(new QTimer(this))
+    , m_labelsRefreshSoon(new QTimer(this))
 {
     m_poll->setInterval(30000);
     connect(m_poll, &QTimer::timeout, this, [this] { pollNow(true); });
+    m_labelsRefreshSoon->setSingleShot(true);
+    m_labelsRefreshSoon->setInterval(kLabelRefreshSoonMs);
+    connect(m_labelsRefreshSoon, &QTimer::timeout, this, [this] {
+        if (!m_running) {
+            return;
+        }
+        if (m_labelsRefreshing) {
+            // One is under way and may have read counts from before the move
+            // landed; refreshLabels() would fold this request into it.
+            m_labelsRefreshSoon->start();
+            return;
+        }
+        refreshLabels();
+    });
 }
 
 SyncEngine::~SyncEngine() = default;
@@ -85,6 +100,7 @@ void SyncEngine::stop()
     m_running = false;
     ++m_generation;
     m_poll->stop();
+    m_labelsRefreshSoon->stop();
     m_fetchQueue.clear();
     m_loadingLabels.clear(); // their callbacks are dropped with the old generation
     m_busy = false;
@@ -517,7 +533,7 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
             }
             QStringList stillNew;
             for (const QString &id : fresh) {
-                const CachedMessage m = m_cache->message(id);
+                const CachedMessage m = m_cache->summary(id);
                 if (m.labels.contains(kInbox) && m.unread()) {
                     stillNew.append(id);
                 }
@@ -565,7 +581,7 @@ void SyncEngine::fetchBody(const QString &id, MessageCb cb)
 
 void SyncEngine::markRead(const QString &id)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (!m.unread()) {
         return;
     }
@@ -589,7 +605,7 @@ void SyncEngine::markRead(const QString &id)
 
 void SyncEngine::markJunk(const QString &id)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || m.labels.contains(QStringLiteral("SPAM"))) {
         return;
     }
@@ -617,7 +633,7 @@ void SyncEngine::markJunk(const QString &id)
 
 void SyncEngine::markNotJunk(const QString &id)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || !m.labels.contains(QStringLiteral("SPAM"))) {
         return;
     }
@@ -645,7 +661,7 @@ void SyncEngine::markNotJunk(const QString &id)
 
 void SyncEngine::snooze(const QString &id, qint64 wakeMs)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || wakeMs <= 0) {
         return;
     }
@@ -685,7 +701,7 @@ void SyncEngine::unsnooze(const QString &id)
     }
     const bool restore = row.hadInbox || row.wakeMs > 0;
     m_cache->clearSnooze(id);
-    if (restore && !m_cache->message(id).labels.contains(QStringLiteral("INBOX"))) {
+    if (restore && !m_cache->summary(id).labels.contains(QStringLiteral("INBOX"))) {
         m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
         emit messagesChanged();
         m_api->modifyLabels(id, {QStringLiteral("INBOX")}, {}, [this, id](const QJsonObject &json, const ApiError &err) {
@@ -720,12 +736,12 @@ int SyncEngine::wakeDue(qint64 nowMs)
     }
     for (const QString &id : due) {
         const auto row = m_cache->snooze(id);
-        if (m_cache->message(id).labels.contains(QStringLiteral("TRASH"))) {
+        if (m_cache->summary(id).labels.contains(QStringLiteral("TRASH"))) {
             m_cache->clearSnooze(id); // deleted while snoozed: stays in Trash
             continue;
         }
         m_cache->markSnoozeWoke(id);
-        if (row.hadInbox && !m_cache->message(id).labels.contains(QStringLiteral("INBOX"))) {
+        if (row.hadInbox && !m_cache->summary(id).labels.contains(QStringLiteral("INBOX"))) {
             m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
             m_api->modifyLabels(id, {QStringLiteral("INBOX")}, {}, [this, id](const QJsonObject &json, const ApiError &err) {
                 if (err.isError) {
@@ -750,7 +766,7 @@ int SyncEngine::wakeDue(qint64 nowMs)
 
 void SyncEngine::trash(const QString &id)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty()) {
         return;
     }
@@ -794,7 +810,7 @@ bool SyncEngine::untrash(const QString &id)
         return false;
     }
     const QStringList before = m_labelsBeforeTrash.take(id);
-    const QJsonObject trashedJson{{QStringLiteral("labelIds"), QJsonArray::fromStringList(m_cache->message(id).labels)}};
+    const QJsonObject trashedJson{{QStringLiteral("labelIds"), QJsonArray::fromStringList(m_cache->summary(id).labels)}};
     m_cache->setLabels(id, before); // optimistic: back where it was
     emit messagesChanged();
     if (m_trashInFlight.contains(id)) {
@@ -859,7 +875,7 @@ void SyncEngine::sendUntrash(const QString &id, const QStringList &before, const
 
 void SyncEngine::markUnread(const QString &id)
 {
-    const CachedMessage m = m_cache->message(id);
+    const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || m.unread()) {
         return;
     }
@@ -937,8 +953,8 @@ void SyncEngine::deleteLabel(const QString &id)
         // Strip the label from the local cache so open views update immediately.
         {
             const MailCache::Batch batch(*m_cache);
-            for (const CachedMessage &m : m_cache->messages(id)) {
-                m_cache->modifyLabels(m.id, {}, {id});
+            for (const QString &messageId : m_cache->messageIds(id)) {
+                m_cache->modifyLabels(messageId, {}, {id});
             }
         }
         refreshLabels();
@@ -952,7 +968,7 @@ void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabe
     if (!m_running || messageId.isEmpty() || targetLabelId.isEmpty()) {
         return;
     }
-    const CachedMessage before = m_cache->message(messageId);
+    const CachedMessage before = m_cache->summary(messageId);
     if (before.id.isEmpty()) {
         return;
     }
@@ -1012,8 +1028,9 @@ void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabe
                                 emit messagesChanged();
                             }
                             // Counts on the sidebar are stale until the next
-                            // label refresh; nudge them without a full sync.
-                            refreshLabels();
+                            // label refresh; nudge them without a full sync:
+                            // once, after the last move of a burst has landed.
+                            m_labelsRefreshSoon->start();
                         });
 }
 

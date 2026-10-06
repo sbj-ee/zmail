@@ -124,10 +124,29 @@ contrast ratio.
 and size and the list's row stripes, with a live preview; then save, rename,
 delete, apply, import or export. Custom themes appear in View → Theme and are
 `*.ztheme.json` files in `~/.config/zmail/themes/`, a format shared with
-zterminal ([docs/THEMES.md](docs/THEMES.md#theme-files)); zterminal's themes in
+zterminal ([docs/THEMES.md](docs/THEMES.md#theme-files-custom-themes)); zterminal's themes in
 `~/.config/zterminal/themes/` are listed read-only.
 
-![The Boilermakers, Badgers and Packers themes in zmail and zterminal](docs/screenshots/brand-themes.png)
+| Boilermakers | Badgers | Packers |
+|---|---|---|
+| ![zmail in the Boilermakers theme](docs/screenshots/zmail-boilermakers.png) | ![zmail in the Badgers theme](docs/screenshots/zmail-badgers.png) | ![zmail in the Packers theme](docs/screenshots/zmail-packers.png) |
+
+![The Theme Editor with a custom theme (Lakeside Dusk) and its live preview](docs/screenshots/theme-editor.png)
+
+### Shared with zterminal
+
+The themes work the same way in both apps. Boilermakers, Badgers and Packers
+are built into zmail and [zterminal](https://github.com/sbj-ee/zterminal) with
+the same palette, and custom themes move between them as `*.ztheme.json`
+files: **Export…** in one app's Theme Editor writes `<name>.ztheme.json`, and
+**Import…** in the other app's editor copies it into that app's themes folder.
+If both apps run under the same user, each one also lists the other's custom
+themes read-only without importing. zmail keeps but ignores a theme's terminal
+colours; zterminal derives terminal colours for a theme made in zmail. The
+format, the file locations and how missing colours are filled in are in
+[docs/THEMES.md](docs/THEMES.md).
+
+![The Boilermakers, Badgers and Packers themes in zmail (top) and zterminal (bottom)](docs/screenshots/brand-themes.png)
 
 ## New-mail sound
 

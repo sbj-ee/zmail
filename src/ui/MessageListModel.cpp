@@ -215,11 +215,13 @@ QVariant MessageListModel::headerData(int section, Qt::Orientation o, int role) 
         return int(Qt::AlignLeft | Qt::AlignVCenter);
     }
     if (role == Qt::DecorationRole) {
+        // In the header's text colour (brand themes give headers their own palette).
+        const QColor hc = QApplication::palette("QHeaderView").color(QPalette::ButtonText);
         switch (section) {
-        case Status: return icon(QStringLiteral("mail"));
-        case Priority: return icon(QStringLiteral("flag"));
-        case Attachment: return icon(QStringLiteral("paperclip"));
-        case Label: return icon(QStringLiteral("tag"));
+        case Status: return icon(QStringLiteral("mail"), hc);
+        case Priority: return icon(QStringLiteral("flag"), hc);
+        case Attachment: return icon(QStringLiteral("paperclip"), hc);
+        case Label: return icon(QStringLiteral("tag"), hc);
         default: return {};
         }
     }

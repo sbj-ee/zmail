@@ -192,6 +192,11 @@ void MessageView::applyBodyPalette()
     }
     m_body->setPalette(p);
     m_body->viewport()->setPalette(p);
+    // QTextDocument bakes the *application* palette's link colour into <a>
+    // when the HTML is parsed, so a brand theme's gold link (or the dark
+    // theme's light blue) would land on the white page. Mail's own link
+    // styles still win over this default.
+    m_body->document()->setDefaultStyleSheet(QStringLiteral("a { color: %1; }").arg(link.name()));
     m_body->viewport()->setAutoFillBackground(true);
 }
 

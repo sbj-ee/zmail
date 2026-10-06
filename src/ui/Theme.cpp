@@ -1,6 +1,10 @@
 #include "Theme.h"
 
+#include "BrandThemes.h"
+
 #include <QApplication>
+#include <QHeaderView>
+#include <QToolBar>
 #include <QFont>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -25,6 +29,17 @@ double channel(double c)
 double luminance(const QColor &c)
 {
     return 0.2126 * channel(c.redF()) + 0.7152 * channel(c.greenF()) + 0.0722 * channel(c.blueF());
+}
+
+QColor rgb(std::uint32_t v)
+{
+    return QColor(int((v >> 16) & 0xff), int((v >> 8) & 0xff), int(v & 0xff));
+}
+
+QColor mix(const QColor &a, const QColor &b, double t)
+{
+    return QColor::fromRgbF(a.redF() * (1 - t) + b.redF() * t, a.greenF() * (1 - t) + b.greenF() * t,
+                            a.blueF() * (1 - t) + b.blueF() * t);
 }
 
 bool systemPrefersDark()
@@ -95,12 +110,115 @@ QPalette darkPalette()
     return p;
 }
 
+const sbj::brand::Theme *brandTheme(ThemeMode mode)
+{
+    switch (mode) {
+    case ThemeMode::Boilermakers: return sbj::brand::findTheme("boilermakers");
+    case ThemeMode::Badgers: return sbj::brand::findTheme("badgers");
+    case ThemeMode::Packers: return sbj::brand::findTheme("packers");
+    default: return nullptr;
+    }
+}
+
+QPalette brandPalette(const sbj::brand::Theme &t)
+{
+    QPalette p;
+    const QColor bg = rgb(t.background), surface = rgb(t.surface), fg = rgb(t.foreground);
+    p.setColor(QPalette::Window, surface);
+    p.setColor(QPalette::WindowText, fg);
+    p.setColor(QPalette::Base, bg);
+    p.setColor(QPalette::AlternateBase, mix(bg, surface, 0.5)); // the list's stripe comes from stripeColor()
+    p.setColor(QPalette::ToolTipBase, surface);
+    p.setColor(QPalette::ToolTipText, fg);
+    p.setColor(QPalette::PlaceholderText, rgb(t.muted));
+    p.setColor(QPalette::Text, fg);
+    p.setColor(QPalette::Button, surface);
+    p.setColor(QPalette::ButtonText, fg);
+    p.setColor(QPalette::BrightText, Qt::white);
+    p.setColor(QPalette::Highlight, rgb(t.selection));
+    p.setColor(QPalette::HighlightedText, rgb(t.selectionText));
+    p.setColor(QPalette::Link, rgb(t.link));
+    p.setColor(QPalette::LinkVisited, rgb(t.link));
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    p.setColor(QPalette::Accent, rgb(t.accent));
+#endif
+    p.setColor(QPalette::Light, surface.lighter(160));
+    p.setColor(QPalette::Midlight, surface.lighter(130));
+    p.setColor(QPalette::Mid, mix(surface, fg, 0.25));
+    p.setColor(QPalette::Dark, surface.darker(150));
+    p.setColor(QPalette::Shadow, Qt::black);
+    const QColor disabled = mix(fg, surface, 0.5);
+    for (auto role : {QPalette::WindowText, QPalette::Text, QPalette::ButtonText}) {
+        p.setColor(QPalette::Disabled, role, disabled);
+    }
+    return p;
+}
+
+QPalette brandToolBarPalette(const sbj::brand::Theme &t)
+{
+    QPalette p = brandPalette(t);
+    for (auto role : {QPalette::Window, QPalette::Button}) {
+        p.setColor(role, rgb(t.chrome));
+    }
+    for (auto role : {QPalette::WindowText, QPalette::ButtonText}) {
+        p.setColor(role, rgb(t.chromeText));
+    }
+    return p;
+}
+
+QPalette brandHeaderPalette(const sbj::brand::Theme &t)
+{
+    QPalette p = brandPalette(t);
+    p.setColor(QPalette::Button, rgb(t.header));
+    p.setColor(QPalette::Window, rgb(t.header));
+    p.setColor(QPalette::ButtonText, rgb(t.headerText));
+    p.setColor(QPalette::WindowText, rgb(t.headerText));
+    return p;
+}
+
+QString themeId(ThemeMode mode)
+{
+    switch (mode) {
+    case ThemeMode::Light: return QStringLiteral("light");
+    case ThemeMode::Dark: return QStringLiteral("dark");
+    case ThemeMode::System: return QStringLiteral("system");
+    default: break;
+    }
+    const sbj::brand::Theme *t = brandTheme(mode);
+    return t ? QString::fromLatin1(t->id.data(), qsizetype(t->id.size())) : QStringLiteral("light");
+}
+
+ThemeMode themeFromId(const QString &id, ThemeMode fallback)
+{
+    const QString l = id.trimmed().toLower();
+    for (ThemeMode m : {ThemeMode::Light, ThemeMode::Dark, ThemeMode::System, ThemeMode::Boilermakers,
+                        ThemeMode::Badgers, ThemeMode::Packers}) {
+        if (l == themeId(m)) {
+            return m;
+        }
+    }
+    return fallback;
+}
+
 void applyTheme(ThemeMode mode)
 {
     g_mode = mode;
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-    const bool dark = mode == ThemeMode::Dark || (mode == ThemeMode::System && systemPrefersDark());
-    QApplication::setPalette(dark ? darkPalette() : lightPalette());
+    QPalette app, toolBar, header;
+    if (const sbj::brand::Theme *t = brandTheme(mode)) {
+        app = brandPalette(*t);
+        toolBar = brandToolBarPalette(*t);
+        header = brandHeaderPalette(*t);
+    } else {
+        const bool dark = mode == ThemeMode::Dark || (mode == ThemeMode::System && systemPrefersDark());
+        app = toolBar = header = dark ? darkPalette() : lightPalette();
+    }
+    QApplication::setPalette(app);
+    // Then the class palettes (setting the application palette clears them):
+    // the toolbar band and column headers. Set for every theme, so Light and
+    // Dark put the plain palette back.
+    QApplication::setPalette(toolBar, QToolBar::staticMetaObject.className());
+    QApplication::setPalette(header, QHeaderView::staticMetaObject.className());
     installEmojiFallback();
 }
 

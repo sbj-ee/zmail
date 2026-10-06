@@ -8,6 +8,20 @@
 
 namespace zmail {
 
+namespace {
+bool sameState(const QByteArray &a, const QByteArray &b)
+{
+    if (a.size() != b.size()) {
+        return false;
+    }
+    unsigned char diff = 0;
+    for (qsizetype i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+} // namespace
+
 LoopbackServer::LoopbackServer(QObject *parent)
     : QObject(parent)
     , m_server(new QTcpServer(this))
@@ -60,6 +74,11 @@ int LoopbackServer::timeoutMs() const
     return m_timeout->interval();
 }
 
+void LoopbackServer::setExpectedState(const QByteArray &state)
+{
+    m_expectedState = state;
+}
+
 void LoopbackServer::onConnection()
 {
     while (QTcpSocket *s = m_server->nextPendingConnection()) {
@@ -100,10 +119,22 @@ void LoopbackServer::handle(QTcpSocket *sock)
         reply(404, "Not Found", "");
         return;
     }
-    m_done = true;
     const QString error = q.queryItemValue(QStringLiteral("error"), QUrl::FullyDecoded);
     const QString code = q.queryItemValue(QStringLiteral("code"), QUrl::FullyDecoded);
     const QString state = q.queryItemValue(QStringLiteral("state"), QUrl::FullyDecoded);
+    if (!m_expectedState.isEmpty() &&
+        (!q.hasQueryItem(QStringLiteral("state")) || !sameState(state.toLatin1(), m_expectedState))) {
+        // Not our redirect: answer it, keep listening, keep the timeout.
+        ++m_rejected;
+        reply(400, "Bad Request",
+              QByteArrayLiteral("<!doctype html><meta charset=utf-8><title>zmail</title>"
+                                "<body style='font-family:sans-serif;margin:3em'><h2>This sign-in link isn't valid.</h2>"
+                                "<p>It doesn't match the sign-in zmail started. zmail is still waiting for "
+                                "the browser.</p>"));
+        emit callbackRejected();
+        return;
+    }
+    m_done = true;
     const QByteArray page = error.isEmpty()
         ? QByteArrayLiteral("<!doctype html><meta charset=utf-8><title>zmail</title>"
                             "<body style='font-family:sans-serif;margin:3em'><h2>zmail is signed in.</h2>"

@@ -16,6 +16,8 @@ function(zmail_add_test name)
 endfunction()
 
 zmail_add_test(tst_version)
+zmail_add_test(tst_lowsec)
+add_test(NAME check_action_pins COMMAND sh "${CMAKE_SOURCE_DIR}/tools/check-action-pins.sh")
 zmail_add_test(tst_listfixes)
 zmail_add_test(tst_mainwindow)
 zmail_add_test(tst_limits)

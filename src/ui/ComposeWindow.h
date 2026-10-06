@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/Limits.h"
+#include "core/Mailto.h"
 #include "core/MimeBuilder.h"
 #include "core/ReplyBuilder.h"
 #include "core/Zip.h"
@@ -62,6 +63,8 @@ public:
     void setSession(zmail::MailSession *session);
     // Reply / Reply All / Forward: headers, threading and the quoted text.
     void setDraft(const zmail::ComposeDraft &draft);
+    // A clicked mailto: link: recipients, subject and a plain-text body.
+    void setMailto(const zmail::MailtoFields &fields);
     // Forward: fetch the original's attachments and attach them.
     void attachFromMessage(const QString &gmailMessageId);
 

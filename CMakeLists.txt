@@ -66,6 +66,8 @@ add_library(zmail_app STATIC
   src/core/MailCache.h
   src/core/MailSession.cpp
   src/core/MailSession.h
+  src/core/Mailto.cpp
+  src/core/Mailto.h
   src/core/Markdown.cpp
   src/core/Markdown.h
   src/core/MessageParser.cpp

@@ -30,12 +30,21 @@ public:
     static constexpr int kDefaultTimeoutMs = 15 * 60 * 1000;
     void setTimeoutMs(int ms);  // default kDefaultTimeoutMs
     int timeoutMs() const;
+    // The OAuth `state` sent with this sign-in. When set, a redirect whose
+    // state is missing or different gets a 400 and is otherwise ignored: the
+    // listener keeps waiting (until the timeout) for the real one, so a
+    // stray or forged request to the port can't end the sign-in.
+    void setExpectedState(const QByteArray &state);
+    int rejectedCallbacks() const { return m_rejected; }
 
 signals:
-    // Exactly one of code / error is non-empty. Query values are passed through
-    // unvalidated; the caller checks `state`.
+    // Exactly one of code / error is non-empty. `state` matched the expected
+    // one if setExpectedState() was called; the caller checks it again.
     void callbackReceived(const QString &code, const QString &state, const QString &error);
     void timedOut();
+    // A redirect with a missing or wrong state was answered with 400 and
+    // ignored; still listening.
+    void callbackRejected();
 
 private:
     void onConnection();
@@ -44,6 +53,8 @@ private:
     QTcpServer *m_server = nullptr;
     QTimer *m_timeout = nullptr;
     bool m_done = false;
+    QByteArray m_expectedState;
+    int m_rejected = 0;
 };
 
 } // namespace zmail

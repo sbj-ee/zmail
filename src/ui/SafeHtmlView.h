@@ -74,6 +74,8 @@ public:
 
 signals:
     void linkActivated(const QUrl &url);
+    // A mailto: link was clicked: compose in zmail (Mailto::parse).
+    void mailtoActivated(const QUrl &url);
     // A remote image finished downloading; re-render to show it.
     void remoteImageArrived();
 

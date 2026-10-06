@@ -530,6 +530,7 @@ void MainWindow::buildPanes()
     m_view = new MessageView(m_listSplitter);
     m_view->setObjectName(QStringLiteral("messageView"));
     m_view->body()->setObjectName(QStringLiteral("previewPane"));
+    connect(m_view, &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
     connect(m_list, &QTreeView::doubleClicked, this, [this](const QModelIndex &i) { openMessageWindow(i); });
 
     populateMailboxes();
@@ -941,6 +942,13 @@ ComposeWindow *MainWindow::composeReply(int kindInt, const QString &forId)
             statusBar()->showMessage(err, 8000);
         }
     });
+    return c;
+}
+
+ComposeWindow *MainWindow::composeMailto(const QUrl &url)
+{
+    ComposeWindow *c = openCompose();
+    c->setMailto(zmail::Mailto::parse(url));
     return c;
 }
 
@@ -1419,6 +1427,7 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex)
     m_messageWindows.append(w);
     connect(w, &MessageWindow::composeRequested, this,
             [this](const QString &id, int kind) { composeReply(kind, id); });
+    connect(w, &MessageWindow::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
     connect(w, &MessageWindow::deleteRequested, this, [this, w](const QString &id) {
         trashMessage(id);
         w->close();

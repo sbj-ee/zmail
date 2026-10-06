@@ -88,7 +88,8 @@ QByteArray quoteParam(const QString &v)
 QByteArray attachmentPart(const OutgoingAttachment &a)
 {
     const QString name = a.fileName.isEmpty() ? QStringLiteral("attachment") : a.fileName;
-    const QString type = a.mimeType.isEmpty() ? MimeBuilder::guessMimeType(name, a.data) : a.mimeType;
+    const QString type = MimeBuilder::safeMimeType(a.mimeType.isEmpty() ? MimeBuilder::guessMimeType(name, a.data)
+                                                                         : a.mimeType);
     QByteArray out;
     if (isAscii(name)) {
         out += "Content-Type: " + type.toLatin1() + "; name=" + quoteParam(name) + "\r\n";
@@ -267,6 +268,29 @@ QString MimeBuilder::makeMessageId(const QString &fromAddress)
         .arg(domain);
 }
 
+QString MimeBuilder::stripControl(const QString &value)
+{
+    QString out;
+    out.reserve(value.size());
+    for (const QChar c : value) {
+        const char16_t u = c.unicode();
+        if (u < 0x20 || u == 0x7f || (u >= 0x80 && u < 0xa0) || u == 0x2028 || u == 0x2029) {
+            continue;
+        }
+        out += c;
+    }
+    return out;
+}
+
+QString MimeBuilder::safeMimeType(const QString &mimeType)
+{
+    // RFC 6838 restricted-name for both halves; no parameters.
+    static const QRegularExpression re(
+        QStringLiteral("^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$"));
+    const QString t = stripControl(mimeType).trimmed();
+    return re.match(t).hasMatch() ? t.toLower() : QStringLiteral("application/octet-stream");
+}
+
 QByteArray MimeBuilder::build(const OutgoingMessage &m)
 {
     QByteArray h;
@@ -280,11 +304,19 @@ QByteArray MimeBuilder::build(const OutgoingMessage &m)
     h += foldHeader("Subject", encodeHeaderText(m.subject));
     const QString from = MessageParser::splitAddress(m.from).second;
     h += "Message-ID: " + (m.messageId.isEmpty() ? makeMessageId(from) : m.messageId).toLatin1() + "\r\n";
-    if (!m.inReplyTo.isEmpty()) {
-        h += "In-Reply-To: " + m.inReplyTo.toLatin1() + "\r\n";
+    const QString inReplyTo = stripControl(m.inReplyTo).trimmed();
+    if (!inReplyTo.isEmpty()) {
+        h += "In-Reply-To: " + inReplyTo.toLatin1() + "\r\n";
     }
-    if (!m.references.isEmpty()) {
-        h += foldHeader("References", m.references.join(QLatin1Char(' ')).toLatin1());
+    QStringList references;
+    for (const QString &r : m.references) {
+        const QString clean = stripControl(r).trimmed();
+        if (!clean.isEmpty()) {
+            references << clean;
+        }
+    }
+    if (!references.isEmpty()) {
+        h += foldHeader("References", references.join(QLatin1Char(' ')).toLatin1());
     }
     if (m.priority == OutgoingMessage::Priority::High) {
         h += "X-Priority: 1 (Highest)\r\nImportance: High\r\n";

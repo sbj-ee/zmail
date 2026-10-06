@@ -54,6 +54,27 @@ bool UpdateChecker::isNewer(const QString &tag, const QString &current)
     return false;
 }
 
+QString UpdateChecker::releasePageUrl(const QString &htmlUrl)
+{
+    static const QString prefix = QStringLiteral("https://github.com/sbj-ee/zmail/");
+    static const QString fallback = QStringLiteral("https://github.com/sbj-ee/zmail/releases");
+    if (!htmlUrl.startsWith(prefix)) {
+        return fallback;
+    }
+    for (const QChar c : htmlUrl) {
+        if (c.unicode() <= 0x20 || c.unicode() == 0x7f || c == QLatin1Char('\\')) {
+            return fallback; // whitespace, control characters, backslashes
+        }
+    }
+    const QUrl u(htmlUrl, QUrl::StrictMode);
+    if (!u.isValid() || u.scheme() != QLatin1String("https") || u.host() != QLatin1String("github.com") ||
+        !u.userInfo().isEmpty() || u.port() != -1 || !u.path().startsWith(QLatin1String("/sbj-ee/zmail/")) ||
+        u.path().contains(QLatin1String("/../")) || u.path().contains(QLatin1String("/./"))) {
+        return fallback;
+    }
+    return htmlUrl;
+}
+
 void UpdateChecker::checkForUpdates(const QString &currentVersion, const QString &repo)
 {
     if (m_checking) {
@@ -142,6 +163,5 @@ void UpdateChecker::onFinished(QNetworkReply *reply)
         return;
     }
 
-    const QString htmlUrl = obj.value(QStringLiteral("html_url")).toString();
-    emit updateAvailable(tag, htmlUrl);
+    emit updateAvailable(tag, releasePageUrl(obj.value(QStringLiteral("html_url")).toString()));
 }

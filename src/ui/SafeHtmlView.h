@@ -30,6 +30,10 @@ public:
     // Remote (http/https/protocol-relative) and cid: images are counted in
     // *blockedImages; they're removed unless keepRemoteImages is true (then
     // http(s) ones stay so loadResource can fetch them on request).
+    // Resource references (src, background, CSS url()) keep only data:image/*
+    // (not SVG), http(s) and cid:; bare paths, file:, qrc: etc. are dropped
+    // (see html::sanitize). loadResource never returns a null QVariant, which
+    // would make QTextDocument read the file from disk itself.
     static QString sanitize(const QString &html, int *blockedImages = nullptr, bool keepRemoteImages = false);
     // Remove known tracking pixels (RemoteImages::isTrackerImgTag) from
     // sanitized HTML whose remote images are kept; *count says how many.

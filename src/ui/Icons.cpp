@@ -33,14 +33,20 @@ QIcon icon(const QString &name, const QColor &color)
     const QPalette pal = QApplication::palette();
     const QColor normal = color.isValid() ? color : pal.color(QPalette::ButtonText);
     const QColor disabled = pal.color(QPalette::Disabled, QPalette::ButtonText);
-    QByteArray on = src, off = src;
+    // Selected rows (mailbox tree, message list) draw QIcon::Selected: the
+    // selection's text colour, so the icon stays visible on any Highlight
+    // (e.g. a gold icon on the Boilermakers gold selection).
+    const QColor selected = pal.color(QPalette::HighlightedText);
+    QByteArray on = src, off = src, sel = src;
     on.replace("currentColor", normal.name().toLatin1());
     off.replace("currentColor", disabled.name().toLatin1());
+    sel.replace("currentColor", selected.name().toLatin1());
     const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
     QIcon ic;
     for (int s : {16, 20, 24, 32, 48}) {
         ic.addPixmap(render(on, s, dpr), QIcon::Normal);
         ic.addPixmap(render(off, s, dpr), QIcon::Disabled);
+        ic.addPixmap(render(sel, s, dpr), QIcon::Selected);
     }
     return ic;
 }

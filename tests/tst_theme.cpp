@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "ui/BrandThemes.h"
+#include "ui/Icons.h"
 #include "ui/Theme.h"
 
 #include <QAction>
@@ -260,6 +261,30 @@ private slots:
         QCOMPARE(currentTheme(), ThemeMode::Light);
         QCOMPARE(QSettings().value(QLatin1String(kThemeSettingKey)).toString(), QStringLiteral("light"));
         QVERIFY(!w.findChild<QAction *>(QStringLiteral("actionThemePackers"))->isChecked());
+    }
+
+    void selectedRowIconsUseTheSelectionTextColour()
+    {
+        // The mailbox tree's selected row: its icon must show on the selection
+        // in every brand theme (Boilermakers: gold icon on gold before).
+        for (ThemeMode m : {ThemeMode::Boilermakers, ThemeMode::Badgers, ThemeMode::Packers, ThemeMode::Light}) {
+            applyTheme(m);
+            const QPalette p = QApplication::palette();
+            const QImage img = icon(QStringLiteral("inbox")).pixmap(QSize(32, 32), QIcon::Selected).toImage();
+            QColor ink;
+            for (int y = 0; y < img.height() && !ink.isValid(); ++y) {
+                for (int x = 0; x < img.width(); ++x) {
+                    if (qAlpha(img.pixel(x, y)) == 255) {
+                        ink = QColor(img.pixel(x, y));
+                        break;
+                    }
+                }
+            }
+            QVERIFY(ink.isValid());
+            QCOMPARE(ink.rgb(), p.color(QPalette::HighlightedText).rgb());
+            QVERIFY2(contrastRatio(ink, p.color(QPalette::Highlight)) >= 4.5, qPrintable(themeId(m)));
+        }
+        applyTheme(ThemeMode::Light);
     }
 
     void applyThemeSwitchesPalette()

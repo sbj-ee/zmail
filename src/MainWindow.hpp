@@ -111,6 +111,10 @@ private:
     void sessionStateChanged();
     void attachSync();
     void reloadFromCache();
+    // Before messages leave the list (Delete / move to Trash): if the current
+    // row is one of them, select and preview the row below (above at the
+    // bottom; nothing when the list empties).
+    void selectPastRemoved(const QStringList &ids);
     void checkMail();
     void updateSyncLabel(const QString &status = {});
     QString labelForMailbox(const QString &key) const;
@@ -170,6 +174,7 @@ private:
     void applyStripes();
     QString m_lastSync;     // "8:45 AM"
     QString m_shownId;      // message currently in the preview
+    int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
     QAction *m_undoDeleteAction = nullptr;
     QWidget *m_undoBar = nullptr;      // "Moved to Trash. [Undo]" in the status bar
     QLabel *m_undoLabel = nullptr;

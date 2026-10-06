@@ -20,11 +20,13 @@
 #include "ui/MessageWindow.h"
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
+#include "ui/SelectionAfterRemoval.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -972,16 +974,18 @@ void MainWindow::reloadFromCache()
         items.append(std::move(m));
     }
     const QString keep = m_shownId;
+    const int fallbackRow = std::exchange(m_selectRowAfterReload, -1);
     const int scroll = m_list->verticalScrollBar()->value();
     m_model->setItems(std::move(items));
     const int row = keep.isEmpty() ? -1 : m_model->rowForId(keep);
-    if (row >= 0) {
-        const QModelIndex pi = m_proxy->mapFromSource(m_model->index(row, 0));
-        if (pi.isValid()) {
-            const QSignalBlocker block(m_list->selectionModel());
-            m_list->setCurrentIndex(pi);
-            m_shownId = keep;
-        }
+    const QModelIndex pi = row >= 0 ? m_proxy->mapFromSource(m_model->index(row, 0)) : QModelIndex();
+    if (pi.isValid()) {
+        const QSignalBlocker block(m_list->selectionModel());
+        m_list->setCurrentIndex(pi);
+        m_shownId = keep;
+    } else if (fallbackRow >= 0 && m_proxy->rowCount() > 0) {
+        // The neighbour picked by selectPastRemoved() went too: same position.
+        m_list->setCurrentIndex(m_proxy->index(std::min(fallbackRow, m_proxy->rowCount() - 1), 0));
     }
     m_list->verticalScrollBar()->setValue(scroll);
     updateCounts();
@@ -1259,6 +1263,29 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex)
     return w;
 }
 
+void MainWindow::selectPastRemoved(const QStringList &ids)
+{
+    const QModelIndex cur = m_list->currentIndex();
+    if (!cur.isValid() || !ids.contains(m_model->item(m_proxy->mapToSource(cur).row()).id)) {
+        return; // e.g. deleted from its own window while another row is selected
+    }
+    QList<int> rows;
+    for (int r = 0; r < m_proxy->rowCount(); ++r) {
+        if (ids.contains(m_model->item(m_proxy->mapToSource(m_proxy->index(r, 0)).row()).id)) {
+            rows.append(r);
+        }
+    }
+    // Pick the neighbour by id now, in view order (so sorting holds), and
+    // select it before the model refreshes; reloadFromCache() keeps it by id.
+    const SelectionAfterRemoval next = selectionAfterRemoval(m_proxy->rowCount(), rows);
+    m_selectRowAfterReload = next.rowAfter;
+    if (next.rowBefore < 0) {
+        m_list->selectionModel()->clear(); // list will be empty: clears the preview
+    } else {
+        m_list->setCurrentIndex(m_proxy->index(next.rowBefore, 0)); // shows it in the preview
+    }
+}
+
 void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, cleared below
 {
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
@@ -1267,6 +1294,7 @@ void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, c
                                  5000);
         return;
     }
+    selectPastRemoved({id});
     sync->trash(id); // optimistic; rolled back with an error if Gmail refuses
     if (m_shownId == id) {
         m_view->clear();

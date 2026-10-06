@@ -2,14 +2,18 @@
 
 #include "NewMailSound.h"
 
+#include <QAudioDevice>
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMediaDevices>
 #include <QPushButton>
+#include <QSoundEffect>
 #include <QVBoxLayout>
 
 namespace zmail::ui {
@@ -66,6 +70,13 @@ SoundDialog::SoundDialog(NewMailSound *sound, QWidget *parent)
     testRow->addWidget(m_test);
     gl->addLayout(testRow);
 
+    m_error = new QLabel(group);
+    m_error->setObjectName(QStringLiteral("soundErrorLabel"));
+    m_error->setWordWrap(true);
+    m_error->setStyleSheet(QStringLiteral("color:#b3261e"));
+    m_error->hide();
+    gl->addWidget(m_error);
+
     lay->addWidget(group);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -107,6 +118,7 @@ QString SoundDialog::soundFile() const
 void SoundDialog::setSoundFile(const QString &path)
 {
     m_file = path.trimmed();
+    m_error->hide();
     updatePathLabel();
 }
 
@@ -137,16 +149,64 @@ void SoundDialog::resetDefault()
     setSoundFile({});
 }
 
+QUrl SoundDialog::previewSource() const
+{
+    if (m_file.isEmpty()) {
+        return QUrl(NewMailSound::resourceUrl());
+    }
+    return QUrl::fromLocalFile(QFileInfo(m_file).absoluteFilePath());
+}
+
 void SoundDialog::test()
 {
-    if (!m_sound) {
+    // Play what the field shows, before it's saved, through the dialog's own
+    // effect (NewMailSound keeps the saved choice until OK).
+    m_error->hide();
+    if (!m_file.isEmpty() && !NewMailSound::isUsableSoundFile(m_file)) {
+        showError(tr("Can't play this file. Choose a readable .wav file."));
         return;
     }
-    // Preview the dialog's current choice without committing yet.
-    const QString prev = m_sound->soundFile();
-    m_sound->setSoundFile(m_file);
-    m_sound->playPreview();
-    m_sound->setSoundFile(prev);
+    if (!m_preview) {
+        m_preview = new QSoundEffect(this);
+        m_preview->setObjectName(QStringLiteral("soundPreviewEffect"));
+        m_preview->setVolume(0.8f);
+        connect(m_preview, &QSoundEffect::statusChanged, this, &SoundDialog::playPreviewIfReady);
+    }
+    const QUrl src = previewSource();
+    if (m_preview->source() != src || m_preview->status() == QSoundEffect::Error) {
+        m_preview->setSource(QUrl()); // force a reload (a failed file may have been replaced)
+        m_preview->setSource(src);    // loads asynchronously; plays on Ready
+    }
+    m_previewQueued = true;
+    playPreviewIfReady();
+}
+
+void SoundDialog::playPreviewIfReady()
+{
+    if (!m_preview || !m_previewQueued) {
+        return;
+    }
+    switch (m_preview->status()) {
+    case QSoundEffect::Ready:
+        m_previewQueued = false;
+        ++m_previewPlays;
+        m_preview->play();
+        break;
+    case QSoundEffect::Error:
+        m_previewQueued = false;
+        showError(QMediaDevices::audioOutputs().isEmpty()
+                      ? tr("No audio output device to play the sound on.")
+                      : tr("Couldn't load this sound file. Choose a PCM .wav file."));
+        break;
+    default:
+        break; // Null / Loading: statusChanged brings us back
+    }
+}
+
+void SoundDialog::showError(const QString &message)
+{
+    m_error->setText(message);
+    m_error->show();
 }
 
 void SoundDialog::save() const

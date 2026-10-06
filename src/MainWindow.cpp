@@ -1565,6 +1565,11 @@ void MainWindow::junkMessage(QString id)
             m_live ? tr("Select a message to mark as Junk.") : tr("Sign in to Gmail to mark Junk."), 5000);
         return;
     }
+    // Spam leaves In, and every view but Junk while Hide Spam is on.
+    if (m_proxy->mailbox() == QLatin1String("In")
+        || (m_proxy->hideSpam() && m_proxy->mailbox() != QLatin1String("Junk"))) {
+        selectPastRemoved({id});
+    }
     sync->markJunk(id);
     if (m_shownId == id) {
         m_view->clear();
@@ -1581,6 +1586,9 @@ void MainWindow::notJunkMessage(QString id)
         statusBar()->showMessage(
             m_live ? tr("Select a message to mark as Not Junk.") : tr("Sign in to Gmail to mark Not Junk."), 5000);
         return;
+    }
+    if (m_proxy->mailbox() == QLatin1String("Junk")) {
+        selectPastRemoved({id}); // no longer spam: gone from the Junk list
     }
     sync->markNotJunk(id);
     statusBar()->showMessage(tr("Moved out of Spam."), 5000);

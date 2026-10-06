@@ -218,6 +218,59 @@ private slots:
         QTRY_VERIFY(L.g.modifyCalls.contains(id + QStringLiteral(":+SPAM")));
         QTRY_VERIFY(!L.session->cache()->message(id).labels.contains(QStringLiteral("INBOX")));
     }
+
+    void junkAndNotJunkSelectNext()
+    {
+        // Like Delete: the selection moves to the next message (selectPastRemoved).
+        Live L;
+        const QString a = L.seed(QStringLiteral("Alpha"), {QStringLiteral("INBOX")});
+        const QString b = L.seed(QStringLiteral("Bravo"), {QStringLiteral("INBOX")});
+        const QString c = L.seed(QStringLiteral("Charlie"), {QStringLiteral("INBOX")});
+        const QString d = L.seed(QStringLiteral("Delta"), {QStringLiteral("INBOX")});
+        Q_UNUSED(a);
+        QVERIFY(L.start());
+        MainWindow w;
+        w.setSession(L.session.get());
+        QMetaObject::invokeMethod(L.session.get(), "ready");
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        QTRY_VERIFY(w.isLive());
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QTRY_COMPARE(list->model()->rowCount(), 4);
+        list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        auto *model = w.findChild<MessageListModel *>();
+        auto currentId = [&]() {
+            const QModelIndex i = list->currentIndex();
+            return i.isValid() ? model->item(proxy->mapToSource(i).row()).id : QString();
+        };
+        QAction *junk = w.findChild<QAction *>(QStringLiteral("actionJunk"));
+
+        // Junk Bravo in In -> Charlie (the row below), shown in the preview;
+        // then Charlie -> Delta.
+        list->setCurrentIndex(proxy->index(1, 0));
+        QTRY_COMPARE(w.shownMessageId(), b);
+        junk->trigger();
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+        QTRY_COMPARE(list->model()->rowCount(), 3);
+        QCOMPARE(currentId(), c);
+        junk->trigger();
+        QCOMPARE(currentId(), d);
+        QTRY_COMPARE(list->model()->rowCount(), 2);
+        QCOMPARE(w.shownMessageId(), d);
+
+        // Not Junk Bravo in Junk -> Charlie.
+        w.showSpamFolder();
+        QTRY_COMPARE(list->model()->rowCount(), 2); // Bravo, Charlie
+        list->setCurrentIndex(proxy->index(0, 0));
+        QTRY_COMPARE(w.shownMessageId(), b);
+        w.findChild<QAction *>(QStringLiteral("menuActionNotJunk"))->trigger();
+        QCOMPARE(currentId(), c);
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+    }
 };
 
 QTEST_MAIN(TstJunk)

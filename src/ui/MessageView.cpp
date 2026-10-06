@@ -41,7 +41,11 @@ QString esc(const QString &s)
 
 QString linkify(const QString &escaped)
 {
-    static const QRegularExpression url(QStringLiteral("(https?://[^\\s<>\"']+[^\\s<>\"'.,;:!?)\\]])"));
+    // Stops before an escaped <, >, " or ' too: "Docs <https://x/y>" (the
+    // usual plain-text link form, also zmail's plain signatures) links
+    // https://x/y, not https://x/y&gt.
+    static const QRegularExpression url(
+        QStringLiteral("(https?://(?:(?!&(?:gt|lt|quot|#0?39|#x27);)[^\\s<>\"'])*[^\\s<>\"'.,;:!?)\\]&])"));
     QString out = escaped;
     out.replace(url, QStringLiteral("<a href=\"\\1\">\\1</a>"));
     return out;
@@ -396,6 +400,7 @@ void MessageView::render()
         const QFont f = zoomed(base, m_zoom);
         doc->setDefaultFont(f);
         QString text = m_msg.bodyText.isEmpty() ? m_msg.snippet : m_msg.bodyText;
+        text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")); // CRLF bodies: one line break, not two
         QString html = prefix + QStringLiteral("<div style='white-space:pre-wrap'>%1</div>").arg(linkify(esc(text)));
         if (m_msg.loading) {
             html += QStringLiteral("<p><i>%1</i></p>").arg(tr("Loading message\u2026"));

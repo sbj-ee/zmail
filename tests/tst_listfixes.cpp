@@ -237,9 +237,9 @@ private slots:
                 }
             }
         }
-        QCOMPARE(placeholders, 7); // Mark as Suspicious became Mark as Junk
+        QCOMPARE(placeholders, 6); // Mark as Suspicious became Mark as Junk; Snooze is implemented
         for (const char *gone : {"&Save Attachments\u2026", "&Print\u2026", "&Copy", "View as &Plain Text",
-                                 "S&nooze\u2026", "&Account\u2026"}) {
+                                 "&Account\u2026"}) {
             for (QAction *a : w.findChildren<QAction *>()) {
                 if (a->text() == QString::fromUtf8(gone)) {
                     QVERIFY2(!a->isVisible(), gone);

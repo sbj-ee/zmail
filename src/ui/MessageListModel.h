@@ -26,12 +26,14 @@ struct MailItem
     QString subject;
     QColor ruleColor;       // colour from the first matching rule (invalid = none)
     bool suspicious = false;
-    QStringList mailboxes;  // "In", "Out", "Junk", "Trash"
+    QStringList mailboxes;  // "In", "Out", "Junk", "Trash", "Snoozed"
     QString preview;        // plain-text body for the preview pane
     QStringList attachments;
     // Live Gmail data (empty for sample data).
     QString id;             // Gmail message id
     QString to;             // To: header
+    bool snoozeBadge = false; // woke from snooze; clear when opened
+    qint64 snoozeWakeMs = 0;  // active snooze wake time (0 = not snoozed)
 };
 
 // Eudora-style columns.
@@ -46,6 +48,8 @@ public:
     static constexpr int MailboxesRole = Qt::UserRole + 3;
     static constexpr int LabelRole = Qt::UserRole + 4;
     static constexpr int SearchTextRole = Qt::UserRole + 5;
+    static constexpr int SnoozeBadgeRole = Qt::UserRole + 6;
+    static constexpr int SnoozeWakeRole = Qt::UserRole + 7;
 
     explicit MessageListModel(QObject *parent = nullptr);
 

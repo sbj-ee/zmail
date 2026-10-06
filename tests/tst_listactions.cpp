@@ -532,6 +532,67 @@ private slots:
         QVERIFY(!toolbarDelete->isEnabled());
     }
 
+    void snoozeAndUnsnoozeSelectNext()
+    {
+        Live L;
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        auto seed = [&](const QString &subject, int minutesAgo) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+            m.to = QStringLiteral("Demo User <demo.user@example.com>");
+            m.subject = subject;
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {QStringLiteral("INBOX")};
+            m.date = now.addSecs(-60 * minutesAgo);
+            return L.g.addMessage(m, true);
+        };
+        const QString a = seed(QStringLiteral("Alpha"), 1);
+        const QString b = seed(QStringLiteral("Bravo"), 2);
+        const QString c = seed(QStringLiteral("Charlie"), 3);
+        QVERIFY(L.start());
+        MainWindow w;
+        w.setSession(L.session.get());
+        QMetaObject::invokeMethod(L.session.get(), "ready");
+        w.show();
+        QVERIFY(QTest::qWaitForWindowActive(&w));
+        QTRY_VERIFY(w.isLive());
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QTRY_COMPARE(list->model()->rowCount(), 3);
+        list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        auto *model = w.findChild<MessageListModel *>();
+        auto currentId = [&]() {
+            const QModelIndex i = list->currentIndex();
+            return i.isValid() ? model->item(proxy->mapToSource(i).row()).id : QString();
+        };
+        QAction *tomorrow = w.findChild<QMenu *>(QStringLiteral("menuSnooze"))->findChild<QAction *>(QStringLiteral("snooze_tomorrow"));
+        QVERIFY(tomorrow);
+
+        // Snooze Bravo -> Charlie (below); snooze Charlie (now last) -> Alpha.
+        list->setCurrentIndex(proxy->index(1, 0));
+        QTRY_COMPARE(w.shownMessageId(), b);
+        tomorrow->trigger();
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+        QTRY_COMPARE(list->model()->rowCount(), 2);
+        QCOMPARE(currentId(), c);
+        tomorrow->trigger();
+        QCOMPARE(currentId(), a);
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        QCOMPARE(w.shownMessageId(), a);
+
+        // Unsnooze in the Snoozed list -> the next snoozed message.
+        w.selectMailbox(QStringLiteral("Snoozed"));
+        QTRY_COMPARE(list->model()->rowCount(), 2);
+        list->setCurrentIndex(proxy->index(0, 0)); // Bravo
+        QTRY_COMPARE(w.shownMessageId(), b);
+        w.findChild<QAction *>(QStringLiteral("menuActionUnsnooze"))->trigger();
+        QCOMPARE(currentId(), c);
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+    }
+
     void deleteOnlyMessageSelectsNothing()
     {
         Live L;

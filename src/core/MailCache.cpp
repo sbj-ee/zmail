@@ -3,6 +3,7 @@
 #include "Log.h"
 
 #include <algorithm>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -122,7 +123,11 @@ bool MailCache::open(const QString &path)
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS message_labels (message_id TEXT NOT NULL "
                             "REFERENCES messages(id) ON DELETE CASCADE, label_id TEXT NOT NULL, "
                             "PRIMARY KEY (message_id, label_id))")) &&
-        exec(QStringLiteral("CREATE INDEX IF NOT EXISTS message_labels_label ON message_labels(label_id)"));
+        exec(QStringLiteral("CREATE INDEX IF NOT EXISTS message_labels_label ON message_labels(label_id)")) &&
+        exec(QStringLiteral(
+            "CREATE TABLE IF NOT EXISTS snoozes (message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, "
+            "wake_ms INTEGER NOT NULL DEFAULT 0, had_inbox INTEGER NOT NULL DEFAULT 0, "
+            "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)"));
     if (!ok) {
         return false;
     }
@@ -150,7 +155,7 @@ bool MailCache::open(const QString &path)
     } else {
         qCWarning(lcSync) << "SQLite has no FTS5; search falls back to LIKE";
     }
-    exec(QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', '1')"));
+    exec(QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', '2')"));
     return true;
 }
 
@@ -168,6 +173,16 @@ bool MailCache::migrate()
             !exec(QStringLiteral("ALTER TABLE messages ADD COLUMN %1 TEXT").arg(QLatin1String(col)))) {
             return false;
         }
+    }
+    // Snooze table (local; schema meta "2"). CREATE IF NOT EXISTS is in open().
+    if (meta(QStringLiteral("schema")).toInt() < 2) {
+        if (!exec(QStringLiteral(
+                "CREATE TABLE IF NOT EXISTS snoozes (message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, "
+                "wake_ms INTEGER NOT NULL DEFAULT 0, had_inbox INTEGER NOT NULL DEFAULT 0, "
+                "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)"))) {
+            return false;
+        }
+        setMeta(QStringLiteral("schema"), QStringLiteral("2"));
     }
     return true;
 }
@@ -415,6 +430,107 @@ QStringList MailCache::search(const QString &ftsQuery, int limit) const
         while (q.next()) {
             ids.append(q.value(0).toString());
         }
+    }
+    return ids;
+}
+
+void MailCache::setSnooze(const QString &id, qint64 wakeMs, bool hadInbox)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral(
+        "INSERT INTO snoozes(message_id, wake_ms, had_inbox, badge, created_ms) VALUES (?, ?, ?, 0, ?) "
+        "ON CONFLICT(message_id) DO UPDATE SET wake_ms=excluded.wake_ms, had_inbox=excluded.had_inbox, "
+        "badge=0, created_ms=excluded.created_ms"));
+    q.addBindValue(id);
+    q.addBindValue(wakeMs);
+    q.addBindValue(hadInbox ? 1 : 0);
+    q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    if (!q.exec()) {
+        m_error = q.lastError().text();
+        qCWarning(lcSync) << "setSnooze failed:" << m_error;
+    }
+}
+
+void MailCache::clearSnooze(const QString &id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("DELETE FROM snoozes WHERE message_id = ?"));
+    q.addBindValue(id);
+    q.exec();
+}
+
+void MailCache::markSnoozeWoke(const QString &id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("UPDATE snoozes SET wake_ms = 0, badge = 1 WHERE message_id = ?"));
+    q.addBindValue(id);
+    if (!q.exec() || q.numRowsAffected() == 0) {
+        // Row may be missing if unsnoozed; insert badge-only.
+        q.prepare(QStringLiteral(
+            "INSERT INTO snoozes(message_id, wake_ms, had_inbox, badge, created_ms) VALUES (?, 0, 0, 1, ?) "
+            "ON CONFLICT(message_id) DO UPDATE SET wake_ms=0, badge=1"));
+        q.addBindValue(id);
+        q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+        q.exec();
+    }
+}
+
+void MailCache::clearSnoozeBadge(const QString &id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("DELETE FROM snoozes WHERE message_id = ? AND wake_ms = 0"));
+    q.addBindValue(id);
+    q.exec();
+}
+
+MailCache::SnoozeRow MailCache::snooze(const QString &id) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT message_id, wake_ms, had_inbox, badge FROM snoozes WHERE message_id = ?"));
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        return {q.value(0).toString(), q.value(1).toLongLong(), q.value(2).toBool(), q.value(3).toBool()};
+    }
+    return {};
+}
+
+QList<MailCache::SnoozeRow> MailCache::snoozes(bool activeOnly) const
+{
+    QList<SnoozeRow> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (activeOnly) {
+        q.exec(QStringLiteral("SELECT message_id, wake_ms, had_inbox, badge FROM snoozes WHERE wake_ms > 0 "
+                              "ORDER BY wake_ms ASC"));
+    } else {
+        q.exec(QStringLiteral("SELECT message_id, wake_ms, had_inbox, badge FROM snoozes ORDER BY wake_ms ASC"));
+    }
+    while (q.next()) {
+        out.append({q.value(0).toString(), q.value(1).toLongLong(), q.value(2).toBool(), q.value(3).toBool()});
+    }
+    return out;
+}
+
+QStringList MailCache::dueSnoozes(qint64 nowMs) const
+{
+    QStringList ids;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT message_id FROM snoozes WHERE wake_ms > 0 AND wake_ms <= ?"));
+    q.addBindValue(nowMs);
+    if (q.exec()) {
+        while (q.next()) {
+            ids.append(q.value(0).toString());
+        }
+    }
+    return ids;
+}
+
+QStringList MailCache::snoozeBadgeIds() const
+{
+    QStringList ids;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.exec(QStringLiteral("SELECT message_id FROM snoozes WHERE badge = 1 AND wake_ms = 0"));
+    while (q.next()) {
+        ids.append(q.value(0).toString());
     }
     return ids;
 }

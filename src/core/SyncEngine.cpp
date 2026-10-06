@@ -518,6 +518,107 @@ void SyncEngine::markNotJunk(const QString &id)
     });
 }
 
+void SyncEngine::snooze(const QString &id, qint64 wakeMs)
+{
+    const CachedMessage m = m_cache->message(id);
+    if (m.id.isEmpty() || wakeMs <= 0) {
+        return;
+    }
+    const bool hadInbox = m.labels.contains(QStringLiteral("INBOX"));
+    m_cache->setSnooze(id, wakeMs, hadInbox);
+    if (hadInbox) {
+        m_cache->modifyLabels(id, {}, {QStringLiteral("INBOX")}); // optimistic
+        emit messagesChanged();
+        m_api->modifyLabels(id, {}, {QStringLiteral("INBOX")}, [this, id](const QJsonObject &json, const ApiError &err) {
+            if (err.isError) {
+                // Keep the local snooze; put INBOX back so the user still sees it.
+                m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
+                m_cache->clearSnooze(id);
+                reportError(err, tr("Snoozing"));
+                emit messagesChanged();
+                return;
+            }
+            QStringList labels;
+            for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+                labels.append(l.toString());
+            }
+            if (!labels.isEmpty()) {
+                m_cache->setLabels(id, labels);
+                emit messagesChanged();
+            }
+        });
+    } else {
+        emit messagesChanged();
+    }
+}
+
+void SyncEngine::unsnooze(const QString &id)
+{
+    const auto row = m_cache->snooze(id);
+    if (row.messageId.isEmpty()) {
+        return;
+    }
+    const bool restore = row.hadInbox || row.wakeMs > 0;
+    m_cache->clearSnooze(id);
+    if (restore && !m_cache->message(id).labels.contains(QStringLiteral("INBOX"))) {
+        m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
+        emit messagesChanged();
+        m_api->modifyLabels(id, {QStringLiteral("INBOX")}, {}, [this, id](const QJsonObject &json, const ApiError &err) {
+            if (err.isError) {
+                m_cache->modifyLabels(id, {}, {QStringLiteral("INBOX")});
+                reportError(err, tr("Unsnoozing"));
+                emit messagesChanged();
+                return;
+            }
+            QStringList labels;
+            for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+                labels.append(l.toString());
+            }
+            if (!labels.isEmpty()) {
+                m_cache->setLabels(id, labels);
+                emit messagesChanged();
+            }
+        });
+    } else {
+        emit messagesChanged();
+    }
+}
+
+int SyncEngine::wakeDue(qint64 nowMs)
+{
+    if (nowMs <= 0) {
+        nowMs = QDateTime::currentMSecsSinceEpoch();
+    }
+    const QStringList due = m_cache->dueSnoozes(nowMs);
+    if (due.isEmpty()) {
+        return 0;
+    }
+    for (const QString &id : due) {
+        const auto row = m_cache->snooze(id);
+        m_cache->markSnoozeWoke(id);
+        if (row.hadInbox && !m_cache->message(id).labels.contains(QStringLiteral("INBOX"))) {
+            m_cache->modifyLabels(id, {QStringLiteral("INBOX")}, {});
+            m_api->modifyLabels(id, {QStringLiteral("INBOX")}, {}, [this, id](const QJsonObject &json, const ApiError &err) {
+                if (err.isError) {
+                    reportError(err, tr("Waking a snoozed message"));
+                    return;
+                }
+                QStringList labels;
+                for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+                    labels.append(l.toString());
+                }
+                if (!labels.isEmpty()) {
+                    m_cache->setLabels(id, labels);
+                    emit messagesChanged();
+                }
+            });
+        }
+    }
+    emit messagesChanged();
+    emit snoozesWoke(due);
+    return due.size();
+}
+
 void SyncEngine::trash(const QString &id)
 {
     const CachedMessage m = m_cache->message(id);

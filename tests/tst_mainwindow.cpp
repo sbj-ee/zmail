@@ -134,8 +134,8 @@ private slots:
             top << tree->topLevelItem(i)->text(0);
         }
         // Hide Spam (default) omits Junk; labels are still under Gmail Labels.
-        QCOMPARE(top, (QStringList{"In", "Out", "Trash", "Gmail Labels"}));
-        QVERIFY(tree->topLevelItem(3)->childCount() >= 4);
+        QCOMPARE(top, (QStringList{"In", "Out", "Snoozed", "Trash", "Gmail Labels"}));
+        QVERIFY(tree->topLevelItem(4)->childCount() >= 4);
     }
 
     void listAbovePreview()

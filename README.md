@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.2: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.3: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -26,7 +26,9 @@ that peels INBOX / the source user label). New in 0.5.1:
 account-status circle in the status bar (green connected, grey offline,
 red on sync error). New in 0.5.2:
 message list multi-select (Shift/Ctrl range+toggle, bulk Delete/Junk/Snooze/
-Mark Read). See
+Mark Read). New in 0.5.3:
+Gmail label-count fetch throttle (max in-flight + 429 cooldown) so startup
+no longer livelocks the UI thread. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -93,7 +95,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.2_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.3_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

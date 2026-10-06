@@ -10,11 +10,13 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFile>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QSoundEffect>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QToolBar>
@@ -233,6 +235,78 @@ private slots:
         QVERIFY(dlg->findChild<QLineEdit *>(QStringLiteral("soundFileEdit"))->text().contains(QStringLiteral("Default")));
         dlg->reject(); // don't save
         QCOMPARE(w.newMailSound()->soundFile(), QStringLiteral("/tmp/x.wav"));
+    }
+
+    void testPlaysPendingFileBeforeSave()
+    {
+        // Browse… to a new file, then Test: plays that file now, not the
+        // saved one, and nothing is saved until OK.
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString saved = dir.filePath(QStringLiteral("saved.wav"));
+        const QString picked = dir.filePath(QStringLiteral("picked.wav"));
+        QVERIFY(QFile::copy(NewMailSound::resourcePath(), saved));
+        QVERIFY(QFile::copy(NewMailSound::resourcePath(), picked));
+
+        MainWindow w;
+        w.newMailSound()->setSoundFile(saved);
+        w.newMailSound()->saveToSettings();
+        SoundDialog *dlg = w.showSoundDialog();
+        auto *test = dlg->findChild<QPushButton *>(QStringLiteral("testSoundButton"));
+        auto *error = dlg->findChild<QLabel *>(QStringLiteral("soundErrorLabel"));
+        QVERIFY(test && error);
+        QVERIFY(!dlg->previewEffect()); // no audio stack until Test
+
+        dlg->setSoundFile(picked); // what Browse… does with the chosen file
+        test->click();
+        QCOMPARE(dlg->previewSource(), QUrl::fromLocalFile(picked));
+        QVERIFY(dlg->previewEffect());
+        QCOMPARE(dlg->previewEffect()->source(), QUrl::fromLocalFile(picked));
+        // Played once loaded (waits for Ready instead of playing too early).
+        QTRY_VERIFY_WITH_TIMEOUT(dlg->previewEffect()->status() == QSoundEffect::Ready
+                                     || dlg->previewEffect()->status() == QSoundEffect::Error,
+                                 5000);
+        if (dlg->previewEffect()->status() == QSoundEffect::Ready) {
+            QCOMPARE(dlg->previewPlays(), 1);
+            QVERIFY(error->isHidden());
+        } else { // no audio backend at all (headless CI): reported inline, not silent
+            QVERIFY(!error->isHidden());
+        }
+        // The live new-mail sound still has the saved file.
+        QCOMPARE(w.newMailSound()->soundFile(), saved);
+        QCOMPARE(w.newMailSound()->resolvedSource(), QUrl::fromLocalFile(saved));
+        QCOMPARE(w.newMailSound()->playCount(), 0);
+
+        // Default -> Test previews the built-in chime.
+        dlg->findChild<QPushButton *>(QStringLiteral("defaultSoundButton"))->click();
+        test->click();
+        QCOMPARE(dlg->previewSource(), QUrl(NewMailSound::resourceUrl()));
+        QCOMPARE(dlg->previewEffect()->source(), QUrl(NewMailSound::resourceUrl()));
+
+        // Cancel keeps the saved setting.
+        dlg->setSoundFile(picked);
+        test->click();
+        dlg->reject();
+        QCOMPARE(w.newMailSound()->soundFile(), saved);
+        QCOMPARE(QSettings().value(QLatin1String(NewMailSound::kFileKey)).toString(), saved);
+    }
+
+    void testShowsInlineErrorForUnplayableFile()
+    {
+        MainWindow w;
+        SoundDialog *dlg = w.showSoundDialog();
+        auto *test = dlg->findChild<QPushButton *>(QStringLiteral("testSoundButton"));
+        auto *error = dlg->findChild<QLabel *>(QStringLiteral("soundErrorLabel"));
+        QVERIFY(error->isHidden());
+        dlg->setSoundFile(QStringLiteral("/no/such/sound.wav"));
+        test->click();
+        QVERIFY(!error->isHidden());
+        QVERIFY(error->text().contains(QStringLiteral("Can't play")));
+        QCOMPARE(dlg->previewPlays(), 0);
+        dlg->findChild<QPushButton *>(QStringLiteral("defaultSoundButton"))->click(); // a new choice clears it
+        QVERIFY(error->isHidden());
+        dlg->reject();
+        QVERIFY(w.newMailSound()->soundFile().isEmpty());
     }
 };
 

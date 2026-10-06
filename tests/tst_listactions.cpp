@@ -11,7 +11,9 @@
 #include "mock/MockGoogle.h"
 #include "ui/ComposeWindow.h"
 #include "ui/MessageListModel.h"
+#include "ui/MessageView.h"
 #include "ui/MessageWindow.h"
+#include "ui/SelectionAfterRemoval.h"
 #include "ui/Theme.h"
 
 #include <QAction>
@@ -400,6 +402,156 @@ private slots:
         QVERIFY(L.session->cache()->message(id).unread());
         QTRY_VERIFY(L.g.modifyCalls.contains(id + QStringLiteral(":+UNREAD")));
         QTRY_VERIFY(L.g.messages().value(id).labels.contains(QStringLiteral("UNREAD")));
+    }
+
+    // ---- selection after Delete ---------------------------------------------
+
+    void selectionAfterRemoval_data()
+    {
+        QTest::addColumn<int>("count");
+        QTest::addColumn<QList<int>>("removed");
+        QTest::addColumn<int>("before");
+        QTest::addColumn<int>("after");
+        QTest::newRow("middle -> next") << 5 << QList<int>{2} << 3 << 2;
+        QTest::newRow("first -> next") << 5 << QList<int>{0} << 1 << 0;
+        QTest::newRow("last -> previous") << 5 << QList<int>{4} << 3 << 3;
+        QTest::newRow("only row -> none") << 1 << QList<int>{0} << -1 << -1;
+        QTest::newRow("empty list") << 0 << QList<int>{0} << -1 << -1;
+        QTest::newRow("nothing removed") << 3 << QList<int>{} << -1 << -1;
+        QTest::newRow("multi contiguous -> below") << 6 << QList<int>{1, 2, 3} << 4 << 1;
+        QTest::newRow("multi gaps -> below bottom-most") << 6 << QList<int>{4, 1} << 5 << 3;
+        QTest::newRow("multi at bottom -> closest above") << 6 << QList<int>{5, 3, 4} << 2 << 2;
+        QTest::newRow("multi at bottom skips removed") << 6 << QList<int>{5, 4, 2} << 3 << 2;
+        QTest::newRow("multi all -> none") << 3 << QList<int>{0, 1, 2} << -1 << -1;
+        QTest::newRow("dupes / out of range ignored") << 4 << QList<int>{1, 1, 9, -1} << 2 << 1;
+    }
+    void selectionAfterRemoval()
+    {
+        QFETCH(int, count);
+        QFETCH(QList<int>, removed);
+        QFETCH(int, before);
+        QFETCH(int, after);
+        const SelectionAfterRemoval t = zmail::ui::selectionAfterRemoval(count, removed);
+        QCOMPARE(t.rowBefore, before);
+        QCOMPARE(t.rowAfter, after);
+    }
+
+    void deleteSelectsNextInSortedList()
+    {
+        Live L;
+        const QDateTime now = QDateTime::currentDateTimeUtc();
+        auto seed = [&](const QString &subject, int minutesAgo) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+            m.to = QStringLiteral("Demo User <demo.user@example.com>");
+            m.subject = subject;
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {QStringLiteral("INBOX")};
+            m.date = now.addSecs(-60 * minutesAgo);
+            return L.g.addMessage(m, true);
+        };
+        // Dates in the opposite order to the subjects: sorting by Subject must win.
+        const QString a = seed(QStringLiteral("Alpha"), 1);
+        const QString b = seed(QStringLiteral("Bravo"), 2);
+        const QString c = seed(QStringLiteral("Charlie"), 3);
+        const QString d = seed(QStringLiteral("Delta"), 4);
+        const QString e = seed(QStringLiteral("Echo"), 5);
+        const QString f = seed(QStringLiteral("Foxtrot"), 6);
+        QVERIFY(L.start());
+        MainWindow w;
+        w.setSession(L.session.get());
+        QMetaObject::invokeMethod(L.session.get(), "ready");
+        w.show();
+        QVERIFY(QTest::qWaitForWindowActive(&w));
+        QTRY_VERIFY(w.isLive());
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QTRY_COMPARE(list->model()->rowCount(), 6);
+        list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        auto *proxy = qobject_cast<QSortFilterProxyModel *>(list->model());
+        auto *model = w.findChild<MessageListModel *>();
+        auto idAt = [&](int r) { return model->item(proxy->mapToSource(proxy->index(r, 0)).row()).id; };
+        auto currentId = [&]() { return list->currentIndex().isValid() ? idAt(list->currentIndex().row()) : QString(); };
+        auto previewSubject = [&]() { return w.messageView()->message().subject; };
+        QAction *toolbarDelete = w.findChild<QAction *>(QStringLiteral("actionDelete"));
+        QCOMPARE((QStringList{idAt(0), idAt(1), idAt(2), idAt(3), idAt(4), idAt(5)}), (QStringList{a, b, c, d, e, f}));
+
+        // Toolbar Delete on Bravo -> Charlie (the row below), shown in the preview.
+        list->setFocus();
+        list->setCurrentIndex(proxy->index(1, 0));
+        QTRY_COMPARE(w.shownMessageId(), b);
+        toolbarDelete->trigger();
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+        QCOMPARE(previewSubject(), QStringLiteral("Charlie"));
+        QTRY_COMPARE(list->model()->rowCount(), 5); // after the (async) model refresh...
+        QCOMPARE(currentId(), c);                   // ...still Charlie
+        QCOMPARE(w.shownMessageId(), c);
+        QVERIFY(list->selectionModel()->isRowSelected(list->currentIndex().row(), {}));
+        QVERIFY(toolbarDelete->isEnabled());
+        QTRY_COMPARE(L.g.trashCalls, QStringList{b});
+        QTRY_VERIFY(L.g.messages().value(b).labels.contains(QStringLiteral("TRASH")));
+        QCOMPARE(currentId(), c); // Gmail's answer (a second refresh) keeps it too
+
+        // Delete key on the last row (Foxtrot) -> the previous one (Echo).
+        list->setCurrentIndex(proxy->index(4, 0));
+        QTRY_COMPARE(w.shownMessageId(), f);
+        QTest::keyClick(list, Qt::Key_Delete);
+        QCOMPARE(currentId(), e);
+        QTRY_COMPARE(list->model()->rowCount(), 4);
+        QCOMPARE(currentId(), e);
+        QCOMPARE(w.shownMessageId(), e);
+        QCOMPARE(previewSubject(), QStringLiteral("Echo"));
+
+        // Deleted from its own window while selected -> next row too.
+        list->setCurrentIndex(proxy->index(0, 0)); // Alpha
+        QTRY_COMPARE(w.shownMessageId(), a);
+        MessageWindow *mw = w.openMessageWindow(list->currentIndex());
+        QVERIFY(mw);
+        mw->deleteAction()->trigger();
+        QTRY_COMPARE(list->model()->rowCount(), 3);
+        QCOMPARE(currentId(), c);
+        QCOMPARE(w.shownMessageId(), c);
+
+        // The chosen neighbour leaves too before the refresh (e.g. trashed
+        // elsewhere): fall back to the same position.
+        w.findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger(); // Charlie -> Delta
+        QCOMPARE(currentId(), d);
+        L.session->sync()->trash(d); // same tick, before the debounced reload
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        QTRY_COMPARE(currentId(), e);
+        QCOMPARE(w.shownMessageId(), e);
+        QCOMPARE(previewSubject(), QStringLiteral("Echo"));
+
+        // Last message gone -> nothing selected, preview cleared.
+        toolbarDelete->trigger();
+        QVERIFY(!list->currentIndex().isValid());
+        QTRY_COMPARE(list->model()->rowCount(), 0);
+        QVERIFY(!list->currentIndex().isValid());
+        QVERIFY(w.shownMessageId().isEmpty());
+        QVERIFY(previewSubject().isEmpty());
+        QVERIFY(!toolbarDelete->isEnabled());
+    }
+
+    void deleteOnlyMessageSelectsNothing()
+    {
+        Live L;
+        const QString id = L.seed(QStringLiteral("Last one"), false);
+        QVERIFY(L.start());
+        MainWindow w;
+        w.setSession(L.session.get());
+        QMetaObject::invokeMethod(L.session.get(), "ready");
+        w.show();
+        QVERIFY(QTest::qWaitForWindowActive(&w));
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        QTRY_COMPARE(list->model()->rowCount(), 1);
+        list->setCurrentIndex(list->model()->index(0, 0));
+        QTRY_COMPARE(w.shownMessageId(), id);
+        w.findChild<QAction *>(QStringLiteral("actionDelete"))->trigger();
+        QVERIFY(!list->currentIndex().isValid());
+        QVERIFY(w.shownMessageId().isEmpty());
+        QTRY_COMPARE(list->model()->rowCount(), 0);
+        QVERIFY(!list->currentIndex().isValid());
+        QVERIFY(!w.findChild<QAction *>(QStringLiteral("actionDelete"))->isEnabled());
     }
 };
 

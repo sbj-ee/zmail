@@ -1661,6 +1661,11 @@ void MainWindow::showContacts()
         return;
     }
     auto *dlg = new ContactsWindow(store, m_session->contactsSync(), this);
+    dlg->setSyncTrigger([this]() {
+        if (m_session) {
+            m_session->enableContactsSync();
+        }
+    });
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }

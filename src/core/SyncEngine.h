@@ -108,7 +108,9 @@ private:
     void listPage(const QString &labelId, const QString &pageToken, int remaining, std::function<void(bool ok)> done);
     void historyPage(qint64 start, const QString &pageToken, std::shared_ptr<struct HistoryRun> run);
     void finishHistory(std::shared_ptr<struct HistoryRun> run);
-    void fetchMetadata(const QStringList &ids, std::function<void()> done);
+    // done(ok): ok is false if any fetch failed for good (404 doesn't count:
+    // the message is gone). force re-fetches ids that are already cached.
+    void fetchMetadata(const QStringList &ids, std::function<void(bool ok)> done, bool force = false);
     void drain();
     void setBusy(bool b, const QString &status = {});
     void reportError(const ApiError &e, const QString &what);
@@ -133,7 +135,8 @@ private:
     {
         QString id;
         std::shared_ptr<int> pending;
-        std::function<void()> done;
+        std::shared_ptr<int> failed;
+        std::function<void(bool ok)> done;
     };
     QList<Fetch> m_fetchQueue;
     int m_inFlight = 0;

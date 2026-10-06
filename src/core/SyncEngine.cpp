@@ -86,6 +86,7 @@ void SyncEngine::stop()
     ++m_generation;
     m_poll->stop();
     m_fetchQueue.clear();
+    m_loadingLabels.clear(); // their callbacks are dropped with the old generation
     m_busy = false;
     m_labelsRefreshing = false;
 }
@@ -220,6 +221,7 @@ void SyncEngine::fullSync(const QString &reason)
     m_labelsRefreshing = false;
     const int gen = m_generation;
     m_fetchQueue.clear();
+    m_loadingLabels.clear(); // their callbacks are dropped with the old generation
     setBusy(true, tr("Syncing Inbox (%1)\u2026").arg(reason));
     qCInfo(lcSync) << "Full sync:" << reason;
     m_api->getProfile([this, gen](const QJsonObject &profile, const ApiError &err) {
@@ -233,7 +235,8 @@ void SyncEngine::fullSync(const QString &reason)
         }
         // Take historyId *before* listing so nothing between is missed.
         const qint64 startHistory = profile.value(QStringLiteral("historyId")).toString().toLongLong();
-        m_cache->clearMessages();
+        // Snoozes are local-only: keep their rows (and messages) across the wipe.
+        m_cache->clearMessages(/*keepSnoozed=*/true);
         m_cache->setMeta(QStringLiteral("pageToken:") + kInbox, {});
         m_cache->setMeta(QStringLiteral("synced:") + kInbox, {});
         emit messagesChanged();
@@ -245,15 +248,27 @@ void SyncEngine::fullSync(const QString &reason)
                 if (gen != m_generation) {
                     return;
                 }
-                if (ok) {
+                if (!ok) {
+                    setBusy(false);
+                    return;
+                }
+                // Snoozed mail has left INBOX, so the listing above didn't see
+                // it: refresh the kept rows (a 404 drops the row and its snooze).
+                QStringList snoozed;
+                for (const MailCache::SnoozeRow &row : m_cache->snoozes(false)) {
+                    snoozed.append(row.messageId);
+                }
+                fetchMetadata(snoozed, [this, gen, startHistory](bool) {
+                    if (gen != m_generation) {
+                        return;
+                    }
                     m_cache->setHistoryId(startHistory);
                     m_lastPollMs = monoMs();
-                }
-                setBusy(false, ok ? tr("Inbox synced: %n message(s)", nullptr, m_cache->count(kInbox)) : QString());
-                // Anything that changed while we were listing comes in via history.
-                if (ok) {
+                    emit messagesChanged();
+                    setBusy(false, tr("Inbox synced: %n message(s)", nullptr, m_cache->count(kInbox)));
+                    // Anything that changed while we were listing comes in via history.
                     QTimer::singleShot(0, this, [this] { pollNow(true); });
-                }
+                }, /*force=*/true);
             });
         });
     });
@@ -282,7 +297,7 @@ void SyncEngine::listPage(const QString &labelId, const QString &pageToken, int 
         m_cache->setMeta(QStringLiteral("pageToken:") + labelId, next.isEmpty() ? QStringLiteral("-") : next);
         m_cache->setMeta(QStringLiteral("synced:") + labelId, QStringLiteral("1"));
         const int left = remaining - int(ids.size());
-        fetchMetadata(ids, [this, gen, labelId, next, left, done] {
+        fetchMetadata(ids, [this, gen, labelId, next, left, done](bool) {
             if (gen != m_generation) {
                 return;
             }
@@ -328,21 +343,22 @@ void SyncEngine::ensureLabel(const QString &labelId)
     listPage(labelId, {}, m_pageSize, [this, labelId](bool) { m_loadingLabels.remove(labelId); });
 }
 
-void SyncEngine::fetchMetadata(const QStringList &ids, std::function<void()> done)
+void SyncEngine::fetchMetadata(const QStringList &ids, std::function<void(bool)> done, bool force)
 {
     QStringList todo;
     for (const QString &id : ids) {
-        if (!m_cache->contains(id)) {
+        if (force || !m_cache->contains(id)) {
             todo.append(id);
         }
     }
     if (todo.isEmpty()) {
-        done();
+        done(true);
         return;
     }
     auto pending = std::make_shared<int>(int(todo.size()));
+    auto failed = std::make_shared<int>(0);
     for (const QString &id : todo) {
-        m_fetchQueue.append({id, pending, done});
+        m_fetchQueue.append({id, pending, failed, done});
     }
     drain();
 }
@@ -361,11 +377,14 @@ void SyncEngine::drain()
             }
             if (!err.isError) {
                 m_cache->upsert(MessageParser::fromMetadata(json));
-            } else if (err.httpStatus != 404) { // 404: deleted meanwhile
+            } else if (err.httpStatus == 404) {
+                m_cache->remove(f.id); // deleted meanwhile (a forced refresh may still hold the row)
+            } else {
+                ++*f.failed;
                 reportError(err, tr("Fetching a message"));
             }
             if (--*f.pending == 0) {
-                f.done();
+                f.done(*f.failed == 0);
             } else if (*f.pending % 50 == 0) {
                 emit messagesChanged();
             }
@@ -479,11 +498,17 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
             fresh.append(id);
         }
     }
-    fetchMetadata(run->added, [this, run, fresh] {
+    fetchMetadata(run->added, [this, run, fresh](bool ok) {
         if (run->generation != m_generation) {
             return;
         }
-        m_cache->setHistoryId(run->newestHistoryId);
+        if (ok) {
+            m_cache->setHistoryId(run->newestHistoryId);
+        } else {
+            // Leave historyId where it was: the next poll replays this range
+            // and fetches what's still missing (everything else is idempotent).
+            qCWarning(lcSync) << "History poll incomplete; will replay from" << m_cache->historyId();
+        }
         auto finish = [this, run, fresh] {
             m_busy = false;
             if (run->changed) {

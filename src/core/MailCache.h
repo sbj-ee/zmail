@@ -79,7 +79,9 @@ public:
     void setLabels(const QString &id, const QStringList &labels);
     void modifyLabels(const QString &id, const QStringList &add, const QStringList &remove);
     void remove(const QString &id);
-    void clearMessages();
+    // Full resync: drop every cached message. keepSnoozed leaves the rows that
+    // have a snooze (deleting them would cascade the wake time away with them).
+    void clearMessages(bool keepSnoozed = false);
     bool contains(const QString &id) const;
 
     CachedMessage message(const QString &id) const;

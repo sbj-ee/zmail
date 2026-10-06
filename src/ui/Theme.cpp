@@ -12,6 +12,7 @@
 #include <QVariant>
 #include <QStyleFactory>
 #include <QStyleHints>
+#include <QStandardPaths>
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -20,6 +21,9 @@ namespace zmail::ui {
 
 namespace {
 ThemeMode g_mode = ThemeMode::Light;
+QString g_customId;
+std::optional<sbj::theme::Theme> g_custom;
+std::optional<QFont> g_defaultFont; // the font before any theme changed it
 
 double channel(double c)
 {
@@ -120,27 +124,28 @@ const sbj::brand::Theme *brandTheme(ThemeMode mode)
     }
 }
 
-QPalette brandPalette(const sbj::brand::Theme &t)
+QPalette rolesPalette(const sbj::theme::Roles &r)
 {
+    using namespace sbj::theme;
     QPalette p;
-    const QColor bg = rgb(t.background), surface = rgb(t.surface), fg = rgb(t.foreground);
+    const QColor bg = rgb(r[Background]), surface = rgb(r[Surface]), fg = rgb(r[Foreground]);
     p.setColor(QPalette::Window, surface);
     p.setColor(QPalette::WindowText, fg);
     p.setColor(QPalette::Base, bg);
     p.setColor(QPalette::AlternateBase, mix(bg, surface, 0.5)); // the list's stripe comes from stripeColor()
     p.setColor(QPalette::ToolTipBase, surface);
     p.setColor(QPalette::ToolTipText, fg);
-    p.setColor(QPalette::PlaceholderText, rgb(t.muted));
+    p.setColor(QPalette::PlaceholderText, rgb(r[Muted]));
     p.setColor(QPalette::Text, fg);
     p.setColor(QPalette::Button, surface);
     p.setColor(QPalette::ButtonText, fg);
     p.setColor(QPalette::BrightText, Qt::white);
-    p.setColor(QPalette::Highlight, rgb(t.selection));
-    p.setColor(QPalette::HighlightedText, rgb(t.selectionText));
-    p.setColor(QPalette::Link, rgb(t.link));
-    p.setColor(QPalette::LinkVisited, rgb(t.link));
+    p.setColor(QPalette::Highlight, rgb(r[Selection]));
+    p.setColor(QPalette::HighlightedText, rgb(r[SelectionText]));
+    p.setColor(QPalette::Link, rgb(r[Link]));
+    p.setColor(QPalette::LinkVisited, rgb(r[Link]));
 #if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
-    p.setColor(QPalette::Accent, rgb(t.accent));
+    p.setColor(QPalette::Accent, rgb(r[Accent]));
 #endif
     p.setColor(QPalette::Light, surface.lighter(160));
     p.setColor(QPalette::Midlight, surface.lighter(130));
@@ -154,26 +159,106 @@ QPalette brandPalette(const sbj::brand::Theme &t)
     return p;
 }
 
-QPalette brandToolBarPalette(const sbj::brand::Theme &t)
+QPalette rolesToolBarPalette(const sbj::theme::Roles &r)
 {
-    QPalette p = brandPalette(t);
+    QPalette p = rolesPalette(r);
     for (auto role : {QPalette::Window, QPalette::Button}) {
-        p.setColor(role, rgb(t.chrome));
+        p.setColor(role, rgb(r[sbj::theme::Chrome]));
     }
     for (auto role : {QPalette::WindowText, QPalette::ButtonText}) {
-        p.setColor(role, rgb(t.chromeText));
+        p.setColor(role, rgb(r[sbj::theme::ChromeText]));
     }
     return p;
 }
 
+QPalette rolesHeaderPalette(const sbj::theme::Roles &r)
+{
+    QPalette p = rolesPalette(r);
+    p.setColor(QPalette::Button, rgb(r[sbj::theme::Header]));
+    p.setColor(QPalette::Window, rgb(r[sbj::theme::Header]));
+    p.setColor(QPalette::ButtonText, rgb(r[sbj::theme::HeaderText]));
+    p.setColor(QPalette::WindowText, rgb(r[sbj::theme::HeaderText]));
+    return p;
+}
+
+sbj::theme::Roles rolesFromPalette(const QPalette &p)
+{
+    using namespace sbj::theme;
+    auto c = [&p](QPalette::ColorRole role) { return std::uint32_t(p.color(role).rgb() & 0xFFFFFF); };
+    Roles r{};
+    r[Background] = c(QPalette::Base);
+    r[Surface] = c(QPalette::Window);
+    r[Foreground] = c(QPalette::Text);
+    r[Muted] = c(QPalette::PlaceholderText);
+    r[Accent] = c(QPalette::Highlight);
+    r[Link] = c(QPalette::Link);
+    r[Selection] = c(QPalette::Highlight);
+    r[SelectionText] = c(QPalette::HighlightedText);
+    r[Chrome] = c(QPalette::Window);
+    r[ChromeText] = c(QPalette::WindowText);
+    r[Header] = c(QPalette::Button);
+    r[HeaderText] = c(QPalette::ButtonText);
+    return r;
+}
+
+QPalette brandPalette(const sbj::brand::Theme &t)
+{
+    return rolesPalette(sbj::theme::fromBrand(t).roles);
+}
+
+QPalette brandToolBarPalette(const sbj::brand::Theme &t)
+{
+    return rolesToolBarPalette(sbj::theme::fromBrand(t).roles);
+}
+
 QPalette brandHeaderPalette(const sbj::brand::Theme &t)
 {
-    QPalette p = brandPalette(t);
-    p.setColor(QPalette::Button, rgb(t.header));
-    p.setColor(QPalette::Window, rgb(t.header));
-    p.setColor(QPalette::ButtonText, rgb(t.headerText));
-    p.setColor(QPalette::WindowText, rgb(t.headerText));
-    return p;
+    return rolesHeaderPalette(sbj::theme::fromBrand(t).roles);
+}
+
+QString userThemesDir()
+{
+    return sbj::theme::themesDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation),
+                                 QStringLiteral("zmail"));
+}
+
+QString zterminalThemesDir()
+{
+    return sbj::theme::themesDir(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation),
+                                 QStringLiteral("zterminal"));
+}
+
+QList<CustomTheme> customThemes()
+{
+    QList<CustomTheme> out;
+    for (const sbj::theme::Entry &e : sbj::theme::scan(userThemesDir())) {
+        out.append({QStringLiteral("custom:") + e.stem, e.theme.name, e.path, true});
+    }
+    for (const sbj::theme::Entry &e : sbj::theme::scan(zterminalThemesDir())) {
+        out.append({QStringLiteral("zterminal:") + e.stem, e.theme.name + QStringLiteral(" (zterminal)"), e.path, false});
+    }
+    return out;
+}
+
+std::optional<sbj::theme::Theme> themeFileFor(const QString &id)
+{
+    for (const CustomTheme &c : customThemes()) {
+        if (c.id == id) {
+            return sbj::theme::load(c.path);
+        }
+    }
+    const ThemeMode m = themeFromId(id, ThemeMode::Custom);
+    if (m == ThemeMode::Custom) {
+        return std::nullopt;
+    }
+    if (const sbj::brand::Theme *b = brandTheme(m)) {
+        return sbj::theme::fromBrand(*b);
+    }
+    sbj::theme::Theme t;
+    const bool dark = m == ThemeMode::Dark || (m == ThemeMode::System && systemPrefersDark());
+    t.name = m == ThemeMode::System ? QStringLiteral("System") : dark ? QStringLiteral("Dark") : QStringLiteral("Light");
+    t.roles = rolesFromPalette(dark ? darkPalette() : lightPalette());
+    return t;
 }
 
 QString themeId(ThemeMode mode)
@@ -182,6 +267,7 @@ QString themeId(ThemeMode mode)
     case ThemeMode::Light: return QStringLiteral("light");
     case ThemeMode::Dark: return QStringLiteral("dark");
     case ThemeMode::System: return QStringLiteral("system");
+    case ThemeMode::Custom: return g_customId;
     default: break;
     }
     const sbj::brand::Theme *t = brandTheme(mode);
@@ -200,26 +286,93 @@ ThemeMode themeFromId(const QString &id, ThemeMode fallback)
     return fallback;
 }
 
-void applyTheme(ThemeMode mode)
+namespace {
+void applyPalettes(const QPalette &app, const QPalette &toolBar, const QPalette &header, const QFont &font)
 {
-    g_mode = mode;
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-    QPalette app, toolBar, header;
-    if (const sbj::brand::Theme *t = brandTheme(mode)) {
-        app = brandPalette(*t);
-        toolBar = brandToolBarPalette(*t);
-        header = brandHeaderPalette(*t);
-    } else {
-        const bool dark = mode == ThemeMode::Dark || (mode == ThemeMode::System && systemPrefersDark());
-        app = toolBar = header = dark ? darkPalette() : lightPalette();
-    }
     QApplication::setPalette(app);
     // Then the class palettes (setting the application palette clears them):
     // the toolbar band and column headers. Set for every theme, so Light and
     // Dark put the plain palette back.
     QApplication::setPalette(toolBar, QToolBar::staticMetaObject.className());
     QApplication::setPalette(header, QHeaderView::staticMetaObject.className());
+    // Only themes with a UI font touch the font (and the next theme puts the
+    // default back), so switching built-in themes doesn't relayout.
+    static bool themeFont = false;
+    const bool custom = font != *g_defaultFont;
+    if (custom || themeFont) {
+        QApplication::setFont(font);
+    }
+    themeFont = custom;
     installEmojiFallback();
+}
+
+QFont defaultFont()
+{
+    if (!g_defaultFont) {
+        g_defaultFont = QApplication::font();
+    }
+    return *g_defaultFont;
+}
+} // namespace
+
+void applyTheme(ThemeMode mode)
+{
+    if (mode == ThemeMode::Custom) {
+        applyThemeId(g_customId);
+        return;
+    }
+    const QFont font = defaultFont();
+    g_mode = mode;
+    g_customId.clear();
+    g_custom.reset();
+    if (const sbj::brand::Theme *t = brandTheme(mode)) {
+        applyPalettes(brandPalette(*t), brandToolBarPalette(*t), brandHeaderPalette(*t), font);
+    } else {
+        const bool dark = mode == ThemeMode::Dark || (mode == ThemeMode::System && systemPrefersDark());
+        const QPalette p = dark ? darkPalette() : lightPalette();
+        applyPalettes(p, p, p, font);
+    }
+}
+
+void applyTheme(const sbj::theme::Theme &t, const QString &id)
+{
+    QFont font = defaultFont();
+    if (!t.fonts.ui.isEmpty()) {
+        font.setFamilies({t.fonts.ui});
+    }
+    if (t.fonts.uiSize > 0) {
+        font.setPointSize(t.fonts.uiSize);
+    }
+    g_mode = ThemeMode::Custom;
+    g_customId = id;
+    g_custom = t;
+    applyPalettes(rolesPalette(t.roles), rolesToolBarPalette(t.roles), rolesHeaderPalette(t.roles), font);
+}
+
+bool applyThemeId(const QString &id)
+{
+    const ThemeMode m = themeFromId(id, ThemeMode::Custom);
+    if (m != ThemeMode::Custom) {
+        applyTheme(m);
+        return true;
+    }
+    if (const std::optional<sbj::theme::Theme> t = themeFileFor(id)) {
+        applyTheme(*t, id);
+        return true;
+    }
+    applyTheme(ThemeMode::Light);
+    return false;
+}
+
+QString currentThemeId()
+{
+    return themeId(g_mode);
+}
+
+const sbj::theme::Theme *currentCustomTheme()
+{
+    return g_custom ? &*g_custom : nullptr;
 }
 
 QString emojiFamily()

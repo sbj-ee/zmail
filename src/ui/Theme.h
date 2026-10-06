@@ -1,19 +1,19 @@
 #pragma once
 
+#include "ThemeFile.h"
+
 #include <QColor>
+#include <QList>
 #include <QPalette>
+#include <optional>
 
 class QApplication;
-
-namespace sbj::brand {
-struct Theme;
-}
 
 namespace zmail::ui {
 
 // Light/Dark/System plus the brand themes shared with zterminal
-// (BrandThemes.h, docs/THEMES.md).
-enum class ThemeMode { Light, Dark, System, Boilermakers, Badgers, Packers };
+// (BrandThemes.h, docs/THEMES.md). Custom = a *.ztheme.json theme file.
+enum class ThemeMode { Light, Dark, System, Boilermakers, Badgers, Packers, Custom };
 
 // Fusion style plus a tuned light or dark palette. System follows
 // QStyleHints::colorScheme() on Qt >= 6.5 and falls back to Light on 6.4
@@ -35,8 +35,40 @@ QPalette brandPalette(const sbj::brand::Theme &t);
 QPalette brandToolBarPalette(const sbj::brand::Theme &t);
 QPalette brandHeaderPalette(const sbj::brand::Theme &t);
 
+// Palettes from the shared roles (ThemeFile.h); the brand palettes above are
+// these for the brand theme's roles.
+QPalette rolesPalette(const sbj::theme::Roles &r);
+QPalette rolesToolBarPalette(const sbj::theme::Roles &r);
+QPalette rolesHeaderPalette(const sbj::theme::Roles &r);
+// The roles of a palette (Light/Dark, to duplicate them in the Theme Editor).
+sbj::theme::Roles rolesFromPalette(const QPalette &p);
+
+// Custom themes: *.ztheme.json files (docs/THEMES.md "Theme files") made in
+// View > Theme > Theme Editor. Ids: "custom:<file stem>" for
+// <config>/zmail/themes, "zterminal:<file stem>" for zterminal's themes
+// (<config>/zterminal/themes, listed read-only).
+struct CustomTheme {
+    QString id, name, path;
+    bool editable = true;
+};
+QString userThemesDir();
+QString zterminalThemesDir();
+QList<CustomTheme> customThemes(); // own themes, then zterminal's
+// Any theme id as a theme file (built-ins too; Light/Dark from their
+// palettes); nullopt if unknown.
+std::optional<sbj::theme::Theme> themeFileFor(const QString &id);
+// Applies a theme file: its roles, plus its UI font if it sets one (other
+// themes put the default font back). Row stripes are MainWindow's.
+void applyTheme(const sbj::theme::Theme &t, const QString &id = {});
+// Applies a built-in or custom id; unknown or broken ones give Light (false).
+bool applyThemeId(const QString &id);
+QString currentThemeId();
+// The applied custom theme (nullptr for built-ins).
+const sbj::theme::Theme *currentCustomTheme();
+
 // Settings key and ids: "light", "dark", "system", "boilermakers", "badgers",
-// "packers". Remembered by MainWindow::setTheme(), read at start-up.
+// "packers", or a custom id (above). Remembered by MainWindow::setThemeId(),
+// read at start-up.
 inline constexpr char kThemeSettingKey[] = "ui/theme";
 QString themeId(ThemeMode mode);
 // Unknown or empty ids give `fallback`.

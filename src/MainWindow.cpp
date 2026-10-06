@@ -28,6 +28,7 @@
 #include "ui/SelectionAfterRemoval.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
+#include "ui/ThemeEditorDialog.h"
 #include "version.hpp"
 
 #include <algorithm>
@@ -294,13 +295,19 @@ void MainWindow::buildMenus()
         }
         QAction *a = theme->addAction(t.text);
         a->setObjectName(QString::fromLatin1(t.obj));
-        a->setData(int(t.mode));
+        a->setData(themeId(t.mode));
         a->setCheckable(true);
-        a->setChecked(t.mode == currentTheme());
         m_themeGroup->addAction(a);
         const ThemeMode mode = t.mode;
         connect(a, &QAction::triggered, this, [this, mode]() { setTheme(mode); });
     }
+    // Custom themes (Theme Editor, *.ztheme.json) go between here and the editor.
+    m_themeMenu = theme;
+    theme->addSeparator();
+    m_themeEditorAction = theme->addAction(tr("Theme &Editor\u2026"), this, [this]() { showThemeEditor(); });
+    m_themeEditorAction->setObjectName(QStringLiteral("actionThemeEditor"));
+    connect(theme, &QMenu::aboutToShow, this, &MainWindow::rebuildCustomThemeActions);
+    rebuildCustomThemeActions();
 
     QMenu *message = addMenu("menuMessage", tr("&Message"));
     QAction *openWin = message->addAction(tr("&Open in New Window"), this, [this]() {
@@ -842,12 +849,54 @@ void MainWindow::refreshIcons()
 
 void MainWindow::setTheme(ThemeMode mode)
 {
-    applyTheme(mode);
-    QSettings().setValue(QLatin1String(kThemeSettingKey), themeId(mode)); // restored by main()
-    for (QAction *a : m_themeGroup->actions()) {
-        a->setChecked(a->data().toInt() == int(mode));
+    setThemeId(themeId(mode));
+}
+
+void MainWindow::setThemeId(const QString &id)
+{
+    applyThemeId(id);
+    QSettings().setValue(QLatin1String(kThemeSettingKey), currentThemeId()); // restored by main()
+    if (const sbj::theme::Theme *t = currentCustomTheme(); t && t->ui.rowStripes) {
+        setStripeStrength(*t->ui.rowStripes);
     }
+    rebuildCustomThemeActions(); // also re-checks the current theme
     refreshIcons();
+}
+
+void MainWindow::rebuildCustomThemeActions()
+{
+    qDeleteAll(m_customThemeActions);
+    m_customThemeActions.clear();
+    QAction *before = m_themeEditorAction; // customs, a separator, then Theme Editor
+    const QList<CustomTheme> custom = customThemes();
+    for (const CustomTheme &c : custom) {
+        auto *a = new QAction(c.name, m_themeMenu);
+        a->setData(c.id);
+        a->setCheckable(true);
+        a->setObjectName(QStringLiteral("actionTheme:") + c.id);
+        m_themeMenu->insertAction(before, a);
+        m_themeGroup->addAction(a);
+        const QString id = c.id;
+        connect(a, &QAction::triggered, this, [this, id]() { setThemeId(id); });
+        m_customThemeActions.append(a);
+    }
+    if (!custom.isEmpty()) {
+        m_customThemeActions.append(m_themeMenu->insertSeparator(before));
+    }
+    const QString cur = currentThemeId();
+    for (QAction *a : m_themeGroup->actions()) {
+        a->setChecked(a->data().toString() == cur);
+    }
+}
+
+ThemeEditorDialog *MainWindow::showThemeEditor()
+{
+    auto *dlg = new ThemeEditorDialog(currentThemeId(), m_stripes, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &ThemeEditorDialog::applied, this, &MainWindow::setThemeId);
+    connect(dlg, &ThemeEditorDialog::themesChanged, this, &MainWindow::rebuildCustomThemeActions);
+    dlg->show();
+    return dlg;
 }
 
 ComposeWindow *MainWindow::openCompose(bool sampleReply)

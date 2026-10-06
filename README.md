@@ -115,6 +115,14 @@ page in every theme. The brand palette is shared with
 [docs/THEMES.md](docs/THEMES.md) for every role, hex value, source and
 contrast ratio.
 
+**View → Theme → Theme Editor…** makes custom themes: duplicate any theme
+(the brand ones too), pick a colour for each palette role, optionally a UI font
+and size and the list's row stripes, with a live preview; then save, rename,
+delete, apply, import or export. Custom themes appear in View → Theme and are
+`*.ztheme.json` files in `~/.config/zmail/themes/`, a format shared with
+zterminal ([docs/THEMES.md](docs/THEMES.md#theme-files)); zterminal's themes in
+`~/.config/zterminal/themes/` are listed read-only.
+
 ![The Boilermakers, Badgers and Packers themes in zmail and zterminal](docs/screenshots/brand-themes.png)
 
 ## New-mail sound

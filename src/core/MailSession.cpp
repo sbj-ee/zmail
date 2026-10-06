@@ -164,7 +164,16 @@ void MailSession::startAccount(const QString &account)
     m_cache = std::make_unique<MailCache>();
     const QString path = m_opts.cachePathOverride.isEmpty() ? MailCache::defaultPath(account) : m_opts.cachePathOverride;
     if (!m_cache->open(path)) {
-        qCWarning(lcSync) << "Couldn't open the mail cache:" << m_cache->lastError();
+        // Nothing works without it (every write would silently do nothing):
+        // stop here and say why. The saved sign-in is kept for a retry.
+        const QString error = m_cache->lastError();
+        qCWarning(lcSync) << "Couldn't open the mail cache:" << error;
+        stopAccount();
+        setState(State::SignedOut);
+        emit signInFailed(tr("zmail couldn't open its mail cache at %1 (%2). Check that the folder exists, "
+                             "is writable and has free space, then sign in again.")
+                              .arg(path, error.isEmpty() ? tr("unknown error") : error));
+        return;
     }
     m_contacts = std::make_unique<ContactStore>();
     const QString cpath = m_opts.contactsPathOverride.isEmpty() ? ContactStore::defaultPath(account)

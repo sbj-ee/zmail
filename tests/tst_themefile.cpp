@@ -5,6 +5,9 @@
 #include "ui/BrandThemes.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
+#include <QToolButton>
+#include <QPushButton>
+#include <QColorDialog>
 #include "ui/ThemeFile.h"
 
 #include <QAction>
@@ -275,6 +278,67 @@ private slots:
         QVERIFY(!w.findChild<QAction *>(QStringLiteral("actionTheme:custom:purdue-night")));
         ed->close();
         w.setTheme(ThemeMode::Light);
+    }
+
+    // Duplicate a read-only theme with the button, then change a colour with
+    // its swatch button: the picker must be Qt's own dialog, opened on the
+    // editor without blocking it (the native one could come up behind the
+    // editor on Wayland and leave it looking frozen), and the choice must land.
+    void colourButtonOpensANonBlockingPickerOnTheEditor()
+    {
+        ThemeEditorDialog ed(QStringLiteral("dark"), kStripeDefault);
+        ed.show();
+        QVERIFY(!ed.currentEditable());
+        QPushButton *dup = nullptr;
+        for (QPushButton *b : ed.findChildren<QPushButton *>()) {
+            if (b->text().remove(QLatin1Char('&')) == QLatin1String("Duplicate")) {
+                dup = b;
+            }
+        }
+        QVERIFY(dup);
+        dup->click();
+        QVERIFY(ed.currentEditable());
+        QVERIFY(ed.currentId().startsWith(QLatin1String("custom:")));
+        const QString file = userThemesDir() + QStringLiteral("/dark-copy.ztheme.json");
+        QVERIFY(QFile::exists(file));
+
+        auto *swatch = ed.findChild<QToolButton *>(QStringLiteral("role:accent"));
+        QVERIFY(swatch);
+        QVERIFY(swatch->isEnabled());
+        QVERIFY(!ed.isDirty());
+        swatch->click(); // returns: nothing blocks here
+        auto *picker = ed.findChild<QColorDialog *>(QStringLiteral("colourPicker"));
+        QVERIFY(picker);
+        QVERIFY(picker->testOption(QColorDialog::DontUseNativeDialog));
+        QCOMPARE(picker->parentWidget(), &ed);
+        QCOMPARE(picker->windowModality(), Qt::WindowModal);
+        QTRY_VERIFY(picker->isVisible());
+        QCOMPARE(picker->currentColor().rgb() & 0xFFFFFF, QRgb(ed.theme().roles[sbj::theme::Accent]));
+        QVERIFY(!ed.isDirty()); // nothing chosen yet
+
+        picker->setCurrentColor(QColor(0x12, 0xab, 0x34));
+        picker->accept();
+        QCOMPARE(ed.theme().roles[sbj::theme::Accent], std::uint32_t(0x12ab34));
+        QVERIFY(ed.isDirty());
+        QCOMPARE(swatch->toolTip().toLower(), QStringLiteral("#12ab34"));
+        QVERIFY(ed.saveCurrent());
+        QCOMPARE(sbj::theme::load(file)->roles[sbj::theme::Accent], std::uint32_t(0x12ab34));
+
+        // Cancelling changes nothing.
+        swatch->click();
+        picker = nullptr;
+        for (QColorDialog *d : ed.findChildren<QColorDialog *>(QStringLiteral("colourPicker"))) {
+            if (d->isVisible()) {
+                picker = d;
+            }
+        }
+        QVERIFY(picker);
+        picker->setCurrentColor(QColor(Qt::red));
+        picker->reject();
+        QCOMPARE(ed.theme().roles[sbj::theme::Accent], std::uint32_t(0x12ab34));
+        QVERIFY(!ed.isDirty());
+        QVERIFY(ed.deleteCurrent());
+        QVERIFY(!QFile::exists(file));
     }
 
     void editorImportsAndListsZterminalThemes()

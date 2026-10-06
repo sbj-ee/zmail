@@ -42,6 +42,7 @@ zmail_add_test(tst_remoteimages)
 zmail_add_test(tst_sound)
 zmail_add_test(tst_junk)
 zmail_add_test(tst_snooze)
+zmail_add_test(tst_sanitizer) # corpus + seeded random property tests
 foreach(t tst_viewer tst_idle)
   target_compile_definitions(${t} PRIVATE ZMAIL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 endforeach()

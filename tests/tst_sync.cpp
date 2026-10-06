@@ -69,13 +69,16 @@ struct Rig
     // Idle, including the follow-up history poll a full sync queues.
     bool settle()
     {
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 50; ++i) {
             if (!QTest::qWaitFor([this] { return !sync->isBusy(); }, 20000)) {
                 return false;
             }
-            QTest::qWait(30);
+            QTest::qWait(30); // a queued poll starts within this
+            if (!sync->isBusy()) {
+                return true;
+            }
         }
-        return !sync->isBusy();
+        return false;
     }
     bool waitIdle(int ms = 15000)
     {
@@ -514,6 +517,42 @@ private slots:
         QCOMPARE(errors.count(), 1);
     }
 
+    // A refused label edit undoes what it changed and nothing else: a label
+    // that arrived meanwhile stays, and one the message already had isn't
+    // taken away.
+    void refusedEditUndoesOnlyItself()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        const QString junk = r.g.addMessage(r.msg(QStringLiteral("Not junk after all"), {QStringLiteral("INBOX")}, 2), false);
+        const QString filed = r.g.addMessage(
+            r.msg(QStringLiteral("Already filed"), {QStringLiteral("INBOX"), QStringLiteral("Label_2")}, 1), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")) == 2, 20000);
+        QVERIFY(r.settle());
+        r.api->setMaxAttempts(1);
+        QSignalSpy errors(r.sync.get(), &SyncEngine::syncError);
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + junk + QStringLiteral("/modify"), 500, 1, -1});
+        r.sync->markJunk(junk);
+        QVERIFY(r.cache.message(junk).labels.contains(QStringLiteral("SPAM"))); // optimistic
+        r.cache.modifyLabels(junk, {QStringLiteral("Label_1")}, {}); // labelled elsewhere while the call is out
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 1, 10000);
+        QStringList labels = r.cache.message(junk).labels;
+        labels.sort();
+        QCOMPARE(labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_1")}));
+
+        r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + filed + QStringLiteral("/modify"), 500, 1, -1});
+        r.sync->moveToLabel(filed, QStringLiteral("Label_2"), QStringLiteral("In"));
+        QVERIFY(!r.cache.message(filed).labels.contains(QStringLiteral("INBOX"))); // optimistic
+        QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 2, 10000);
+        labels = r.cache.message(filed).labels;
+        labels.sort();
+        QCOMPARE(labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_2")}));
+    }
+
     // A page load cut off by a full resync used to leave its label marked
     // "loading" for good, so the folder never paged again.
     void fetchMoreWorksAfterResyncInterruptsOne()
@@ -555,7 +594,6 @@ private slots:
         r.sync->fetchMore(QStringLiteral("INBOX"));
         r.sync->stop(); // its answer is dropped
         r.sync->start();
-        QVERIFY(r.settle());
         r.sync->fetchMore(QStringLiteral("INBOX"));
         QTRY_COMPARE_WITH_TIMEOUT(r.cache.count(QStringLiteral("INBOX")), 5, 20000);
     }

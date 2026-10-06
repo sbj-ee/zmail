@@ -201,6 +201,45 @@ private slots:
         }
     }
 
+    // The cache can't be opened (unwritable folder, full disk): the session
+    // must say so, not run on with a database that silently drops every write.
+    void unopenableCacheIsReportedNotIgnored()
+    {
+        MockGoogle g;
+        QVERIFY(g.listen());
+        g.seedSystemLabels();
+        MemoryTokenStore store;
+        QTemporaryDir dir;
+        QFile blocker(dir.filePath(QStringLiteral("not-a-folder")));
+        QVERIFY(blocker.open(QIODevice::WriteOnly));
+        blocker.close();
+        SessionOptions o = mockOptions(g, &store);
+        o.cachePathOverride = blocker.fileName() + QStringLiteral("/zmail.db"); // its "folder" is a file
+
+        MailSession session(o);
+        MainWindow w;
+        w.setSession(&session);
+        QSignalSpy failed(&session, &MailSession::signInFailed);
+        QSignalSpy ready(&session, &MailSession::ready);
+        session.signIn();
+        QTRY_COMPARE_WITH_TIMEOUT(failed.count(), 1, 10000);
+        const QString reason = failed.first().first().toString();
+        QVERIFY2(reason.contains(QStringLiteral("mail cache")), qPrintable(reason));
+        QVERIFY2(reason.contains(o.cachePathOverride), qPrintable(reason));
+        QCOMPARE(session.state(), MailSession::State::SignedOut);
+        QVERIFY(!session.sync());
+        QVERIFY(!session.cache());
+        QCOMPARE(ready.count(), 0);
+        QVERIFY(!w.isLive());
+        // The user sees it: the banner under the toolbar carries the reason.
+        auto *banner = w.findChild<QLabel *>(QStringLiteral("signInBannerText"));
+        QVERIFY(banner);
+        QVERIFY(banner->isVisibleTo(&w));
+        QVERIFY2(banner->text().contains(QStringLiteral("mail cache")), qPrintable(banner->text()));
+        // The saved sign-in survives for a retry.
+        QVERIFY(store.values.contains(QStringLiteral("refresh-token:") + g.email));
+    }
+
     void accountStatusCircleIsGreenWhenConnected()
     {
         MockGoogle g;

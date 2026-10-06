@@ -155,6 +155,11 @@ private:
     void showMailboxMenu(const QPoint &pos);
     int unreadIn(const QString &key) const;
     void markAllRead(const QString &key);
+    // Labels-as-folders: New / Rename / Delete Folder, drag-move onto a label.
+    void newLabelFolder(const QString &namePrefix = {});
+    void renameLabelFolder(const QString &labelId, const QString &currentName);
+    void deleteLabelFolder(const QString &labelId, const QString &displayName);
+    void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
     void setCurrentRead(bool read);
     void offerUndoDelete(const QString &id);
     void undoDelete();

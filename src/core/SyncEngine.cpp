@@ -92,30 +92,77 @@ void SyncEngine::stop()
 void SyncEngine::refreshLabels(std::function<void()> then)
 {
     const int gen = m_generation;
+    // labels.list returns id/name/type/color only on real Gmail. Message
+    // counts (messagesTotal / messagesUnread) require labels.get per label.
+    // We list first, then get each label through the client's quota queue so
+    // a mailbox with dozens of labels does not burst past the token bucket.
     m_api->listLabels([this, gen, then](const QJsonObject &json, const ApiError &err) {
         if (gen != m_generation) {
             return;
         }
         if (err.isError) {
             reportError(err, tr("Listing labels"));
-        } else {
-            QList<CachedLabel> labels;
-            for (const auto &v : json.value(QStringLiteral("labels")).toArray()) {
-                const QJsonObject o = v.toObject();
-                CachedLabel l;
-                l.id = o.value(QStringLiteral("id")).toString();
-                l.name = o.value(QStringLiteral("name")).toString();
-                l.type = o.value(QStringLiteral("type")).toString();
-                l.unread = o.value(QStringLiteral("messagesUnread")).toInt();
-                l.total = o.value(QStringLiteral("messagesTotal")).toInt();
-                l.color = o.value(QStringLiteral("color")).toObject().value(QStringLiteral("backgroundColor")).toString();
-                labels.append(l);
+            if (then) {
+                then();
             }
-            m_cache->replaceLabels(labels);
-            emit labelsChanged();
+            return;
         }
-        if (then) {
-            then();
+        auto labels = std::make_shared<QList<CachedLabel>>();
+        for (const auto &v : json.value(QStringLiteral("labels")).toArray()) {
+            const QJsonObject o = v.toObject();
+            CachedLabel l;
+            l.id = o.value(QStringLiteral("id")).toString();
+            l.name = o.value(QStringLiteral("name")).toString();
+            l.type = o.value(QStringLiteral("type")).toString();
+            // Prefer any counts the list happened to include (mock / future API).
+            l.unread = o.value(QStringLiteral("messagesUnread")).toInt();
+            l.total = o.value(QStringLiteral("messagesTotal")).toInt();
+            l.color = o.value(QStringLiteral("color")).toObject().value(QStringLiteral("backgroundColor")).toString();
+            if (!l.id.isEmpty()) {
+                labels->append(l);
+            }
+        }
+        if (labels->isEmpty()) {
+            m_cache->replaceLabels(*labels);
+            emit labelsChanged();
+            if (then) {
+                then();
+            }
+            return;
+        }
+        auto remaining = std::make_shared<int>(labels->size());
+        for (int i = 0; i < labels->size(); ++i) {
+            const QString id = labels->at(i).id;
+            m_api->getLabel(id, [this, gen, then, labels, remaining, i](const QJsonObject &o, const ApiError &getErr) {
+                if (gen != m_generation) {
+                    return;
+                }
+                if (!getErr.isError) {
+                    CachedLabel &l = (*labels)[i];
+                    l.unread = o.value(QStringLiteral("messagesUnread")).toInt();
+                    l.total = o.value(QStringLiteral("messagesTotal")).toInt();
+                    const QString color =
+                        o.value(QStringLiteral("color")).toObject().value(QStringLiteral("backgroundColor")).toString();
+                    if (!color.isEmpty()) {
+                        l.color = color;
+                    }
+                    if (!o.value(QStringLiteral("name")).toString().isEmpty()) {
+                        l.name = o.value(QStringLiteral("name")).toString();
+                    }
+                    if (!o.value(QStringLiteral("type")).toString().isEmpty()) {
+                        l.type = o.value(QStringLiteral("type")).toString();
+                    }
+                }
+                // A single get failure leaves that label's counts at the list
+                // values (usually 0); the rest of the tree still refreshes.
+                if (--(*remaining) == 0) {
+                    m_cache->replaceLabels(*labels);
+                    emit labelsChanged();
+                    if (then) {
+                        then();
+                    }
+                }
+            });
         }
     });
 }
@@ -755,6 +802,138 @@ void SyncEngine::markUnread(const QString &id)
             m_cache->setLabels(id, labels);
         }
     });
+}
+
+
+void SyncEngine::createLabel(const QString &name, const QString &backgroundColor)
+{
+    if (!m_running || name.trimmed().isEmpty()) {
+        return;
+    }
+    const QString trimmed = name.trimmed();
+    m_api->createLabel(trimmed, backgroundColor, [this, trimmed](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            reportError(err, tr("Creating folder \"%1\"").arg(trimmed));
+            return;
+        }
+        // Refresh so the new label (with counts) appears under Gmail Labels.
+        Q_UNUSED(json);
+        refreshLabels();
+    });
+}
+
+void SyncEngine::renameLabel(const QString &id, const QString &newName)
+{
+    if (!m_running || id.isEmpty() || newName.trimmed().isEmpty()) {
+        return;
+    }
+    const QString trimmed = newName.trimmed();
+    QString color;
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.id == id) {
+            color = l.color;
+            break;
+        }
+    }
+    m_api->updateLabel(id, trimmed, color, [this, id, trimmed](const QJsonObject &, const ApiError &err) {
+        if (err.isError) {
+            reportError(err, tr("Renaming folder"));
+            return;
+        }
+        refreshLabels();
+    });
+}
+
+void SyncEngine::deleteLabel(const QString &id)
+{
+    if (!m_running || id.isEmpty()) {
+        return;
+    }
+    // users.labels.delete removes the label from every message; it does not
+    // trash or delete the messages themselves.
+    m_api->deleteLabel(id, [this, id](const QJsonObject &, const ApiError &err) {
+        if (err.isError) {
+            reportError(err, tr("Deleting folder"));
+            return;
+        }
+        // Strip the label from the local cache so open views update immediately.
+        for (const CachedMessage &m : m_cache->messages(id)) {
+            m_cache->modifyLabels(m.id, {}, {id});
+        }
+        refreshLabels();
+        emit messagesChanged();
+    });
+}
+
+void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId,
+                             const QString &sourceMailbox)
+{
+    if (!m_running || messageId.isEmpty() || targetLabelId.isEmpty()) {
+        return;
+    }
+    const CachedMessage before = m_cache->message(messageId);
+    if (before.id.isEmpty()) {
+        return;
+    }
+    if (before.labels.contains(targetLabelId) && !before.labels.contains(QStringLiteral("INBOX"))
+        && !(sourceMailbox.startsWith(QLatin1String("gmail:"))
+             && sourceMailbox.mid(6) != targetLabelId && before.labels.contains(sourceMailbox.mid(6)))) {
+        // Already in the target folder and not in Inbox; nothing to do unless
+        // we still need to peel off a source user label.
+        return;
+    }
+
+    QStringList add{targetLabelId};
+    QStringList remove{QStringLiteral("INBOX")}; // folder move out of Inbox
+
+    // Dragging from one user label to another: peel off the source label.
+    if (sourceMailbox.startsWith(QLatin1String("gmail:"))) {
+        const QString sourceId = sourceMailbox.mid(6);
+        bool sourceIsUser = false;
+        for (const CachedLabel &l : m_cache->labels()) {
+            if (l.id == sourceId && l.type == QLatin1String("user")) {
+                sourceIsUser = true;
+                break;
+            }
+        }
+        if (sourceIsUser && sourceId != targetLabelId) {
+            remove.append(sourceId);
+        }
+    }
+
+    // Deduplicate and skip no-ops.
+    add.removeDuplicates();
+    remove.removeDuplicates();
+    add.removeAll(QString());
+    remove.removeAll(QString());
+    for (const QString &a : add) {
+        remove.removeAll(a);
+    }
+
+    const QStringList prior = before.labels;
+    m_cache->modifyLabels(messageId, add, remove); // optimistic
+    emit messagesChanged();
+
+    m_api->modifyLabels(messageId, add, remove,
+                        [this, messageId, prior](const QJsonObject &json, const ApiError &err) {
+                            if (err.isError) {
+                                m_cache->setLabels(messageId, prior);
+                                emit messagesChanged();
+                                reportError(err, tr("Moving to folder"));
+                                return;
+                            }
+                            QStringList labels;
+                            for (const auto &l : json.value(QStringLiteral("labelIds")).toArray()) {
+                                labels.append(l.toString());
+                            }
+                            if (!labels.isEmpty()) {
+                                m_cache->setLabels(messageId, labels);
+                                emit messagesChanged();
+                            }
+                            // Counts on the sidebar are stale until the next
+                            // label refresh; nudge them without a full sync.
+                            refreshLabels();
+                        });
 }
 
 } // namespace zmail

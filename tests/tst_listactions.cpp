@@ -191,7 +191,10 @@ private slots:
                 QVERIFY(m.status != MailStatus::Unread);
             }
         }
-        QVERIFY(inbox->text(1).isEmpty()); // count gone
+        // Folder-style totals stay after Mark All as Read; only unread
+        // emphasis (bold name) is cleared.
+        QVERIFY(!inbox->text(1).isEmpty());
+        QVERIFY(!inbox->font(0).bold());
     }
 
     void markReadUnreadSample()

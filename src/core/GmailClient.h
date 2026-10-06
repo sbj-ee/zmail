@@ -68,6 +68,12 @@ public:
     // Quota units per Google's table (developers.google.com/workspace/gmail/api/reference/quota).
     void getProfile(JsonCb cb);
     void listLabels(JsonCb cb);
+    // users.labels.get — includes messagesTotal / messagesUnread
+    // (labels.list omits those fields on real Gmail).
+    void getLabel(const QString &id, JsonCb cb);
+    void createLabel(const QString &name, const QString &backgroundColor, JsonCb cb);
+    void updateLabel(const QString &id, const QString &name, const QString &backgroundColor, JsonCb cb);
+    void deleteLabel(const QString &id, JsonCb cb);
     void listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb);
     void getMessageMetadata(const QString &id, JsonCb cb);
     void getMessageFull(const QString &id, JsonCb cb);

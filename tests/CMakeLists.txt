@@ -32,6 +32,7 @@ zmail_add_test(tst_themefile) # data shared with zterminal
 target_compile_definitions(tst_themefile PRIVATE ZMAIL_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
 zmail_add_test(tst_auth)
 zmail_add_test(tst_sync)
+zmail_add_test(tst_labels) # Labels as folders
 zmail_add_test(tst_connect)
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)

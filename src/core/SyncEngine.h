@@ -72,6 +72,18 @@ public:
     // Returns false if the message wasn't trashed by this engine.
     bool untrash(const QString &id);
 
+    // Labels as folders (users.labels.*). Create/rename use Gmail's "/" nesting
+    // (e.g. "Projects/zmail"). deleteLabel removes the label only — messages
+    // keep their other labels and are never trashed.
+    void createLabel(const QString &name, const QString &backgroundColor = {});
+    void renameLabel(const QString &id, const QString &newName);
+    void deleteLabel(const QString &id);
+    // Folder-style move onto a label: add targetLabelId, remove INBOX, and when
+    // sourceMailbox is another user label (gmail:Label_…), remove that source
+    // label too. Other user labels on the message are left alone.
+    void moveToLabel(const QString &messageId, const QString &targetLabelId,
+                     const QString &sourceMailbox = {});
+
     int fullSyncs() const { return m_fullSyncs; }
 
 signals:

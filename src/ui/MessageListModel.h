@@ -7,6 +7,8 @@
 #include <QSortFilterProxyModel>
 #include <QStringList>
 
+class QMimeData;
+
 namespace zmail::ui {
 
 enum class MailStatus { Unread, Read, Replied, Forwarded, Queued, Sent };
@@ -64,6 +66,12 @@ public:
     int columnCount(const QModelIndex &parent = {}) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QVariant headerData(int section, Qt::Orientation o, int role) const override;
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
+    QStringList mimeTypes() const override;
+    QMimeData *mimeData(const QModelIndexList &indexes) const override;
+
+    // Drag payload: one Gmail message id per line.
+    static constexpr const char *kMessageIdsMime = "application/x-zmail-message-ids";
 
     static QString statusGlyph(MailStatus s);
     static QString formatDate(const QDateTime &dt);

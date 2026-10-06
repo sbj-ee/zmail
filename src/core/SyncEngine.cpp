@@ -433,6 +433,7 @@ void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared
             setBusy(false);
             return;
         }
+        const MailCache::Batch batch(*m_cache); // one commit per history page
         for (const auto &hv : json.value(QStringLiteral("history")).toArray()) {
             const QJsonObject h = hv.toObject();
             for (const auto &a : h.value(QStringLiteral("messagesAdded")).toArray()) {
@@ -553,8 +554,11 @@ void SyncEngine::fetchBody(const QString &id, MessageCb cb)
         CachedMessage meta = MessageParser::fromMetadata(json);
         const MessageParser::Body body = MessageParser::bodyFromFull(json);
         meta.hasAttachment = !body.attachments.isEmpty();
-        m_cache->upsert(meta);
-        m_cache->setBody(id, body.text, body.html, body.attachments);
+        {
+            const MailCache::Batch batch(*m_cache);
+            m_cache->upsert(meta);
+            m_cache->setBody(id, body.text, body.html, body.attachments);
+        }
         cb(m_cache->message(id), {});
     });
 }
@@ -931,8 +935,11 @@ void SyncEngine::deleteLabel(const QString &id)
             return;
         }
         // Strip the label from the local cache so open views update immediately.
-        for (const CachedMessage &m : m_cache->messages(id)) {
-            m_cache->modifyLabels(m.id, {}, {id});
+        {
+            const MailCache::Batch batch(*m_cache);
+            for (const CachedMessage &m : m_cache->messages(id)) {
+                m_cache->modifyLabels(m.id, {}, {id});
+            }
         }
         refreshLabels();
         emit messagesChanged();

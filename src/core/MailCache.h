@@ -4,6 +4,7 @@
 #include <QSqlDatabase>
 #include <QString>
 #include <QStringList>
+#include <QVariant>
 
 namespace zmail {
 
@@ -62,8 +63,23 @@ public:
     QString lastError() const { return m_error; }
     bool hasFts5() const { return m_fts5; }
 
+    // Write transactions nest: only the outermost begin()/commit() pair reaches
+    // SQLite, so a caller can batch calls that are themselves transactions.
     bool begin();
     bool commit();
+    class Batch // scoped begin()/commit()
+    {
+    public:
+        explicit Batch(MailCache &cache) : m_cache(cache) { m_cache.begin(); }
+        ~Batch() { m_cache.commit(); }
+        Batch(const Batch &) = delete;
+        Batch &operator=(const Batch &) = delete;
+
+    private:
+        MailCache &m_cache;
+    };
+    // A PRAGMA's current value on the cache's connection (diagnostics, tests).
+    QVariant pragma(const QString &name) const;
 
     QString meta(const QString &key) const;
     void setMeta(const QString &key, const QString &value);
@@ -85,12 +101,25 @@ public:
     bool contains(const QString &id) const;
 
     CachedMessage message(const QString &id) const;
+    // The message list's rows, newest first, in one query: metadata only
+    // (bodyText / bodyHtml stay empty; hasBody still says whether one is
+    // cached) with each message's snooze joined in.
+    struct Listed
+    {
+        CachedMessage message;
+        qint64 snoozeWakeMs = 0;  // > 0: snoozed until then
+        bool snoozeBadge = false; // woke from snooze, not opened since
+    };
+    QList<Listed> listing(int limit = 5000) const;
     QList<CachedMessage> messages(const QString &labelId, int limit = 5000) const;
     int count(const QString &labelId = {}) const;
     void rebuildFts(); // repopulate messages_fts from messages (FTS5 only)
     // Full-text over subject/from/to/snippet/body: pass the raw toolbar text;
     // FTS5 MATCH is built via SearchQuery::toFts5, with LIKE fallback.
-    QStringList search(const QString &ftsQuery, int limit = 200) const;
+    // *fullText (if given) says whether the FTS5 index answered: then every
+    // free-text word was matched, bodies included; the LIKE fallback looks for
+    // one word only.
+    QStringList search(const QString &ftsQuery, int limit = 200, bool *fullText = nullptr) const;
 
     // Local snooze state (not a Gmail label). wake_ms is UTC epoch ms.
     // had_inbox: restore INBOX on wake. badge: show "was snoozed" until opened.
@@ -116,6 +145,7 @@ private:
     QString m_conn;
     QString m_error;
     bool m_fts5 = false;
+    int m_txDepth = 0;
 };
 
 } // namespace zmail

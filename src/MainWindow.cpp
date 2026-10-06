@@ -1241,7 +1241,9 @@ void MainWindow::reloadFromCache()
     }
     const QPalette pal = QApplication::palette();
     QList<MailItem> items;
-    for (const zmail::CachedMessage &c : cache->messages({}, 20000)) {
+    // Metadata only, snoozes joined in: bodies are read when a message is shown.
+    for (const zmail::MailCache::Listed &row : cache->listing(20000)) {
+        const zmail::CachedMessage &c = row.message;
         MailItem m;
         m.id = c.id;
         const bool sent = c.labels.contains(QStringLiteral("SENT"));
@@ -1276,13 +1278,12 @@ void MainWindow::reloadFromCache()
             else if (id == QLatin1String("TRASH")) m.mailboxes << QStringLiteral("Trash");
             m.mailboxes << QStringLiteral("gmail:") + id;
         }
-        const auto sn = cache->snooze(c.id);
-        if (sn.wakeMs > 0) {
-            m.snoozeWakeMs = sn.wakeMs;
+        if (row.snoozeWakeMs > 0) {
+            m.snoozeWakeMs = row.snoozeWakeMs;
             m.mailboxes << QStringLiteral("Snoozed");
         }
-        m.snoozeBadge = sn.badge && sn.wakeMs == 0;
-        m.preview = c.hasBody ? c.bodyText : c.snippet;
+        m.snoozeBadge = row.snoozeBadge;
+        m.preview = c.snippet;
         m.attachments = c.attachments;
         items.append(std::move(m));
     }
@@ -1822,11 +1823,12 @@ void MainWindow::runFullTextSearch(const QString &text)
         return;
     }
     QStringList ids;
+    bool fullText = false;
     if (m_live && m_session && m_session->cache()) {
-        ids = m_session->cache()->search(trimmed, 500);
+        ids = m_session->cache()->search(trimmed, 500, &fullText);
     }
     // Sample mode: empty searchIds → proxy matches terms against every loaded row.
-    m_proxy->setSearchIds(ids);
+    m_proxy->setSearchIds(ids, fullText);
     if (m_proxy->mailbox() != QLatin1String("Search")) {
         m_mailboxBeforeSearch = m_proxy->mailbox();
     }

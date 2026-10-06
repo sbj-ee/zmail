@@ -90,3 +90,28 @@ Text pairs are >= 7:1 (WCAG AAA) except Badgers' white on Badger Red
 (toolbar and headers, 6.17:1, AA); the cursor only needs 3:1 (non-text UI).
 In zmail the message body keeps its own white page (or View → Dark Background
 for Messages), so mail stays readable in every theme.
+
+## Screenshots
+
+One per theme per app (offline sample data). The files live in each repo's
+`docs/screenshots/` (zmail-*.png in zmail, zterminal-*.png in zterminal); the
+links point at each repo's main branch so this page stays identical in
+both repos.
+
+### Boilermakers
+
+![zmail in the Boilermakers theme](https://raw.githubusercontent.com/sbj-ee/zmail/main/docs/screenshots/zmail-boilermakers.png)
+
+![zterminal in the Boilermakers theme](https://raw.githubusercontent.com/sbj-ee/zterminal/main/docs/screenshots/zterminal-boilermakers.png)
+
+### Badgers
+
+![zmail in the Badgers theme](https://raw.githubusercontent.com/sbj-ee/zmail/main/docs/screenshots/zmail-badgers.png)
+
+![zterminal in the Badgers theme](https://raw.githubusercontent.com/sbj-ee/zterminal/main/docs/screenshots/zterminal-badgers.png)
+
+### Packers
+
+![zmail in the Packers theme](https://raw.githubusercontent.com/sbj-ee/zmail/main/docs/screenshots/zmail-packers.png)
+
+![zterminal in the Packers theme](https://raw.githubusercontent.com/sbj-ee/zterminal/main/docs/screenshots/zterminal-packers.png)

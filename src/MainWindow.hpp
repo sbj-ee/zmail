@@ -127,6 +127,7 @@ private:
     void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
     void trashMessage(QString id);
+    void runFullTextSearch(const QString &text);
     void junkMessage(QString id);
     void notJunkMessage(QString id);
     void snoozeMessage(QString id, qint64 wakeMs);
@@ -155,6 +156,7 @@ private:
     zmail::ui::MessageView *m_view = nullptr;
     QList<QPointer<zmail::ui::MessageWindow>> m_messageWindows;
     QLineEdit *m_search = nullptr;
+    QString m_mailboxBeforeSearch; // restored when the search box is cleared
     QLabel *m_syncLabel = nullptr;
     QLabel *m_countLabel = nullptr;
     zmail::ui::MessageListModel *m_model = nullptr;

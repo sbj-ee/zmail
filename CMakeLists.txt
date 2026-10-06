@@ -74,6 +74,8 @@ add_library(zmail_app STATIC
   src/core/ReplyBuilder.h
   src/core/RichText.cpp
   src/core/RichText.h
+  src/core/SearchQuery.cpp
+  src/core/SearchQuery.h
   src/core/Sender.cpp
   src/core/Sender.h
   src/core/Signatures.cpp

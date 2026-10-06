@@ -85,6 +85,9 @@ public:
     CachedMessage message(const QString &id) const;
     QList<CachedMessage> messages(const QString &labelId, int limit = 5000) const;
     int count(const QString &labelId = {}) const;
+    void rebuildFts(); // repopulate messages_fts from messages (FTS5 only)
+    // Full-text over subject/from/to/snippet/body: pass the raw toolbar text;
+    // FTS5 MATCH is built via SearchQuery::toFts5, with LIKE fallback.
     QStringList search(const QString &ftsQuery, int limit = 200) const;
 
     // Local snooze state (not a Gmail label). wake_ms is UTC epoch ms.
@@ -107,6 +110,7 @@ public:
 private:
     bool exec(const QString &sql);
     bool migrate();
+    void backfillFtsIfNeeded();
     QString m_conn;
     QString m_error;
     bool m_fts5 = false;

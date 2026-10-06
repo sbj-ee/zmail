@@ -428,7 +428,7 @@ void MainWindow::buildToolbar()
     tb->addWidget(spacer);
     m_search = new QLineEdit(tb);
     m_search->setObjectName(QStringLiteral("searchBox"));
-    m_search->setPlaceholderText(tr("Search  (from: subject: has:attachment is:unread \u2026)"));
+    m_search->setPlaceholderText(tr("Search all mail  (from: subject: has:attachment …)"));
     m_search->setToolTip(MessageFilterProxy::searchHelp());
     m_search->setClearButtonEnabled(true);
     m_search->setMinimumWidth(300);
@@ -439,8 +439,10 @@ void MainWindow::buildToolbar()
     pad->setFixedWidth(8);
     tb->addWidget(pad);
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString &t) {
-        m_proxy->setSearchText(t);
-        updateCounts();
+        runFullTextSearch(t);
+    });
+    connect(m_search, &QLineEdit::returnPressed, this, [this]() {
+        runFullTextSearch(m_search->text());
     });
 }
 
@@ -611,6 +613,10 @@ void MainWindow::populateMailboxes()
             junk->setForeground(0, suspiciousForeground(pal));
             junk->setToolTip(0, tr("Gmail Spam"));
         }
+        if (m_proxy->mailbox() == QLatin1String("Search") || !m_proxy->searchIds().isEmpty()
+            || (m_search && !m_search->text().trimmed().isEmpty())) {
+            add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"), false);
+        }
         add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false, 0);
 
         auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
@@ -664,6 +670,10 @@ void MainWindow::populateMailboxes()
                                     QStringLiteral("Junk"), false);
         junk->setForeground(0, suspiciousForeground(pal));
         junk->setToolTip(0, tr("Gmail Spam"));
+    }
+    if (m_proxy->mailbox() == QLatin1String("Search") || !m_proxy->searchIds().isEmpty()
+        || (m_search && !m_search->text().trimmed().isEmpty())) {
+        add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"), false);
     }
     add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), false);
 
@@ -1410,6 +1420,38 @@ void MainWindow::trashMessage(QString id) // by value: callers pass m_shownId, c
         updateMessageActions();
     }
     offerUndoDelete(id);
+}
+
+void MainWindow::runFullTextSearch(const QString &text)
+{
+    const QString trimmed = text.trimmed();
+    m_proxy->setSearchText(text);
+    if (trimmed.isEmpty()) {
+        m_proxy->setSearchIds({});
+        if (m_proxy->mailbox() == QLatin1String("Search")) {
+            const QString back = m_mailboxBeforeSearch.isEmpty() ? QStringLiteral("In") : m_mailboxBeforeSearch;
+            m_mailboxBeforeSearch.clear();
+            populateMailboxes();
+            selectMailbox(back);
+        } else {
+            updateCounts();
+        }
+        return;
+    }
+    QStringList ids;
+    if (m_live && m_session && m_session->cache()) {
+        ids = m_session->cache()->search(trimmed, 500);
+    }
+    // Sample mode: empty searchIds → proxy matches terms against every loaded row.
+    m_proxy->setSearchIds(ids);
+    if (m_proxy->mailbox() != QLatin1String("Search")) {
+        m_mailboxBeforeSearch = m_proxy->mailbox();
+    }
+    populateMailboxes();
+    selectMailbox(QStringLiteral("Search"));
+    if (m_live) {
+        statusBar()->showMessage(tr("%n match(es)", nullptr, ids.size()), 3000);
+    }
 }
 
 void MainWindow::junkMessage(QString id)

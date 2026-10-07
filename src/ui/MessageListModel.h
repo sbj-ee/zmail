@@ -36,6 +36,7 @@ struct MailItem
     QString to;             // To: header
     bool snoozeBadge = false; // woke from snooze; clear when opened
     qint64 snoozeWakeMs = 0;  // active snooze wake time (0 = not snoozed)
+    QString flag;             // flag colour id (ui/Flags.h); "" = not flagged
 };
 
 // Eudora-style columns.

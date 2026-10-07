@@ -97,6 +97,9 @@ public:
     int listFontSize() const { return m_listFontSize; }
     int listRowSpacing() const { return m_listRowSpacing; }
     zmail::ui::ListDialog *showListDialog(); // non-modal; returned for tests
+    // Flag the selected messages in a colour (ui/Flags.h); empty clears.
+    void setFlagOnSelected(const QString &color);
+    void emptyTrash(bool confirm = true); // right-click Trash > Empty Trash
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
     zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
     // Any theme id, built-in or custom ("custom:<stem>", "zterminal:<stem>");
@@ -184,6 +187,7 @@ private:
     void renameLabelFolder(const QString &labelId, const QString &currentName);
     void deleteLabelFolder(const QString &labelId, const QString &displayName);
     void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
+    QMenu *buildFlagMenu(QWidget *parent);
     void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
     void setCurrentRead(bool read); // selected rows (Shift/Ctrl multi-select)
     void offerUndoDelete(const QStringList &ids);

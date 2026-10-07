@@ -17,6 +17,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
+#include "ui/Flags.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
@@ -94,6 +95,7 @@ void MainWindow::setSession(zmail::MailSession *session)
         m_live = true;
         attachSync();
         reloadFromCache();
+        populateMailboxes(); // the account's folders, not the sample ones, without waiting for a label refresh
         selectMailbox(QStringLiteral("In"));
         sessionStateChanged();
     });
@@ -169,6 +171,11 @@ void MainWindow::attachSync()
     });
     connect(sync, &zmail::SyncEngine::trashFailed, this, [this](const QString &id) { onTrashFailed(id); });
     connect(sync, &zmail::SyncEngine::trashSucceeded, this, [this](const QString &id) { m_pendingTrash.remove(id); });
+    connect(sync, &zmail::SyncEngine::trashEmptied, this, [this](int n) {
+        statusBar()->showMessage(n < 0 ? tr("Couldn't empty the Trash: Gmail didn't answer.")
+                                       : tr("Trash emptied: %n message(s).", nullptr, n),
+                                 6000);
+    });
     connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
         statusBar()->showMessage(tr("%n snoozed message(s) returned to the Inbox.", nullptr, int(ids.size())), 8000);
         if (m_reloadTimer) {
@@ -191,11 +198,19 @@ void MainWindow::reloadFromCache()
     }
     const QPalette pal = QApplication::palette();
     QList<MailItem> items;
+    const QHash<QString, QString> flags = cache->flags();
+    const QSet<QString> purged = cache->purged(); // Empty Trash: gone from zmail, though Gmail still has them
     // Metadata only, snoozes joined in: bodies are read when a message is shown.
     for (const zmail::MailCache::Listed &row : cache->listing(20000)) {
         const zmail::CachedMessage &c = row.message;
+        if (!purged.isEmpty() && purged.contains(c.id) && c.labels.contains(QStringLiteral("TRASH"))) {
+            continue;
+        }
         MailItem m;
         m.id = c.id;
+        if (c.labels.contains(QStringLiteral("STARRED"))) {
+            m.flag = flags.value(c.id, QString::fromLatin1(kStarredFlag));
+        }
         const bool sent = c.labels.contains(QStringLiteral("SENT"));
         m.status = c.unread() ? MailStatus::Unread : sent ? MailStatus::Sent : MailStatus::Read;
         m.priority = MailPriority::Normal;
@@ -250,8 +265,12 @@ void MainWindow::reloadFromCache()
         // A failed Delete: the message is back, so select and show it again.
         m_list->setCurrentIndex(backIndex);
     } else if (pi.isValid()) {
-        const QSignalBlocker block(m_list->selectionModel());
-        m_list->setCurrentIndex(pi);
+        // Still current and selected (the list was updated in place): leave
+        // the selection alone, so several selected messages stay selected.
+        if (m_list->currentIndex() != pi || !m_list->selectionModel()->isRowSelected(pi.row(), QModelIndex())) {
+            const QSignalBlocker block(m_list->selectionModel());
+            m_list->setCurrentIndex(pi);
+        }
         m_shownId = keep;
     } else if (fallbackRow >= 0 && m_proxy->rowCount() > 0) {
         // The neighbour picked by selectPastRemoved() went too: same position.

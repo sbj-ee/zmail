@@ -15,10 +15,14 @@
 #include "ui/Theme.h"
 
 #include <QAction>
+#include <QDrag>
+#include <QDragEnterEvent>
 #include <QLineEdit>
+#include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QToolButton>
@@ -212,6 +216,208 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(f.visibleIds().contains(oldest), 10000);
     }
 
+    // A sync that lands while the mouse button is down (clicking unread mail
+    // causes one: it is marked read) must not cost the list its press: the
+    // drag still starts, and the pointer doesn't sweep up a selection.
+    void dragStartsEvenIfTheListReloadsMidPress()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto rows = [&]() {
+            QList<int> out;
+            for (const QModelIndex &i : f.list->selectionModel()->selectedRows()) {
+                out << i.row();
+            }
+            std::sort(out.begin(), out.end());
+            return out;
+        };
+        const auto at = [&](int r) { return f.list->visualRect(f.proxy->index(r, MessageListModel::Subject)).center(); };
+        QTest::mousePress(f.list->viewport(), Qt::LeftButton, Qt::NoModifier, at(0));
+        QMetaObject::invokeMethod(f.session->sync(), "messagesChanged");
+        QTest::qWait(400); // the reload has run
+        QTest::mouseMove(f.list->viewport(), at(0) + QPoint(0, 4));
+        QTest::mouseMove(f.list->viewport(), at(2));
+        QCOMPARE(f.list->findChildren<QDrag *>().size(), 1);
+        QCOMPARE(rows(), QList<int>{0});
+        QTest::mouseRelease(f.list->viewport(), Qt::LeftButton, Qt::NoModifier, at(2));
+    }
+
+    // Shift+click and Shift+arrows extend from the current message, upwards
+    // or downwards, also when it was made current by the program (after a
+    // Delete, a reload) rather than by a click.
+    void rangeSelectionRunsEitherWayFromTheCurrentMessage()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto rows = [&]() {
+            QList<int> out;
+            for (const QModelIndex &i : f.list->selectionModel()->selectedRows()) {
+                out << i.row();
+            }
+            std::sort(out.begin(), out.end());
+            return out;
+        };
+        const auto at = [&](int r) { return f.list->visualRect(f.proxy->index(r, MessageListModel::Subject)).center(); };
+        QCOMPARE(f.list->currentIndex().row(), 1); // Bravo
+        QTest::mouseClick(f.list->viewport(), Qt::LeftButton, Qt::ShiftModifier, at(0));
+        QCOMPARE(rows(), (QList<int>{0, 1}));
+        f.list->setCurrentIndex(f.proxy->index(1, 0));
+        QTest::mouseClick(f.list->viewport(), Qt::LeftButton, Qt::ShiftModifier, at(2));
+        QCOMPARE(rows(), (QList<int>{1, 2}));
+        f.list->setCurrentIndex(f.proxy->index(1, 0));
+        QTest::keyClick(f.list, Qt::Key_Up, Qt::ShiftModifier);
+        QCOMPARE(rows(), (QList<int>{0, 1}));
+        f.list->setCurrentIndex(f.proxy->index(1, 0));
+        QTest::keyClick(f.list, Qt::Key_Down, Qt::ShiftModifier);
+        QCOMPARE(rows(), (QList<int>{1, 2}));
+        // After a reload with the last row current: up from there.
+        f.list->setCurrentIndex(f.proxy->index(2, 0));
+        QMetaObject::invokeMethod(f.session->sync(), "messagesChanged");
+        QTest::qWait(400);
+        QTest::keyClick(f.list, Qt::Key_Up, Qt::ShiftModifier);
+        QCOMPARE(rows(), (QList<int>{1, 2}));
+        QTest::keyClick(f.list, Qt::Key_Up, Qt::ShiftModifier);
+        QCOMPARE(rows(), (QList<int>{0, 1, 2}));
+    }
+
+    // Drag a message from the list onto a folder in the sidebar.
+    void dragOntoAFolderMovesTheMessage()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        QTreeWidgetItem *folder = nullptr;
+        const auto findFolder = [&]() {
+            folder = nullptr;
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == QLatin1String("gmail:") + kLabel) {
+                    folder = *it;
+                }
+            }
+            return folder != nullptr;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(findFolder(), 10000); // the sidebar fills in once the labels are in
+        tree->scrollToItem(folder);
+        const QPoint at = tree->visualItemRect(folder).center();
+        QVERIFY(tree->viewport()->acceptDrops());
+        QVERIFY(f.list->dragEnabled());
+
+        // What the list hands to a drag: the selected message.
+        const QModelIndex row = f.list->currentIndex();
+        QVERIFY(f.proxy->flags(row) & Qt::ItemIsDragEnabled);
+        std::unique_ptr<QMimeData> mime(f.proxy->mimeData({row}));
+        QVERIFY(mime && mime->hasFormat(QByteArray(MessageListModel::kMessageIdsMime)));
+
+        QDragEnterEvent enter(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &enter);
+        QVERIFY(enter.isAccepted());
+        QDragMoveEvent move(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &move);
+        QVERIFY(move.isAccepted());
+        QDropEvent drop(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &drop);
+        QVERIFY(drop.isAccepted());
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(kLabel), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000); // it left the Inbox list
+    }
+
+    // Coloured flags: the colour is zmail's, "flagged" is Gmail's star.
+    void flagsInColours()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto flagOf = [&](const QString &id) { return f.model->item(f.model->rowForId(id)).flag; };
+        const auto starred = [&](const QString &id) { return f.g.messages().value(id).labels.contains(QStringLiteral("STARRED")); };
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionFlag_red")));
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionClearFlag")));
+        QCOMPARE(flagOf(f.b), QString());
+
+        // From the menu: Bravo (the current message) gets a blue flag.
+        f.w->findChild<QAction *>(QStringLiteral("actionFlag_blue"))->trigger();
+        QTRY_COMPARE(flagOf(f.b), QStringLiteral("blue"));
+        QTRY_VERIFY(starred(f.b));
+        const QModelIndex cell = f.proxy->index(f.list->currentIndex().row(), MessageListModel::Priority);
+        QVERIFY(!cell.data(Qt::DecorationRole).isNull());
+        QVERIFY(cell.data(Qt::ToolTipRole).toString().startsWith(QStringLiteral("Blue flag")));
+        // Another colour: no second call to Gmail, it is starred already.
+        const int calls = f.g.modifyCalls.size();
+        f.w->setFlagOnSelected(QStringLiteral("green"));
+        QTRY_COMPARE(flagOf(f.b), QStringLiteral("green"));
+        QCOMPARE(f.g.modifyCalls.size(), calls);
+
+        // Several at once, then cleared.
+        f.list->selectAll();
+        f.w->setFlagOnSelected(QStringLiteral("purple"));
+        QTRY_VERIFY(starred(f.a) && starred(f.b) && starred(f.c));
+        QTRY_COMPARE(flagOf(f.a), QStringLiteral("purple"));
+        f.w->findChild<QAction *>(QStringLiteral("actionClearFlag"))->trigger();
+        QTRY_VERIFY(!starred(f.a) && !starred(f.b) && !starred(f.c));
+        QTRY_COMPARE(flagOf(f.c), QString());
+
+        // A click in the flag column: the colour used last, then off again.
+        const auto flagCell = [&](const QString &id) {
+            const QModelIndex i = f.proxy->mapFromSource(f.model->index(f.model->rowForId(id), MessageListModel::Priority));
+            return f.list->visualRect(i).center();
+        };
+        QTest::mouseClick(f.list->viewport(), Qt::LeftButton, Qt::NoModifier, flagCell(f.a));
+        QTRY_COMPARE(flagOf(f.a), QStringLiteral("purple"));
+        QTRY_VERIFY(starred(f.a));
+        QCOMPARE(flagOf(f.b), QString()); // only the clicked one
+        QTest::mouseClick(f.list->viewport(), Qt::LeftButton, Qt::NoModifier, flagCell(f.a));
+        QTRY_COMPARE(flagOf(f.a), QString());
+        QTRY_VERIFY(!starred(f.a));
+
+        // The colour outlives a full resync (which empties the message cache).
+        f.w->setFlagOnSelected(QStringLiteral("orange"));
+        QTRY_VERIFY(starred(f.a));
+        QCOMPARE(f.session->cache()->flags().value(f.a), QStringLiteral("orange"));
+        f.session->cache()->clearMessages();
+        QCOMPARE(f.session->cache()->flags().value(f.a), QStringLiteral("orange"));
+    }
+
+    // Starred in Gmail, never flagged here: Gmail's colour.
+    void starredElsewhereShowsAsYellow()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), QStringLiteral("STARRED")}));
+        QCOMPARE(f.model->item(f.model->rowForId(f.b)).flag, QStringLiteral("yellow"));
+    }
+
+    // Right-click Trash > Empty Trash: everything in it leaves zmail, the
+    // count goes to nothing, and mail deleted afterwards still shows.
+    void emptyTrashClearsTheTrash()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("Trash"), {QStringLiteral("TRASH")}));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto trashCount = [tree]() {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == QLatin1String("Trash")) {
+                    return (*it)->text(1);
+                }
+            }
+            return QStringLiteral("?");
+        };
+        const QString before = trashCount();
+        QVERIFY2(before.contains(QLatin1Char('3')), qPrintable(before));
+        QSignalSpy emptied(f.session->sync(), &SyncEngine::trashEmptied);
+        f.w->emptyTrash(false);
+        QTRY_COMPARE_WITH_TIMEOUT(emptied.size(), 1, 10000);
+        QCOMPARE(emptied.first().first().toInt(), 3);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 10000);
+        QTRY_VERIFY2(!trashCount().contains(QLatin1Char('3')), qPrintable(trashCount()));
+        QCOMPARE(f.session->cache()->purged().size(), 3);
+        // Gmail still has them: zmail may move mail to Trash, not erase it.
+        QVERIFY(f.g.messages().value(f.a).labels.contains(QStringLiteral("TRASH")));
+
+        // Something deleted after that is in the Trash as usual.
+        const QString later = f.seed(QStringLiteral("Later zebra"), {QStringLiteral("TRASH")}, 0);
+        f.session->sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        QCOMPARE(f.visibleIds(), QStringList{later});
+    }
+
     void deleteTrashesInEveryView_data()
     {
         QTest::addColumn<QString>("view");
@@ -240,7 +446,7 @@ private slots:
         QTRY_VERIFY(f.g.messages().value(f.b).labels.contains(QStringLiteral("TRASH")));
         // ...the cache agrees, and the row leaves the list (and stays gone
         // after Gmail's answer refreshes it).
-        QVERIFY(f.session->cache()->message(f.b).labels.contains(QStringLiteral("TRASH")));
+        QTRY_VERIFY(f.session->cache()->message(f.b).labels.contains(QStringLiteral("TRASH")));
         QTRY_COMPARE(f.proxy->rowCount(), 2);
         QTest::qWait(400);
         QCOMPARE(f.visibleIds(), (QStringList{f.a, f.c}));

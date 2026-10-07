@@ -135,7 +135,9 @@ bool MailCache::open(const QString &path)
         exec(QStringLiteral(
             "CREATE TABLE IF NOT EXISTS snoozes (message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE, "
             "wake_ms INTEGER NOT NULL DEFAULT 0, had_inbox INTEGER NOT NULL DEFAULT 0, "
-            "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)"));
+            "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS flags (message_id TEXT PRIMARY KEY, color TEXT NOT NULL)")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS purged (message_id TEXT PRIMARY KEY)"));
     if (!ok) {
         return false;
     }
@@ -655,6 +657,62 @@ MailCache::SnoozeRow MailCache::snooze(const QString &id) const
         return {q.value(0).toString(), q.value(1).toLongLong(), q.value(2).toBool(), q.value(3).toBool()};
     }
     return {};
+}
+
+void MailCache::setFlag(const QString &id, const QString &color)
+{
+    if (id.isEmpty()) {
+        return;
+    }
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (color.isEmpty()) {
+        q.prepare(QStringLiteral("DELETE FROM flags WHERE message_id = ?"));
+        q.addBindValue(id);
+    } else {
+        q.prepare(QStringLiteral("INSERT INTO flags(message_id, color) VALUES (?, ?) "
+                                 "ON CONFLICT(message_id) DO UPDATE SET color = excluded.color"));
+        q.addBindValue(id);
+        q.addBindValue(color);
+    }
+    q.exec();
+}
+
+QHash<QString, QString> MailCache::flags() const
+{
+    QHash<QString, QString> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("SELECT message_id, color FROM flags"))) {
+        while (q.next()) {
+            out.insert(q.value(0).toString(), q.value(1).toString());
+        }
+    }
+    return out;
+}
+
+void MailCache::setPurged(const QStringList &ids)
+{
+    const Batch batch(*this);
+    exec(QStringLiteral("DELETE FROM purged"));
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO purged(message_id) VALUES (?)"));
+    for (const QString &id : ids) {
+        if (!id.isEmpty()) {
+            q.addBindValue(id);
+            q.exec();
+        }
+    }
+}
+
+QSet<QString> MailCache::purged() const
+{
+    QSet<QString> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("SELECT message_id FROM purged"))) {
+        while (q.next()) {
+            out.insert(q.value(0).toString());
+        }
+    }
+    return out;
 }
 
 QList<MailCache::SnoozeRow> MailCache::snoozes(bool activeOnly) const

@@ -16,6 +16,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
+#include "ui/Flags.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
@@ -155,7 +156,9 @@ void MainWindow::populateMailboxes()
             || (m_search && !m_search->text().trimmed().isEmpty())) {
             add(nullptr, tr("Search"), icon(QStringLiteral("search")), QStringLiteral("Search"));
         }
-        add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), total(QStringLiteral("TRASH")));
+        // Less what Empty Trash has removed from zmail (Gmail still counts those).
+        add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"),
+            std::max(0, total(QStringLiteral("TRASH")) - int(m_session->cache()->purged().size())));
 
         auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
         root->setFlags(root->flags() & ~Qt::ItemIsSelectable);
@@ -342,6 +345,12 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
         menu->addSeparator();
     }
 
+    if (live && key == QLatin1String("Trash")) {
+        QAction *empty = menu->addAction(icon(QStringLiteral("trash")), tr("&Empty Trash\u2026"), menu,
+                                         [this]() { emptyTrash(); });
+        empty->setObjectName(QStringLiteral("actionEmptyTrash"));
+        menu->addSeparator();
+    }
     if (!key.isEmpty()) {
         QAction *all = menu->addAction(icon(QStringLiteral("mail-open")), tr("Mark All as &Read"), menu,
                                        [this, key]() { markAllRead(key); });
@@ -494,6 +503,64 @@ void MainWindow::emptyLabelFolder(const QString &labelId, const QString &display
     }
     m_session->sync()->emptyLabel(labelId);
     statusBar()->showMessage(tr("Emptying folder \"%1\"\u2026").arg(displayName), 4000);
+}
+
+void MainWindow::emptyTrash(bool confirm)
+{
+    if (!(m_live && m_session && m_session->sync())) {
+        return;
+    }
+    if (confirm) {
+        const auto choice = QMessageBox::question(
+            this, tr("Empty Trash"),
+            tr("Remove every message in Trash?\n\n"
+               "They disappear from zmail and can't be brought back here. Gmail doesn't let zmail erase mail "
+               "outright, so Gmail itself keeps them in its Trash until it purges them (up to 30 days)."),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (choice != QMessageBox::Yes) {
+            return;
+        }
+    }
+    if (m_proxy->mailbox() == QLatin1String("Trash")) {
+        m_view->clear();
+    }
+    m_session->sync()->emptyTrash();
+    statusBar()->showMessage(tr("Emptying the Trash\u2026"), 4000);
+}
+
+void MainWindow::setFlagOnSelected(const QString &color)
+{
+    if (!(m_live && m_session && m_session->sync())) {
+        statusBar()->showMessage(tr("Sign in to Gmail to flag messages."), 5000);
+        return;
+    }
+    const QStringList ids = selectedMessageIds();
+    if (ids.isEmpty()) {
+        return;
+    }
+    if (!color.isEmpty()) {
+        QSettings().setValue(QStringLiteral("ui/lastFlag"), color); // what a click on the flag column uses
+    }
+    for (const QString &id : ids) {
+        m_session->sync()->setFlag(id, color);
+    }
+}
+
+QMenu *MainWindow::buildFlagMenu(QWidget *parent)
+{
+    auto *menu = new QMenu(tr("Fla&g"), parent);
+    menu->setObjectName(QStringLiteral("flagMenu"));
+    menu->setIcon(icon(QStringLiteral("flag")));
+    for (const FlagColor &f : kFlagColors) {
+        const QString id = QString::fromLatin1(f.id);
+        QAction *a = menu->addAction(icon(QStringLiteral("flag"), flagColor(id)), flagName(id), this,
+                                     [this, id]() { setFlagOnSelected(id); });
+        a->setObjectName(QStringLiteral("actionFlag_") + id);
+    }
+    menu->addSeparator();
+    QAction *clear = menu->addAction(tr("&Clear Flag"), this, [this]() { setFlagOnSelected({}); });
+    clear->setObjectName(QStringLiteral("actionClearFlag"));
+    return menu;
 }
 
 void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId)

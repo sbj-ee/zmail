@@ -1,5 +1,7 @@
 #include "MessageListModel.h"
 
+#include "Flags.h"
+
 #include "Icons.h"
 #include "Theme.h"
 #include "core/SizeFormat.h"
@@ -20,6 +22,20 @@ MessageListModel::MessageListModel(QObject *parent)
 
 void MessageListModel::setItems(QList<MailItem> items)
 {
+    // The same messages in the same order (one was marked read, a count
+    // changed): update in place. A reset throws away the view's press, so a
+    // sync landing while the mouse button was down (every click on unread
+    // mail causes one) turned the start of a drag into a rubber-band
+    // selection, and a message could not be dragged to a folder (0.5.9).
+    bool sameRows = items.size() == m_items.size() && !items.isEmpty();
+    for (qsizetype i = 0; sameRows && i < items.size(); ++i) {
+        sameRows = items.at(i).id == m_items.at(i).id;
+    }
+    if (sameRows) {
+        m_items = std::move(items);
+        emit dataChanged(index(0, 0), index(int(m_items.size()) - 1, ColumnCount - 1));
+        return;
+    }
     beginResetModel();
     m_items = std::move(items);
     endResetModel();
@@ -137,6 +153,9 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         if (col == Attachment && m.hasAttachment) {
             return icon(QStringLiteral("paperclip"));
         }
+        if (col == Priority && !m.flag.isEmpty()) {
+            return icon(QStringLiteral("flag"), flagColor(m.flag));
+        }
         if (col == Label && m.labelColor.isValid()) {
             return swatch(m.labelColor);
         }
@@ -195,6 +214,9 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         if (col == Label) {
             return m.label;
         }
+        if (col == Priority) {
+            return m.flag.isEmpty() ? tr("Click to flag") : tr("%1 flag. Click to clear it.").arg(flagName(m.flag));
+        }
         if (col == Size) {
             // sizeEstimate from Gmail: close to, but not exactly, the raw size.
             return tr("%1 (Gmail's estimate)").arg(zmail::formatExactBytes(m.sizeBytes));
@@ -213,7 +235,8 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
     case SortRole:
         switch (col) {
         case Status: return int(m.status);
-        case Priority: return int(m.priority);
+        // Flagged first when sorted descending, grouped by colour; then priority.
+        case Priority: return (m.flag.isEmpty() ? 0 : 100 - flagOrder(m.flag)) * 10 + int(m.priority);
         case Attachment: return m.hasAttachment;
         case Label: return m.label;
         case Who: return m.who.toLower();
@@ -273,7 +296,7 @@ QVariant MessageListModel::headerData(int section, Qt::Orientation o, int role) 
     if (role == Qt::ToolTipRole) {
         switch (section) {
         case Status: return tr("Status: \u2022 unread, R replied, F forwarded, Q queued, S sent");
-        case Priority: return tr("Priority");
+        case Priority: return tr("Flag: click a row here to flag it, or right-click for a colour");
         case Attachment: return tr("Attachments");
         case Label: return tr("Label");
         case Size: return tr("Message size (Gmail's estimate); hover a row for the exact bytes");

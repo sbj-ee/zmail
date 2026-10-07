@@ -15,6 +15,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
+#include "ui/Flags.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
@@ -67,6 +68,10 @@
 #include <QInputDialog>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QScopedValueRollback>
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QItemSelection>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -106,6 +111,82 @@ public:
     {
         return QStyledItemDelegate::sizeHint(opt, index) + QSize(0, parent()->property("rowSpacing").toInt());
     }
+};
+
+// The message list. Shift+click and Shift+arrows select a range from the
+// current message, upwards or downwards. QAbstractItemView keeps its own
+// anchor for that, moved only by a click or a key press, so after anything
+// else made a message current (Delete moving on to the next one, a search,
+// the list reloading) a range started from wherever the last click was.
+class MessageListView : public QTreeView
+{
+public:
+    using QTreeView::QTreeView;
+
+protected:
+    void currentChanged(const QModelIndex &current, const QModelIndex &previous) override
+    {
+        QTreeView::currentChanged(current, previous);
+        if (!m_extending) {
+            m_anchor = current;
+        }
+    }
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        const QModelIndex at = indexAt(e->position().toPoint());
+        if (e->button() == Qt::LeftButton && e->modifiers() == Qt::ShiftModifier && at.isValid()) {
+            selectRangeTo(at);
+            e->accept();
+            return;
+        }
+        QTreeView::mousePressEvent(e);
+    }
+    void keyPressEvent(QKeyEvent *e) override
+    {
+        if ((e->modifiers() & ~Qt::KeypadModifier) == Qt::ShiftModifier) {
+            CursorAction action = MoveUp;
+            bool move = true;
+            switch (e->key()) {
+            case Qt::Key_Up: action = MoveUp; break;
+            case Qt::Key_Down: action = MoveDown; break;
+            case Qt::Key_PageUp: action = MovePageUp; break;
+            case Qt::Key_PageDown: action = MovePageDown; break;
+            case Qt::Key_Home: action = MoveHome; break;
+            case Qt::Key_End: action = MoveEnd; break;
+            default: move = false; break;
+            }
+            if (move && currentIndex().isValid()) {
+                const QModelIndex to = moveCursor(action, Qt::NoModifier);
+                if (to.isValid()) {
+                    selectRangeTo(to);
+                }
+                e->accept();
+                return;
+            }
+        }
+        QTreeView::keyPressEvent(e);
+    }
+
+private:
+    void selectRangeTo(const QModelIndex &to)
+    {
+        // The anchor has to be part of what is selected now: if the
+        // selection was replaced since (a reload putting it back, Delete
+        // moving on), the range starts at the current message.
+        if (!m_anchor.isValid() || !selectionModel()->isRowSelected(m_anchor.row(), QModelIndex())) {
+            m_anchor = currentIndex().isValid() ? currentIndex() : to;
+        }
+        const int first = std::min(m_anchor.row(), to.row());
+        const int last = std::max(m_anchor.row(), to.row());
+        const QScopedValueRollback<bool> extending(m_extending, true);
+        selectionModel()->select(QItemSelection(model()->index(first, 0), model()->index(last, 0)),
+                                 QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        selectionModel()->setCurrentIndex(model()->index(to.row(), 0), QItemSelectionModel::NoUpdate);
+        scrollTo(to);
+    }
+
+    QPersistentModelIndex m_anchor; // where a range starts: the last message made current on its own
+    bool m_extending = false;
 };
 
 // Sidebar mailbox tree: accepts message-list drops onto user Gmail labels
@@ -431,6 +512,7 @@ void MainWindow::buildMenus()
                                              [this]() { setCurrentRead(false); });
     markUnread->setObjectName(QStringLiteral("actionMarkUnread"));
     markUnread->setProperty("lucide", QStringLiteral("mail"));
+    message->addMenu(buildFlagMenu(message));
     QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
                                       [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
@@ -600,7 +682,7 @@ void MainWindow::buildPanes()
     m_listSplitter->setObjectName(QStringLiteral("listPreviewSplitter"));
     m_listSplitter->setHandleWidth(5);
 
-    m_list = new QTreeView(m_listSplitter);
+    m_list = new MessageListView(m_listSplitter);
     m_list->setObjectName(QStringLiteral("messageList"));
     m_list->setModel(m_proxy);
     m_list->setRootIsDecorated(false);
@@ -643,6 +725,16 @@ void MainWindow::buildPanes()
     m_view->body()->setObjectName(QStringLiteral("previewPane"));
     connect(m_view, &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
     connect(m_list, &QTreeView::doubleClicked, this, [this](const QModelIndex &i) { openMessageWindow(i); });
+    // A click in the flag column flags the message (in the colour used last)
+    // or clears its flag.
+    connect(m_list, &QTreeView::clicked, this, [this](const QModelIndex &i) {
+        if (!i.isValid() || i.column() != MessageListModel::Priority || QApplication::keyboardModifiers() != Qt::NoModifier) {
+            return;
+        }
+        const MailItem &m = m_model->item(m_proxy->mapToSource(i).row());
+        const QString last = QSettings().value(QStringLiteral("ui/lastFlag"), QString::fromLatin1(kDefaultFlag)).toString();
+        setFlagOnSelected(m.flag.isEmpty() ? (flagOrder(last) ? last : QString::fromLatin1(kDefaultFlag)) : QString());
+    });
 
     populateMailboxes();
     connect(m_mailboxes, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *it) {
@@ -1364,6 +1456,7 @@ QMenu *MainWindow::buildListMenu()
     if (m_proxy->mailbox() != QLatin1String("Snoozed")) {
         menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildSnoozeMenu(menu));
     }
+    menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildFlagMenu(menu));
     const QModelIndex cur = m_list->currentIndex();
     if (cur.isValid()) {
         const MailItem &m = m_model->item(m_proxy->mapToSource(cur).row());

@@ -74,6 +74,13 @@ public:
     // Returns false if the message wasn't trashed by this engine.
     bool untrash(const QString &id);
 
+    // Flag a message in a colour (ui/Flags.h), or clear its flag with an
+    // empty one. The colour is local; flagged or not is Gmail's STARRED.
+    void setFlag(const QString &id, const QString &color);
+    // Empty Trash: everything in Trash now leaves zmail (MailCache::purged).
+    // emptied(n) reports how many, or -1 if Gmail couldn't be asked.
+    void emptyTrash();
+
     // Labels as folders (users.labels.*). Create/rename use Gmail's "/" nesting
     // (e.g. "Projects/zmail"). deleteLabel removes the label only — messages
     // keep their other labels and are never trashed.
@@ -93,6 +100,7 @@ public:
 
 signals:
     void labelsChanged();
+    void trashEmptied(int messages);
     void messagesChanged();
     void newMail(const QStringList &ids);
     void snoozesWoke(const QStringList &ids);
@@ -121,6 +129,10 @@ private:
     void reportError(const ApiError &e, const QString &what);
     void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
     QStringList userLabels(const QStringList &labels) const; // the ones that are folders
+    // Every message id in Gmail's Trash, a page at a time; ok=false if a page failed.
+    void listTrash(std::function<void(bool ok, const QStringList &ids)> done, const QString &pageToken = {},
+                   std::shared_ptr<QStringList> sofar = {});
+    void prunePurged(); // forget purged ids Gmail has since erased or restored
     static constexpr int kEmptyFolderRounds = 20; // x 500 messages per Empty Folder
     static QStringList labelIds(const QJsonObject &message); // a message resource's labelIds
     // users.messages.modify with the cache updated first. If Gmail refuses,

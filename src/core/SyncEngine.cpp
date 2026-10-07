@@ -89,6 +89,7 @@ void SyncEngine::start()
     } else {
         refreshLabels([this] { pollNow(true); });
     }
+    prunePurged();
 }
 
 void SyncEngine::stop()
@@ -925,6 +926,98 @@ void SyncEngine::renameLabel(const QString &id, const QString &newName)
             return;
         }
         refreshLabels();
+    });
+}
+
+void SyncEngine::setFlag(const QString &id, const QString &color)
+{
+    if (!m_running || id.isEmpty()) {
+        return;
+    }
+    const CachedMessage m = m_cache->summary(id);
+    if (m.id.isEmpty()) {
+        return;
+    }
+    m_cache->setFlag(id, color);
+    const QString starred = QStringLiteral("STARRED");
+    const bool isStarred = m.labels.contains(starred);
+    if (color.isEmpty() && isStarred) {
+        modifyOptimistic(id, {}, {starred}, tr("Clearing the flag"));
+    } else if (!color.isEmpty() && !isStarred) {
+        modifyOptimistic(id, {starred}, {}, tr("Flagging"));
+    } else {
+        emit messagesChanged(); // only the colour changed
+    }
+}
+
+void SyncEngine::listTrash(std::function<void(bool, const QStringList &)> done, const QString &pageToken,
+                           std::shared_ptr<QStringList> sofar)
+{
+    if (!sofar) {
+        sofar = std::make_shared<QStringList>();
+    }
+    const int gen = m_generation;
+    m_api->listMessages(QStringLiteral("TRASH"), 500, pageToken,
+                        [this, gen, done, sofar](const QJsonObject &json, const ApiError &err) {
+        if (gen != m_generation) {
+            return;
+        }
+        if (err.isError) {
+            done(false, *sofar);
+            return;
+        }
+        for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
+            sofar->append(v.toObject().value(QStringLiteral("id")).toString());
+        }
+        const QString next = json.value(QStringLiteral("nextPageToken")).toString();
+        if (next.isEmpty()) {
+            done(true, *sofar);
+        } else {
+            listTrash(done, next, sofar);
+        }
+    });
+}
+
+void SyncEngine::emptyTrash()
+{
+    if (!m_running) {
+        return;
+    }
+    listTrash([this](bool ok, const QStringList &ids) {
+        if (!ok) {
+            emit trashEmptied(-1);
+            return;
+        }
+        m_cache->setPurged(ids);
+        emit messagesChanged();
+        emit labelsChanged(); // the sidebar's Trash count
+        emit trashEmptied(int(ids.size()));
+    });
+}
+
+void SyncEngine::prunePurged()
+{
+    if (!m_running || m_cache->purged().isEmpty()) {
+        return;
+    }
+    listTrash([this](bool ok, const QStringList &ids) {
+        if (!ok) {
+            return;
+        }
+        // Still in Gmail's Trash: still hidden. Anything else has been
+        // erased by Gmail, or restored, and needs no entry.
+        const QSet<QString> purged = m_cache->purged();
+        QStringList keep;
+        for (const QString &id : ids) {
+            if (purged.contains(id)) {
+                keep.append(id);
+            }
+        }
+        if (keep.size() != purged.size()) {
+            m_cache->setPurged(keep);
+            emit messagesChanged();
+            emit labelsChanged();
+        }
     });
 }
 

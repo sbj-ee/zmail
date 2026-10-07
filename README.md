@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.9: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.10: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -44,7 +44,10 @@ Empty Folder. New in 0.5.8: a folder whose list is too short to scroll now
 loads the rest of its mail (it could show 2 messages under a count of 212),
 and the 0.5.7 startup pass that removed labels from mail in Trash is gone. New in 0.5.9:
 Contacts can be organised (categories, your own fields, a comment per
-contact) and hidden; all of it local, none of it written to Google. See
+contact) and hidden; all of it local, none of it written to Google. New in 0.5.10:
+coloured flags, Empty Trash, dragging a message to a folder works again (a
+list reload while the mouse button was down cancelled the drag), and range
+selection always starts from the current message. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -111,7 +114,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.9_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.10_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -146,6 +149,16 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   short to scroll.
   Right-click a folder for **Empty Folder** (all its mail to Trash) or
   **Delete Folder** (the label only; its mail is kept).
+- **Flags** come in seven colours. Click a message's flag column to flag it
+  (in the colour used last) or clear it; right-click, or **Message → Flag**,
+  to pick a colour, for one message or several. Any flag also stars the
+  message in Gmail; the colour is zmail's own. Mail starred elsewhere shows
+  a yellow flag.
+- Right-click **Trash → Empty Trash** removes everything in it from zmail.
+  Gmail does not let a mail client with zmail's permission erase mail, so
+  Gmail keeps those messages in its own Trash until it purges them.
+- Shift+click and Shift+arrows select a range from the current message, up
+  or down.
 - **Settings → Contacts** organises the contacts synced from Google: put
   them in categories (a contact can be in several), add your own fields
   (Phone, Company, anything) and a comment, and hide the ones you don't

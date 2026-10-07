@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDateTime>
+#include <QHash>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QString>
 #include <QStringList>
@@ -142,6 +144,17 @@ public:
     QList<SnoozeRow> snoozes(bool activeOnly = true) const; // active = wakeMs > 0
     QStringList dueSnoozes(qint64 nowMs) const;
     QStringList snoozeBadgeIds() const;
+
+    // zmail's own state, kept in tables with no tie to the messages table so
+    // a full resync (which empties that) leaves it alone.
+    // A flag's colour ("red", "blue", ...; see ui/Flags.h). Empty clears it.
+    void setFlag(const QString &id, const QString &color);
+    QHash<QString, QString> flags() const;
+    // Messages Empty Trash has removed from zmail's view. Gmail only lets a
+    // mail client with zmail's permission move mail to Trash, not erase it,
+    // so they stay in Gmail's own Trash until it purges them (30 days).
+    void setPurged(const QStringList &ids); // replaces the set
+    QSet<QString> purged() const;
 
 private:
     bool exec(const QString &sql);

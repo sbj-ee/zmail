@@ -2,7 +2,8 @@
 
 Before/after screenshots for the zmail fix PRs off main 2651e73:
 `pr-a/` search, theme, Size column; `pr-b/` list actions and Undo Delete;
-`pr-c/` sign-in timeout banner; `p1/` new-mail sound toggle.
+`pr-c/` sign-in timeout banner; `p1/` new-mail sound toggle;
+`app-icon/` the app icon installed from the feat/app-icon .deb.
 
 Everything is zmail's built-in sample mail or the in-process mock Google
 (`tests/mock`). No real mail. "before" = main 2651e73, "after" = the PR

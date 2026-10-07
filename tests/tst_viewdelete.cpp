@@ -11,11 +11,14 @@
 #include "core/SyncEngine.h"
 #include "core/TokenStore.h"
 #include "mock/MockGoogle.h"
+#include "ui/ComposeWindow.h"
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
 #include "ui/Theme.h"
 
+#include <QAbstractItemView>
 #include <QAction>
+#include <QCompleter>
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QLineEdit>
@@ -333,6 +336,45 @@ private slots:
         QVERIFY(!addAction(menu));
         menu->close();
         QCOMPARE(f.session->contacts()->contacts(address, 10).size(), 1);
+    }
+
+    // Writing to a nickname: suggested while typing, written out when the
+    // field is left, and sent to the addresses even if it never was.
+    void composeExpandsNicknames()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        ContactStore *contacts = f.session->contacts();
+        const QString ada = contacts->addLocalContact(QStringLiteral("Ada Lovelace"), QStringLiteral("ada@example.org"));
+        const QString cy = contacts->addLocalContact(QStringLiteral("Cy Vance"), QStringLiteral("cy@example.com"));
+        contacts->setNickname(ada, QStringLiteral("ada"));
+        contacts->addToCategory({ada, cy}, QStringLiteral("Crew"));
+
+        ComposeWindow c;
+        c.setSession(f.session.get());
+        c.show();
+        c.activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(&c));
+        auto *to = c.findChild<QLineEdit *>(QStringLiteral("fieldTo"));
+        auto *cc = c.findChild<QLineEdit *>(QStringLiteral("fieldCc"));
+        to->setFocus();
+        QTest::keyClicks(to, QStringLiteral("ad"));
+        QVERIFY(to->completer());
+        QCOMPARE(to->completer()->model()->index(0, 0).data().toString(), QStringLiteral("ada")); // the nickname, first
+        QTest::keyClicks(to, QStringLiteral("a"));
+        // Not left yet: what will be sent is already the address.
+        QCOMPARE(c.message().to, QStringLiteral("Ada Lovelace <ada@example.org>"));
+        // Leaving the field writes it out.
+        to->completer()->popup()->hide();
+        cc->setFocus();
+        QTRY_COMPARE(to->text(), QStringLiteral("Ada Lovelace <ada@example.org>"));
+        QTest::keyClicks(cc, QStringLiteral("crew, someone@example.net"));
+        cc->completer()->popup()->hide();
+        to->setFocus();
+        QTRY_COMPARE(cc->text(), QStringLiteral("Ada Lovelace <ada@example.org>, Cy Vance <cy@example.com>, someone@example.net"));
+        // A word that is no nickname is left as typed.
+        to->setText(QStringLiteral("nobody"));
+        QCOMPARE(c.message().to, QStringLiteral("nobody"));
     }
 
     // Drag a message from the list onto a folder in the sidebar.

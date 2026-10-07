@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -55,7 +55,9 @@ message lights up, and a message's right-click menu can add its sender to
 Contacts. New in 0.5.14: a message whose tables would stall the window is
 shown simplified, with a button for the full layout. New in 0.6.0:
 Filters, as in Eudora (Settings → Filters): ordered rules that colour,
-flag, move, mark read and play a sound, first match wins. See
+flag, move, mark read and play a sound, first match wins. New in 0.6.1:
+nicknames (a contact's short name, or a category's name for everyone in
+it, typed in To, Cc or Bcc). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -122,7 +124,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.1_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -189,6 +191,10 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   a message. All of this stays on your computer; nothing is written to Google.
   **Export** saves the contacts shown, or all of them, as a JSON file with
   their categories, fields and comments.
+- **Nicknames**, as in Eudora: give a contact a nickname (Settings →
+  Contacts) and type it in To, Cc or Bcc instead of the address. A
+  category's name is a nickname for everyone in it. zmail suggests them as
+  you type and writes the addresses out when you leave the field.
 - **Settings → Message List** sets the message list's text size and the
   space between its rows (Compact / Comfortable / Roomy presets, or any value).
 - **Settings → Row Stripes** sets how strongly alternate rows in the message

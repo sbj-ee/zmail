@@ -172,6 +172,7 @@ private:
     QList<Attachment> m_unzipped; // originals while zipped (for "Undo zip")
     Format m_currentFormat = Format::Html;
 
+    QString recipients(const QLineEdit *field) const;
     QPointer<zmail::MailSession> m_session;
     zmail::SignatureStore *m_sigStore = nullptr;
     zmail::SignatureStore *m_ownSigStore = nullptr;

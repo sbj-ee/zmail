@@ -1106,11 +1106,21 @@ void ComposeWindow::setSession(MailSession *session)
                     }
                     QStringList rows;
                     for (const AutocompleteHit &h : store->autocomplete(frag, 12)) {
-                        rows << (h.displayName.isEmpty()
+                        rows << (h.email.isEmpty() ? h.displayName // a nickname or category, written out below
+                                 : h.displayName.isEmpty()
                                      ? h.email
                                      : QStringLiteral("%1 <%2>").arg(h.displayName, h.email));
                     }
                     model->setStringList(rows);
+                });
+                // Nicknames (a contact's, or a category's name for everyone in
+                // it) are written out when the field is left.
+                QObject::connect(edit, &QLineEdit::editingFinished, edit, [store, edit]() {
+                    const QString expanded = store->expandRecipients(edit->text());
+                    if (expanded != edit->text().trimmed() && !expanded.isEmpty()) {
+                        edit->setText(expanded);
+                        edit->setModified(true);
+                    }
                 });
             };
             install(m_to);
@@ -1198,13 +1208,22 @@ void ComposeWindow::attachFromMessage(const QString &gmailMessageId)
     });
 }
 
+// An address field as it will be sent: nicknames written out, even if the
+// field was never left (Ctrl+Enter straight from To).
+QString ComposeWindow::recipients(const QLineEdit *field) const
+{
+    const QString text = field->text().trimmed();
+    ContactStore *store = m_session ? m_session->contacts() : nullptr;
+    return store && store->isOpen() ? store->expandRecipients(text) : text;
+}
+
 OutgoingMessage ComposeWindow::message() const
 {
     OutgoingMessage m;
     m.from = m_from->text().trimmed();
-    m.to = m_to->text().trimmed();
-    m.cc = m_cc->text().trimmed();
-    m.bcc = m_bcc->text().trimmed();
+    m.to = recipients(m_to);
+    m.cc = recipients(m_cc);
+    m.bcc = recipients(m_bcc);
     m.subject = m_subject->text();
     m.inReplyTo = m_inReplyTo;
     m.references = m_references;
@@ -1249,8 +1268,8 @@ QByteArray ComposeWindow::buildMime() const
 
 bool ComposeWindow::validate(QString *why) const
 {
-    const QStringList all = MimeBuilder::splitAddresses(m_to->text()) + MimeBuilder::splitAddresses(m_cc->text()) +
-                            MimeBuilder::splitAddresses(m_bcc->text());
+    const QStringList all = MimeBuilder::splitAddresses(recipients(m_to)) + MimeBuilder::splitAddresses(recipients(m_cc)) +
+                            MimeBuilder::splitAddresses(recipients(m_bcc));
     if (all.isEmpty()) {
         *why = tr("Add at least one recipient.");
         return false;

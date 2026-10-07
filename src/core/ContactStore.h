@@ -34,6 +34,7 @@ struct Contact {
     QStringList categories;      // sorted
     QList<ContactField> fields;  // in the user's order
     QString comment;
+    QString nickname;            // a short name to type instead of the address (Eudora's nicknames)
     bool hidden = false;         // left out of the Contacts list and of autocomplete
 };
 
@@ -54,7 +55,7 @@ struct CategoryCount {
 };
 
 struct AutocompleteHit {
-    QString email;
+    QString email;       // empty: displayName is a nickname or category to type as it is
     QString displayName;
     double score = 0;
 };
@@ -105,6 +106,17 @@ public:
     void addToCategory(const QStringList &contactIds, const QString &name);
     void setFields(const QString &contactId, const QList<ContactField> &fields); // nameless ones dropped
     void setComment(const QString &contactId, const QString &comment);
+    void setNickname(const QString &contactId, const QString &nickname);
+
+    // Nicknames, as in Eudora: a short name that stands for an address. A
+    // contact's nickname stands for that contact (all of them, if several
+    // share it); a category's name stands for everyone in it. Hidden
+    // contacts are left out. Case doesn't matter. Empty: not a nickname.
+    QStringList expandNickname(const QString &name) const; // "Name <address>" each
+    // An address field with its nicknames written out: anything without an
+    // "@" that is a nickname is replaced, the rest is left as typed, and an
+    // address is listed once.
+    QString expandRecipients(const QString &field) const;
     void setHidden(const QStringList &contactIds, bool hidden);
     // Local-only contact from a sender (never writes to Google).
     QString addLocalContact(const QString &displayName, const QString &email);

@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.5: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.6: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -34,7 +34,11 @@ mail, folders can't get stuck loading), a faster message list and cache,
 interactive Gmail calls ahead of background sync, a stricter HTML sanitizer,
 and the theme editor's colour picker no longer freezes it on Wayland. New in 0.5.5:
 a zmail app icon (a green Z on a light envelope, matching zterminal's style),
-installed at all Linux hicolor sizes, plus a window icon. See
+installed at all Linux hicolor sizes, plus a window icon. New in 0.5.6:
+mail with deeply nested tables no longer freezes the window (images are
+shared rather than copied per layout, table nesting is capped at 8 levels),
+Settings → Message List (text size and row spacing), and one folder per
+message (a move drops the other labels; drag onto In to move back). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -101,7 +105,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.5_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.6_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -128,6 +132,11 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - **View → Preview Pane** shows the preview below the list or to its right;
   by default the message gets about two thirds of the space. Drag the divider to resize it; zmail remembers the layout.
 - Double-click a message (or press Ctrl+O) to open it in its own window.
+- Labels are folders, and a message is in one folder at a time: dragging it
+  onto a label removes it from In and from any other label it had; dragging
+  it onto **In** moves it back.
+- **Settings → Message List** sets the message list's text size and the
+  space between its rows (Compact / Comfortable / Roomy presets, or any value).
 - **Settings → Row Stripes** sets how strongly alternate rows in the message
   list are shaded (a slider with Off / Subtle / Normal / Strong presets).
 

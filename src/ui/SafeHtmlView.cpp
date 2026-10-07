@@ -54,11 +54,9 @@ bool addressAllowed(const QHostAddress &a)
     return !net::isBlockedAddress(a);
 }
 
-QImage transparentPixel()
+QPixmap transparentPixel()
 {
-    QImage none(1, 1, QImage::Format_ARGB32);
-    none.fill(Qt::transparent);
-    return none;
+    return QPixmap::fromImage(html::blockedResource());
 }
 } // namespace
 
@@ -199,7 +197,7 @@ void SafeHtmlView::request(const QUrl &url, const QUrl &target, const QHostAddre
         if (reply->error() == QNetworkReply::NoError) {
             img.loadFromData(reply->read(kMaxImageBytes));
         }
-        m_images.insert(url, img.isNull() ? transparentPixel() : img);
+        m_images.insert(url, img.isNull() ? transparentPixel() : QPixmap::fromImage(img));
         emit remoteImageArrived();
     });
 }
@@ -208,9 +206,14 @@ QVariant SafeHtmlView::loadResource(int type, const QUrl &name)
 {
     // Never return a null QVariant: QTextDocument then reads the "resource"
     // from disk itself (bare paths, file:, /dev/zero ...).
+    // Images go back as QPixmap, never QImage: QTextDocument measures and
+    // paints an image through a QPixmap, and converts a QImage resource
+    // (a full copy) every time. An <img> with no width/height is measured on
+    // every layout pass, and nested tables multiply the passes per level, so
+    // one logo in a 16-deep newsletter froze the window for minutes (0.5.5).
     const QString scheme = name.scheme().toLower();
     if (type == QTextDocument::ImageResource && scheme == QLatin1String("data")) {
-        return html::dataImage(name);
+        return QPixmap::fromImage(html::dataImage(name));
     }
     if (m_allowRemote && type == QTextDocument::ImageResource &&
         (scheme == QLatin1String("http") || scheme == QLatin1String("https"))) {
@@ -219,10 +222,10 @@ QVariant SafeHtmlView::loadResource(int type, const QUrl &name)
             return *it;
         }
         fetch(name);
-        return html::blockedResource(); // until it arrives (remoteImageArrived re-renders)
+        return transparentPixel(); // until it arrives (remoteImageArrived re-renders)
     }
     ++m_blocked; // http(s), file:, cid:, qrc:, paths ... nothing leaves or reads the machine
-    return html::blockedResource();
+    return transparentPixel();
 }
 
 QString SafeHtmlView::sanitize(const QString &html, int *blockedImages, bool keepRemoteImages)

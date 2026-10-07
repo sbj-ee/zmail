@@ -380,6 +380,10 @@ void MessageView::render()
         }
         qreal z = m_zoom;
         for (int pass = 0; pass < 2; ++pass) {
+            // setDefaultFont() lays the whole document out again: empty it
+            // first, or every render paid for a second layout of the mail
+            // it was about to replace (seconds, for deeply nested tables).
+            doc->clear();
             doc->setDefaultFont(zoomed(base, z));
             m_body->setHtml(html);
             HtmlFit::Options o;
@@ -398,6 +402,7 @@ void MessageView::render()
         m_effectiveZoom = z;
     } else {
         const QFont f = zoomed(base, m_zoom);
+        doc->clear(); // as above
         doc->setDefaultFont(f);
         QString text = m_msg.bodyText.isEmpty() ? m_msg.snippet : m_msg.bodyText;
         text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")); // CRLF bodies: one line break, not two

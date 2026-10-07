@@ -78,11 +78,11 @@ public:
     void createLabel(const QString &name, const QString &backgroundColor = {});
     void renameLabel(const QString &id, const QString &newName);
     void deleteLabel(const QString &id);
-    // Folder-style move onto a label: add targetLabelId, remove INBOX, and when
-    // sourceMailbox is another user label (gmail:Label_…), remove that source
-    // label too. Other user labels on the message are left alone.
-    void moveToLabel(const QString &messageId, const QString &targetLabelId,
-                     const QString &sourceMailbox = {});
+    // A message lives in one folder. Moving it onto a user label adds that
+    // label and removes INBOX and every other user label it had; moving it
+    // onto INBOX puts it back in the Inbox and removes its user labels.
+    // System labels other than INBOX (UNREAD, STARRED, ...) are left alone.
+    void moveToLabel(const QString &messageId, const QString &targetLabelId);
 
     int fullSyncs() const { return m_fullSyncs; }
 

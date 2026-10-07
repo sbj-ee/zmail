@@ -25,6 +25,7 @@
 #include <QSettings>
 #include <QFontInfo>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
 #include <QSplitter>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -775,6 +776,126 @@ private slots:
         QCOMPARE(v.body()->lineWrapMode(), QTextEdit::FixedPixelWidth);
         QVERIFY(v.body()->lineWrapColumnOrWidth() < 1000);
         QVERIFY(v.body()->toHtml().contains(QStringLiteral("href=\"https://example.com/a?b=1&amp;c=2\"")));
+    }
+
+    // Newsletter mail nests tables 15-20 deep, and QTextDocument lays a
+    // nested table's cells out several times per level. An <img> with no
+    // width/height is measured on every one of those passes; handed over as
+    // a QImage, each measurement copied the whole image into a new QPixmap,
+    // and the window stopped responding for minutes (0.5.5).
+    void deeplyNestedTablesWithAnImageRenderPromptly()
+    {
+        QImage img(600, 300, QImage::Format_ARGB32);
+        img.fill(Qt::red);
+        QByteArray png;
+        QBuffer buf(&png);
+        buf.open(QIODevice::WriteOnly);
+        img.save(&buf, "PNG");
+        const QString src = QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.toBase64());
+        QVERIFY(v_isPixmap(src));
+
+        constexpr int depth = 24; // 2^24 cell layouts with no limit
+        QString html;
+        for (int i = 0; i < depth; ++i) {
+            html += QStringLiteral("<table width=\"100%\"><tr><td>");
+        }
+        html += QStringLiteral("<img src=\"%1\"><p>Hello</p>").arg(src);
+        for (int i = 0; i < depth; ++i) {
+            html += QStringLiteral("</td></tr></table>");
+        }
+        MessageView v;
+        v.resize(900, 600);
+        v.show();
+        ViewMessage m;
+        m.id = QStringLiteral("nested");
+        m.bodyHtml = html;
+        QElapsedTimer timer;
+        timer.start();
+        v.setMessage(m);
+        qInfo() << "nested tables rendered in" << timer.elapsed() << "ms";
+        QVERIFY2(timer.elapsed() < 5000, qPrintable(QStringLiteral("%1 ms").arg(timer.elapsed())));
+        QVERIFY(v.body()->toPlainText().contains(QStringLiteral("Hello")));
+    }
+
+    static int tableDepth(const QString &html)
+    {
+        static const QRegularExpression tag(QStringLiteral("<(/?)table\\b"), QRegularExpression::CaseInsensitiveOption);
+        int depth = 0, deepest = 0;
+        for (auto it = tag.globalMatch(html); it.hasNext();) {
+            depth += it.next().capturedLength(1) > 0 ? -1 : 1;
+            deepest = std::max(deepest, depth);
+        }
+        return deepest;
+    }
+
+    void tableNestingIsLimited()
+    {
+        const auto wrap = [](int n, const QString &open, const QString &inner) {
+            QString h = inner;
+            for (int i = 0; i < n; ++i) {
+                h = open + h + QStringLiteral("</td></tr></table>");
+            }
+            return h;
+        };
+        const QString plain = QStringLiteral("<table><tr><td align=\"center\">");
+        const QString card = QStringLiteral("<table width=\"600\"><tr><td>");
+        const QString button = QStringLiteral("<table><tr><td bgcolor=\"#112233\">");
+        const QString grid = QStringLiteral("<table><tr><td>left</td><td>right</td></tr></table>");
+
+        // Shallow mail is left exactly as it was.
+        const QString shallow = wrap(3, plain, grid);
+        QCOMPARE(HtmlFit::limitTableDepth(shallow, 4), shallow);
+
+        // Too deep: plain one-cell wrappers go first, outermost first; the
+        // card, the button and the two-column grid survive.
+        const QString deep = wrap(6, plain, wrap(1, card, wrap(1, button, grid)));
+        const QString out = HtmlFit::limitTableDepth(deep, 4);
+        QCOMPARE(tableDepth(deep), 9);
+        QCOMPARE(tableDepth(out), 4);
+        QVERIFY(out.contains(QStringLiteral("width=\"600\"")));
+        QVERIFY(out.contains(QStringLiteral("bgcolor=\"#112233\"")));
+        QVERIFY(out.contains(grid));
+        QVERIFY(out.startsWith(QStringLiteral("<div><div align=\"center\">"))); // the cell's alignment is kept
+        QCOMPARE(out.count(QStringLiteral("<div")), out.count(QStringLiteral("</div>")));
+
+        // Nothing but wrappers with widths and colours: widths go before colours.
+        const QString styled = wrap(3, card, wrap(3, button, QStringLiteral("x")));
+        const QString thinned = HtmlFit::limitTableDepth(styled, 4);
+        QCOMPARE(tableDepth(thinned), 4);
+        QCOMPARE(thinned.count(QStringLiteral("bgcolor")), 3);
+        QCOMPARE(thinned.count(QStringLiteral("width=\"600\"")), 1);
+
+        // Nothing but grids: the innermost are flattened, cells stacked, and
+        // a cell with no </td> is still closed.
+        QString grids = QStringLiteral("<p>core</p>");
+        for (int i = 0; i < 6; ++i) {
+            grids = QStringLiteral("<table><tr><td>a<td>") + grids + QStringLiteral("</table>");
+        }
+        const QString flat = HtmlFit::limitTableDepth(grids, 4);
+        QCOMPARE(tableDepth(flat), 4);
+        QVERIFY(flat.contains(QStringLiteral("<div><div>a</div><div><p>core</p></div></div>")));
+
+        // Only the path that is too deep is touched; a stray </table> is harmless.
+        const QString mixed = QStringLiteral("</table>") + shallow + wrap(6, plain, QStringLiteral("x"));
+        const QString fixed = HtmlFit::limitTableDepth(mixed, 4);
+        QVERIFY(fixed.startsWith(QStringLiteral("</table>") + shallow));
+        QCOMPARE(tableDepth(fixed.mid(8)), 4);
+
+        // prepare() applies the limit, counting the tables it adds itself.
+        QString divs = QStringLiteral("x");
+        for (int i = 0; i < 20; ++i) {
+            divs = QStringLiteral("<div style=\"background-color:#eeeeee\">") + divs + QStringLiteral("</div>");
+        }
+        QCOMPARE(tableDepth(HtmlFit::prepare(divs)), HtmlFit::kMaxTableDepth);
+        QCOMPARE(tableDepth(HtmlFit::prepare(wrap(20, plain, grid))), HtmlFit::kMaxTableDepth);
+    }
+
+private:
+    // Images reach QTextDocument as pixmaps (shared, not copied per layout).
+    static bool v_isPixmap(const QString &src)
+    {
+        SafeHtmlView view;
+        return view.loadResource(QTextDocument::ImageResource, QUrl(src)).userType() == QMetaType::QPixmap;
     }
 };
 

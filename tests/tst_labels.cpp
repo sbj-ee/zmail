@@ -1,5 +1,6 @@
 // Labels as folders: message counts (labels.get), create/rename/delete folder,
-// and moveToLabel (add target, remove INBOX, peel source user label).
+// and moveToLabel (one folder per message: add the target, remove INBOX and
+// every other user label; INBOX as the target moves it back).
 #include "core/AuthManager.h"
 #include "core/GmailClient.h"
 #include "core/MailCache.h"
@@ -170,7 +171,7 @@ private slots:
             r.cache.upsert(local);
         }
 
-        r.sync->moveToLabel(mid, QStringLiteral("Label_2"), QStringLiteral("gmail:Label_1"));
+        r.sync->moveToLabel(mid, QStringLiteral("Label_2"));
         QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_2")), 10000);
 
         const QStringList got = r.g.messages().value(mid).labels;
@@ -214,7 +215,7 @@ private slots:
         const int before = labelLists();
         QVERIFY(before >= 1);
         for (const QString &id : std::as_const(ids)) {
-            r.sync->moveToLabel(id, QStringLiteral("Label_2"), QStringLiteral("In"));
+            r.sync->moveToLabel(id, QStringLiteral("Label_2"));
         }
         QCOMPARE(r.cache.count(QStringLiteral("Label_2")), 8); // optimistic
         QTRY_VERIFY_WITH_TIMEOUT(std::all_of(ids.begin(), ids.end(), [&r](const QString &id) {
@@ -300,22 +301,26 @@ private slots:
 
         // The refresh after move A can't finish for a while: one labels.get keeps failing.
         r.g.addFault({QStringLiteral("/gmail/v1/users/me/labels/Label_slow"), 503, 2, -1});
-        r.sync->moveToLabel(a, QStringLiteral("Label_2"), QStringLiteral("In"));
+        r.sync->moveToLabel(a, QStringLiteral("Label_2"));
         QTRY_VERIFY_WITH_TIMEOUT(r.g.count(getTarget) > gets, 10000); // it has read Label_2: 1 message
-        r.sync->moveToLabel(b, QStringLiteral("Label_2"), QStringLiteral("In"));
+        r.sync->moveToLabel(b, QStringLiteral("Label_2"));
         QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(b).labels.contains(QStringLiteral("Label_2")), 10000);
 
         QTRY_COMPARE_WITH_TIMEOUT(cachedTotal(), 2, 10000);
     }
 
-    void moveFromInboxKeepsOtherUserLabels()
+    // One folder per message: a move drops every other user label, wherever
+    // the message was listed when it was dragged, and INBOX moves it back.
+    void messageLivesInOneFolder()
     {
         Rig r;
         r.g.seedSystemLabels();
         r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
         r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
-        const QString mid = r.g.addMessage(
-            r.msg(QStringLiteral("From inbox"), {QStringLiteral("INBOX"), QStringLiteral("Label_1")}), false);
+        r.g.addLabel({QStringLiteral("Label_3"), QStringLiteral("Travel"), QStringLiteral("user"), {}});
+        const QStringList start{QStringLiteral("INBOX"), QStringLiteral("STARRED"), QStringLiteral("Label_1"),
+                                QStringLiteral("Label_3")};
+        const QString mid = r.g.addMessage(r.msg(QStringLiteral("From inbox"), start), false);
         r.sync->start();
         QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
         if (!r.cache.contains(mid)) {
@@ -323,17 +328,41 @@ private slots:
             local.id = mid;
             local.threadId = mid;
             local.subject = QStringLiteral("From inbox");
-            local.labels = {QStringLiteral("INBOX"), QStringLiteral("Label_1")};
+            local.labels = start;
             local.internalDateMs = QDateTime::currentMSecsSinceEpoch();
             r.cache.upsert(local);
         }
+        const auto userLabels = [&r, &mid]() {
+            QStringList out;
+            for (const QString &l : r.g.messages().value(mid).labels) {
+                if (l.startsWith(QLatin1String("Label_"))) {
+                    out << l;
+                }
+            }
+            out.sort();
+            return out;
+        };
 
-        r.sync->moveToLabel(mid, QStringLiteral("Label_2"), QStringLiteral("In"));
-        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_2")), 10000);
-        const QStringList got = r.g.messages().value(mid).labels;
-        QVERIFY(got.contains(QStringLiteral("Label_2")));
-        QVERIFY(got.contains(QStringLiteral("Label_1")));
+        r.sync->moveToLabel(mid, QStringLiteral("Label_2"));
+        QTRY_COMPARE_WITH_TIMEOUT(userLabels(), QStringList{QStringLiteral("Label_2")}, 10000);
+        QStringList got = r.g.messages().value(mid).labels;
         QVERIFY(!got.contains(QStringLiteral("INBOX")));
+        QVERIFY(got.contains(QStringLiteral("STARRED"))); // system labels are not folders
+        QCOMPARE(r.cache.message(mid).labels.filter(QStringLiteral("Label_")), QStringList{QStringLiteral("Label_2")});
+
+        // Already there and nowhere else: nothing is sent.
+        const int modifies = r.g.count(QStringLiteral("POST /gmail/v1/users/me/messages/"));
+        r.sync->moveToLabel(mid, QStringLiteral("Label_2"));
+        QTest::qWait(200);
+        QCOMPARE(r.g.count(QStringLiteral("POST /gmail/v1/users/me/messages/")), modifies);
+
+        // Back to the Inbox: out of its folder.
+        r.sync->moveToLabel(mid, QStringLiteral("INBOX"));
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("INBOX")), 10000);
+        QCOMPARE(userLabels(), QStringList{});
+        got = r.g.messages().value(mid).labels;
+        QVERIFY(got.contains(QStringLiteral("STARRED")));
+        QVERIFY(!r.cache.message(mid).labels.contains(QStringLiteral("Label_2")));
     }
 };
 

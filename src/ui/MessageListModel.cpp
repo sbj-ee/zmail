@@ -172,7 +172,10 @@ QVariant MessageListModel::data(const QModelIndex &index, int role) const
         return {};
     case Qt::FontRole:
         if (m.status == MailStatus::Unread || (col == Priority && m.priority == MailPriority::High)) {
-            QFont f = QApplication::font();
+            // Bold and nothing else: the view fills in the rest from its
+            // own font, so the list's text size (Settings > Message List)
+            // applies to unread rows too.
+            QFont f;
             f.setBold(true);
             return f;
         }

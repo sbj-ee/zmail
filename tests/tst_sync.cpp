@@ -545,7 +545,7 @@ private slots:
         QCOMPARE(labels, (QStringList{QStringLiteral("INBOX"), QStringLiteral("Label_1")}));
 
         r.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/") + filed + QStringLiteral("/modify"), 500, 1, -1});
-        r.sync->moveToLabel(filed, QStringLiteral("Label_2"), QStringLiteral("In"));
+        r.sync->moveToLabel(filed, QStringLiteral("Label_2"));
         QVERIFY(!r.cache.message(filed).labels.contains(QStringLiteral("INBOX"))); // optimistic
         QTRY_COMPARE_WITH_TIMEOUT(errors.count(), 2, 10000);
         labels = r.cache.message(filed).labels;

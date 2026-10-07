@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QHash>
-#include <QImage>
+#include <QPixmap>
 #include <QSet>
 #include <QTextBrowser>
 
@@ -90,7 +90,7 @@ private:
     int m_fetchesStarted = 0;
     int m_refused = 0;
     QNetworkAccessManager *m_nam = nullptr;
-    QHash<QUrl, QImage> m_images;
+    QHash<QUrl, QPixmap> m_images; // pixmaps: see loadResource
     QSet<QUrl> m_pending;
 };
 

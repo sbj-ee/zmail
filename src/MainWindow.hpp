@@ -40,6 +40,7 @@ class ConnectDialog;
 enum class ThemeMode;
 class PrivacyDialog;
 class StripesDialog;
+class ListDialog;
 class ContactsWindow;
 } // namespace zmail::ui
 
@@ -90,6 +91,12 @@ public:
     void setStripeStrength(int strength);
     int stripeStrength() const { return m_stripes; }
     zmail::ui::StripesDialog *showStripesDialog(); // non-modal; returned for tests
+    // Message-list text size in pt (0: the application font's) and extra row
+    // height in px (Settings > Message List), remembered.
+    void setListAppearance(int fontSize, int rowSpacing);
+    int listFontSize() const { return m_listFontSize; }
+    int listRowSpacing() const { return m_listRowSpacing; }
+    zmail::ui::ListDialog *showListDialog(); // non-modal; returned for tests
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
     zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
     // Any theme id, built-in or custom ("custom:<stem>", "zterminal:<stem>");
@@ -171,7 +178,8 @@ private:
     void showMailboxMenu(const QPoint &pos);
     int unreadIn(const QString &key) const;
     void markAllRead(const QString &key);
-    // Labels-as-folders: New / Rename / Delete Folder, drag-move onto a label.
+    // Labels-as-folders: New / Rename / Delete Folder, drag-move onto a label
+    // or back onto In ("INBOX"). A message is in one folder at a time.
     void newLabelFolder(const QString &namePrefix = {});
     void renameLabelFolder(const QString &labelId, const QString &currentName);
     void deleteLabelFolder(const QString &labelId, const QString &displayName);
@@ -223,6 +231,9 @@ private:
     bool m_live = false;
     int m_stripes = 40;
     void applyStripes();
+    int m_listFontSize = 0;
+    int m_listRowSpacing = 6;
+    void applyListAppearance();
     QString m_lastSync;     // "8:45 AM"
     QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
     bool m_keepSyncErrorAcrossIdle = false;

@@ -469,10 +469,15 @@ void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QStrin
     if (!(m_live && m_session && m_session->sync()) || messageIds.isEmpty() || targetLabelId.isEmpty()) {
         return;
     }
-    const QString source = m_proxy->mailbox();
     zmail::SyncEngine *sync = m_session->sync();
     for (const QString &id : messageIds) {
-        sync->moveToLabel(id, targetLabelId, source);
+        sync->moveToLabel(id, targetLabelId);
+    }
+    if (targetLabelId == QLatin1String("INBOX")) {
+        statusBar()->showMessage(messageIds.size() == 1 ? tr("Moved 1 message to In.")
+                                                        : tr("Moved %1 messages to In.").arg(messageIds.size()),
+                                 5000);
+        return;
     }
     statusBar()->showMessage(
         messageIds.size() == 1 ? tr("Moved 1 message to folder.")

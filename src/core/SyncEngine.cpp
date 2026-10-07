@@ -906,8 +906,7 @@ void SyncEngine::deleteLabel(const QString &id)
     });
 }
 
-void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId,
-                             const QString &sourceMailbox)
+void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId)
 {
     if (!m_running || messageId.isEmpty() || targetLabelId.isEmpty()) {
         return;
@@ -916,39 +915,24 @@ void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabe
     if (before.id.isEmpty()) {
         return;
     }
-    if (before.labels.contains(targetLabelId) && !before.labels.contains(QStringLiteral("INBOX"))
-        && !(sourceMailbox.startsWith(QLatin1String("gmail:"))
-             && sourceMailbox.mid(6) != targetLabelId && before.labels.contains(sourceMailbox.mid(6)))) {
-        // Already in the target folder and not in Inbox; nothing to do unless
-        // we still need to peel off a source user label.
-        return;
+    // One folder per message: leaving for the target takes it out of the
+    // Inbox and out of every other folder (user label) it was in.
+    const QString inbox = QStringLiteral("INBOX");
+    QStringList add;
+    QStringList remove;
+    if (!before.labels.contains(targetLabelId)) {
+        add.append(targetLabelId);
     }
-
-    QStringList add{targetLabelId};
-    QStringList remove{QStringLiteral("INBOX")}; // folder move out of Inbox
-
-    // Dragging from one user label to another: peel off the source label.
-    if (sourceMailbox.startsWith(QLatin1String("gmail:"))) {
-        const QString sourceId = sourceMailbox.mid(6);
-        bool sourceIsUser = false;
-        for (const CachedLabel &l : m_cache->labels()) {
-            if (l.id == sourceId && l.type == QLatin1String("user")) {
-                sourceIsUser = true;
-                break;
-            }
-        }
-        if (sourceIsUser && sourceId != targetLabelId) {
-            remove.append(sourceId);
+    if (targetLabelId != inbox && before.labels.contains(inbox)) {
+        remove.append(inbox);
+    }
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user") && l.id != targetLabelId && before.labels.contains(l.id)) {
+            remove.append(l.id);
         }
     }
-
-    // Deduplicate and skip no-ops.
-    add.removeDuplicates();
-    remove.removeDuplicates();
-    add.removeAll(QString());
-    remove.removeAll(QString());
-    for (const QString &a : add) {
-        remove.removeAll(a);
+    if (add.isEmpty() && remove.isEmpty()) {
+        return; // already there, and nowhere else
     }
 
     modifyOptimistic(messageId, add, remove, tr("Moving to folder"), [this](const ApiError &err) {

@@ -237,14 +237,18 @@ private slots:
                 }
             }
         }
-        QCOMPARE(placeholders, 5); // Mark as Suspicious became Mark as Junk; Snooze and Filters (Rules) are implemented
-        for (const char *gone : {"&Save Attachments\u2026", "&Print\u2026", "&Copy", "View as &Plain Text",
-                                 "&Account\u2026"}) {
+        QCOMPARE(placeholders, 1); // everything else has been built: only Account is still to come
+        for (const char *gone : {"&Account\u2026"}) {
             for (QAction *a : w.findChildren<QAction *>()) {
                 if (a->text() == QString::fromUtf8(gone)) {
                     QVERIFY2(!a->isVisible(), gone);
                 }
             }
+        }
+        // The ones that used to be placeholders are real menu items now.
+        for (const char *name : {"actionSaveAttachments", "actionPrint", "actionCopy", "actionPlainText", "actionFilters"}) {
+            QAction *a = w.findChild<QAction *>(QString::fromLatin1(name));
+            QVERIFY2(a && a->isVisible() && a->isEnabled() && !a->property("placeholder").toBool(), name);
         }
         ComposeWindow c;
         QAction *later = c.findChild<QAction *>(QStringLiteral("actionSendLater"));

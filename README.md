@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.2: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -57,7 +57,9 @@ shown simplified, with a button for the full layout. New in 0.6.0:
 Filters, as in Eudora (Settings → Filters): ordered rules that colour,
 flag, move, mark read and play a sound, first match wins. New in 0.6.1:
 nicknames (a contact's short name, or a category's name for everyone in
-it, typed in To, Cc or Bcc). See
+it, typed in To, Cc or Bcc). New in 0.6.2: Save Attachments, Print, Copy
+and View as Plain Text, dates as 01/01/2026, and counts that read "1
+message" rather than "1 message(s)". See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -124,7 +126,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.1_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.2_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -195,6 +197,13 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   Contacts) and type it in To, Cc or Bcc instead of the address. A
   category's name is a nickname for everyone in it. zmail suggests them as
   you type and writes the addresses out when you leave the field.
+- Dates in the message list read `01/01/2026  9:05 AM`.
+- **File → Save Attachments** saves the open message's attachments into a
+  folder you choose (safe file names, never over an existing file), and
+  **File → Print** (Ctrl+P) prints the message with its header.
+- **Edit → Copy** (Ctrl+C) copies the text selected in the message, or the
+  selected messages a line each. **View → View as Plain Text** shows a
+  message's text part instead of its HTML.
 - **Settings → Message List** sets the message list's text size and the
   space between its rows (Compact / Comfortable / Roomy presets, or any value).
 - **Settings → Row Stripes** sets how strongly alternate rows in the message

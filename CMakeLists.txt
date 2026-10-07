@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.6.1 LANGUAGES CXX)
+project(zmail VERSION 0.6.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,7 @@ if(ZMAIL_SANITIZE)
 endif()
 
 # Ubuntu 24.04 ships Qt 6.4.2; that is the floor.
-find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Svg Sql Multimedia)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets Network Svg Sql Multimedia PrintSupport)
 # Refresh tokens live in the OS keyring (Secret Service / KWallet) via QtKeychain.
 # Ubuntu: qtkeychain-qt6-dev. The imported target is qt6keychain.
 find_package(Qt6Keychain REQUIRED)
@@ -191,7 +191,7 @@ qt_add_resources(zmail_app "zmail_sounds"
 target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${ZMAIL_GENERATED_DIR}")
-target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Sql Qt6::Multimedia
+target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Sql Qt6::Multimedia Qt6::PrintSupport
   qt6keychain PkgConfig::MD4C_HTML PkgConfig::LIBZIP)
 if(HUNSPELL_FOUND)
   target_link_libraries(zmail_app PUBLIC PkgConfig::HUNSPELL)

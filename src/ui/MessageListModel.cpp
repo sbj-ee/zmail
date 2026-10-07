@@ -67,7 +67,7 @@ QString MessageListModel::statusGlyph(MailStatus s)
 QString MessageListModel::formatDate(const QDateTime &dt)
 {
     return QLocale(QLocale::English, QLocale::UnitedStates)
-        .toString(dt, QStringLiteral("M/d/yy  h:mm AP"));
+        .toString(dt, QStringLiteral("MM/dd/yyyy  h:mm AP")); // 01/01/2026  9:05 AM
 }
 
 QString MessageListModel::formatSize(qint64 bytes)

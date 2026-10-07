@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Test)
+find_package(Qt6 REQUIRED COMPONENTS Test PrintSupport)
 
 # In-process mock of Google's OAuth + Gmail endpoints (tests and screenshots
 # only; never linked into the app).

@@ -147,7 +147,7 @@ void MainWindow::attachSync()
     connect(sync, &zmail::SyncEngine::messagesChanged, m_reloadTimer, qOverload<>(&QTimer::start));
     connect(sync, &zmail::SyncEngine::newMail, this, [this](const QStringList &ids) {
         applyRulesToNewMail(ids); // each one's filter, and the sound
-        statusBar()->showMessage(tr("%n new message(s)", nullptr, int(ids.size())), 8000);
+        statusBar()->showMessage((ids.size() == 1 ? tr("1 new message") : tr("%1 new messages").arg(ids.size())), 8000);
     });
     connect(sync, &zmail::SyncEngine::statusChanged, this, [this](const QString &s) { updateSyncLabel(s); });
     connect(sync, &zmail::SyncEngine::idle, this, [this]() {
@@ -173,11 +173,12 @@ void MainWindow::attachSync()
     connect(sync, &zmail::SyncEngine::trashSucceeded, this, [this](const QString &id) { m_pendingTrash.remove(id); });
     connect(sync, &zmail::SyncEngine::trashEmptied, this, [this](int n) {
         statusBar()->showMessage(n < 0 ? tr("Couldn't empty the Trash: Gmail didn't answer.")
-                                       : tr("Trash emptied: %n message(s).", nullptr, n),
+                                       : (n == 1 ? tr("Trash emptied: 1 message.") : tr("Trash emptied: %1 messages.").arg(n)),
                                  6000);
     });
     connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
-        statusBar()->showMessage(tr("%n snoozed message(s) returned to the Inbox.", nullptr, int(ids.size())), 8000);
+        statusBar()->showMessage((ids.size() == 1 ? tr("1 snoozed message returned to the Inbox.")
+                                                  : tr("%1 snoozed messages returned to the Inbox.").arg(ids.size())), 8000);
         if (m_reloadTimer) {
             m_reloadTimer->start();
         }

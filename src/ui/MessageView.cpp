@@ -18,6 +18,8 @@
 #include <QScopedValueRollback>
 #include <QSettings>
 #include <QStyle>
+#include <QTextCursor>
+#include <QTextDocument>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -31,6 +33,7 @@ namespace {
 
 const char *kZoomKey = "viewer/zoom";
 const char *kDarkKey = "viewer/darkMail";
+const char *kPlainKey = "viewer/plainText";
 constexpr int kPlainTextColumns = 78; // comfortable measure for plain-text mail
 constexpr qreal kMargin = 16;
 
@@ -79,6 +82,7 @@ MessageView::MessageView(QWidget *parent)
     QSettings settings;
     m_zoom = std::clamp(settings.value(QLatin1String(kZoomKey), 1.0).toDouble(), kMinZoom, kMaxZoom);
     m_dark = settings.value(QLatin1String(kDarkKey), false).toBool();
+    m_plain = settings.value(QLatin1String(kPlainKey), false).toBool();
 
     auto *lay = new QVBoxLayout(this);
     lay->setContentsMargins(0, 0, 0, 0);
@@ -396,7 +400,7 @@ void MessageView::render()
     m_body->resetBlocked();
     m_effectiveZoom = m_zoom;
 
-    if (!m_msg.loading && !m_msg.bodyHtml.isEmpty()) {
+    if (!m_msg.loading && !m_msg.bodyHtml.isEmpty() && !m_plain) {
         m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
         m_body->setLineWrapColumnOrWidth(vw);
         QString html = SafeHtmlView::sanitize(m_msg.bodyHtml, &m_blocked, m_showImages);
@@ -433,6 +437,12 @@ void MessageView::render()
         doc->clear(); // as above
         doc->setDefaultFont(f);
         QString text = m_msg.bodyText.isEmpty() ? m_msg.snippet : m_msg.bodyText;
+        if (m_plain && m_msg.bodyText.trimmed().isEmpty() && !m_msg.bodyHtml.isEmpty() && !m_msg.loading) {
+            // HTML only: its text, with nothing fetched and nothing laid out.
+            QTextDocument plain;
+            plain.setHtml(SafeHtmlView::sanitize(m_msg.bodyHtml, nullptr, false));
+            text = plain.toPlainText();
+        }
         text.replace(QStringLiteral("\r\n"), QStringLiteral("\n")); // CRLF bodies: one line break, not two
         QString html = prefix + QStringLiteral("<div style='white-space:pre-wrap'>%1</div>").arg(linkify(esc(text)));
         if (m_msg.loading) {
@@ -462,6 +472,50 @@ void MessageView::render()
     if (ratio > 0) {
         vs->setValue(int(std::round(ratio * vs->maximum())));
     }
+}
+
+void MessageView::setPlainText(bool on)
+{
+    if (on == m_plain) {
+        return;
+    }
+    m_plain = on;
+    QSettings().setValue(QLatin1String(kPlainKey), on);
+    render();
+}
+
+QTextDocument *MessageView::printableDocument() const
+{
+    QTextDocument *doc = m_body->document()->clone();
+    if (m_empty) {
+        return doc;
+    }
+    // The header the pane shows above the body, as the first lines of the page.
+    QString head = QStringLiteral("<p style='font-size:large'><b>%1</b></p><table cellspacing='0' cellpadding='1'>")
+                       .arg(esc(m_msg.subject.isEmpty() ? tr("(no subject)") : m_msg.subject));
+    const auto row = [&head](const QString &key, const QString &value) {
+        if (!value.trimmed().isEmpty()) {
+            head += QStringLiteral("<tr><td align='right'><b>%1</b>&nbsp;</td><td>%2</td></tr>").arg(esc(key), esc(value));
+        }
+    };
+    row(tr("From:"), m_msg.from);
+    row(tr("To:"), m_msg.to);
+    row(tr("Cc:"), m_msg.cc);
+    if (m_msg.date.isValid()) {
+        const QDateTime dt = m_msg.date.toLocalTime();
+        row(tr("Date:"), QLocale(QLocale::English, QLocale::UnitedStates)
+                             .toString(dt, QStringLiteral("dddd, MMMM d, yyyy 'at' h:mm AP")) +
+                             QLatin1Char(' ') + dt.timeZoneAbbreviation());
+    }
+    if (!m_msg.attachments.isEmpty()) {
+        row(tr("Attachments:"), m_msg.attachments.join(QStringLiteral(", ")));
+    }
+    head += QStringLiteral("</table><hr>");
+    QTextCursor top(doc);
+    top.movePosition(QTextCursor::Start);
+    top.insertHtml(head);
+    top.insertBlock();
+    return doc;
 }
 
 void MessageView::showFullLayout()

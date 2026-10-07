@@ -497,7 +497,7 @@ void ContactsWindow::refreshList()
     }
     const int total = m_store->count(q);
     m_status->setText(total > list.size() ? tr("Showing the first %1 of %2 contacts. Search to narrow them.").arg(list.size()).arg(total)
-                                          : tr("%n contact(s)", nullptr, total));
+                                          : (total == 1 ? tr("1 contact") : tr("%1 contacts").arg(total)));
     showDetail();
 }
 
@@ -544,7 +544,7 @@ void ContactsWindow::showDetail()
     const Contact c = m_detailId.isEmpty() ? Contact() : m_store->contact(m_detailId);
     m_detail->setEnabled(!m_detailId.isEmpty());
     if (m_detailId.isEmpty()) {
-        m_name->setText(ids.isEmpty() ? tr("No contact selected") : tr("%n contact(s) selected", nullptr, ids.size()));
+        m_name->setText(ids.isEmpty() ? tr("No contact selected") : tr("%1 contacts selected").arg(ids.size()));
         m_emails->setText(ids.isEmpty() ? QString() : tr("Use Hide or Add to Category for all of them."));
         m_source->clear();
     } else {
@@ -658,7 +658,8 @@ bool ContactsWindow::exportJson(const QString &path, bool everything)
         !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) || !file.commit()) {
         return false;
     }
-    m_status->setText(tr("Exported %n contact(s) to %1", nullptr, n).arg(QDir::toNativeSeparators(path)));
+    m_status->setText((n == 1 ? tr("Exported 1 contact to %1").arg(QDir::toNativeSeparators(path))
+                              : tr("Exported %1 contacts to %2").arg(n).arg(QDir::toNativeSeparators(path))));
     return true;
 }
 

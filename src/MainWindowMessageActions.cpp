@@ -446,7 +446,7 @@ void MainWindow::customSnooze()
     auto *edit = new QDateTimeEdit(QDateTime::currentDateTime().addSecs(3600), &dlg);
     edit->setObjectName(QStringLiteral("snoozeDateTime"));
     edit->setCalendarPopup(true);
-    edit->setDisplayFormat(QStringLiteral("yyyy-MM-dd h:mm AP"));
+    edit->setDisplayFormat(QStringLiteral("MM/dd/yyyy h:mm AP")); // as in the message list
     edit->setMinimumDateTime(QDateTime::currentDateTime());
     lay->addWidget(edit);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
@@ -510,7 +510,9 @@ void MainWindow::offerUndoDelete(const QStringList &ids)
         btn->setToolTip(withShortcut(tr("Put the message back"), m_undoDeleteAction->shortcut()));
         h->addWidget(m_undoLabel);
         h->addWidget(btn);
-        statusBar()->insertPermanentWidget(0, m_undoBar);
+        // Appended: index 0 belongs to the status bar's own (non-permanent)
+        // widgets, and Qt warned on every first Delete and appended anyway.
+        statusBar()->addPermanentWidget(m_undoBar);
         m_undoTimer = new QTimer(this);
         m_undoTimer->setSingleShot(true);
         connect(m_undoTimer, &QTimer::timeout, this, [this]() {

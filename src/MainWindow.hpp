@@ -9,6 +9,7 @@
 
 class QActionGroup;
 class QLabel;
+class QPrinter;
 class QLineEdit;
 class QKeySequence;
 class QMenu;
@@ -103,6 +104,17 @@ public:
     // Flag the selected messages in a colour (ui/Flags.h); empty clears.
     void setFlagOnSelected(const QString &color);
     void emptyTrash(bool confirm = true); // right-click Trash > Empty Trash
+    // File > Save Attachments: the shown message's attachments into a
+    // folder (asked for when empty). savedAttachments() is what the last
+    // call wrote, in order, once it has finished.
+    void saveAttachments(const QString &folder = {});
+    QStringList savedAttachments() const { return m_savedAttachments; }
+    // File > Print: the shown message, header and body. With no printer, the
+    // print dialog chooses one. False if there was nothing to print or the
+    // dialog was cancelled.
+    bool printMessage(QPrinter *printer = nullptr);
+    void copySelection(); // Edit > Copy
+    void setViewAsPlainText(bool on); // View > View as Plain Text, remembered
     // Filters (Settings > Filters): the rules in force, the editor, and
     // Message > Filter Messages for the selection. A rule passed to the
     // editor is added to the list there (Make Filter).
@@ -254,6 +266,7 @@ private:
     int m_listRowSpacing = 6;
     void applyListAppearance();
     void loadMoreIfListIsShort();
+    QStringList m_savedAttachments;
     zmail::Rules m_rules;
     bool applyRule(const zmail::Rule &rule, const QString &messageId); // its flag / move / mark read
     QString m_lastSync;     // "8:45 AM"

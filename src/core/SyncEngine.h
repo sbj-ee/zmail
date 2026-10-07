@@ -69,6 +69,8 @@ public:
     // Undo a trash() from this session: users.messages.untrash, then put
     // back any labels the message had before (INBOX, UNREAD, ...) that
     // untrash didn't restore. Optimistic, rolled back if Gmail refuses.
+    // trash() also takes the message out of its folder (its user labels),
+    // so folder counts match what the folder shows; untrash() puts it back.
     // Returns false if the message wasn't trashed by this engine.
     bool untrash(const QString &id);
 
@@ -78,6 +80,9 @@ public:
     void createLabel(const QString &name, const QString &backgroundColor = {});
     void renameLabel(const QString &id, const QString &newName);
     void deleteLabel(const QString &id);
+    // Empty a folder: every message with the label goes to Trash and out of
+    // the folder (and the Inbox), cached or not, 500 at a time.
+    void emptyLabel(const QString &id, int round = 0);
     // A message lives in one folder. Moving it onto a user label adds that
     // label and removes INBOX and every other user label it had; moving it
     // onto INBOX puts it back in the Inbox and removes its user labels.
@@ -115,6 +120,14 @@ private:
     void setBusy(bool b, const QString &status = {});
     void reportError(const ApiError &e, const QString &what);
     void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
+    QStringList userLabels(const QStringList &labels) const; // the ones that are folders
+    // Trashed mail is in no folder. Mail trashed elsewhere (or before 0.5.7)
+    // keeps its user labels, and Gmail counts it in each label's total, so a
+    // folder said 212 with 2 messages to show. Once per start(): find trashed
+    // mail that still has user labels and take them off.
+    void cleanTrashedLabels(int round = 0);
+    bool m_trashedLabelsCleaned = false;
+    static constexpr int kCleanTrashedRounds = 20; // x 500 messages
     static QStringList labelIds(const QJsonObject &message); // a message resource's labelIds
     // users.messages.modify with the cache updated first. If Gmail refuses,
     // exactly what this edit changed is undone (label changes that arrived

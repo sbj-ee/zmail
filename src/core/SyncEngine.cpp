@@ -1,5 +1,7 @@
 #include "SyncEngine.h"
 
+#include <memory>
+
 #include "GmailClient.h"
 #include "Log.h"
 #include "MessageParser.h"
@@ -81,11 +83,15 @@ void SyncEngine::reportError(const ApiError &e, const QString &what)
 void SyncEngine::start()
 {
     m_running = true;
+    m_trashedLabelsCleaned = false;
     m_poll->start();
     if (m_cache->historyId() == 0 || m_cache->count(kInbox) == 0) {
         fullSync(tr("first sync"));
     } else {
-        refreshLabels([this] { pollNow(true); });
+        refreshLabels([this] {
+            pollNow(true);
+            cleanTrashedLabels();
+        });
     }
 }
 
@@ -271,6 +277,7 @@ void SyncEngine::fullSync(const QString &reason)
             if (gen != m_generation) {
                 return;
             }
+            cleanTrashedLabels();
             listPage(kInbox, {}, m_initialCount, [this, gen, startHistory](bool ok) {
                 if (gen != m_generation) {
                     return;
@@ -736,6 +743,84 @@ int SyncEngine::wakeDue(qint64 nowMs)
     return due.size();
 }
 
+QStringList SyncEngine::userLabels(const QStringList &labels) const
+{
+    QStringList out;
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user") && labels.contains(l.id)) {
+            out.append(l.id);
+        }
+    }
+    return out;
+}
+
+void SyncEngine::cleanTrashedLabels(int round)
+{
+    if (!m_running || round >= kCleanTrashedRounds || (round == 0 && m_trashedLabelsCleaned)) {
+        return;
+    }
+    m_trashedLabelsCleaned = true;
+    const int gen = m_generation;
+    m_api->searchMessages(QStringLiteral("in:trash has:userlabels"), 500, [this, gen, round](const QJsonObject &json, const ApiError &err) {
+        if (gen != m_generation || err.isError) {
+            return; // not worth a status-bar error; the next start tries again
+        }
+        QStringList ids;
+        for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
+            ids.append(v.toObject().value(QStringLiteral("id")).toString());
+        }
+        QStringList folders;
+        for (const CachedLabel &l : m_cache->labels()) {
+            if (l.type == QLatin1String("user")) {
+                folders.append(l.id);
+            }
+        }
+        if (ids.isEmpty() || folders.isEmpty()) {
+            if (round > 0) {
+                refreshLabels(); // the counts changed
+            }
+            return;
+        }
+        // batchModify takes at most 100 labels a call.
+        auto pending = std::make_shared<int>(0);
+        auto failed = std::make_shared<bool>(false);
+        for (qsizetype at = 0; at < folders.size(); at += 100) {
+            const QStringList chunk = folders.mid(at, 100);
+            ++*pending;
+            m_api->batchModifyLabels(ids, {}, chunk, [this, gen, round, ids, chunk, pending, failed](const QJsonObject &, const ApiError &err2) {
+                if (gen != m_generation) {
+                    return;
+                }
+                if (err2.isError) {
+                    *failed = true;
+                } else {
+                    for (const QString &id : ids) {
+                        const QStringList has = m_cache->summary(id).labels;
+                        QStringList gone;
+                        for (const QString &l : chunk) {
+                            if (has.contains(l)) {
+                                gone.append(l);
+                            }
+                        }
+                        if (!gone.isEmpty()) {
+                            m_cache->modifyLabels(id, {}, gone);
+                        }
+                    }
+                }
+                if (--*pending > 0) {
+                    return;
+                }
+                emit messagesChanged();
+                if (*failed) {
+                    refreshLabels();
+                } else {
+                    cleanTrashedLabels(round + 1); // the next 500, until none are left
+                }
+            });
+        }
+    });
+}
+
 void SyncEngine::trash(const QString &id)
 {
     const CachedMessage m = m_cache->summary(id);
@@ -745,12 +830,14 @@ void SyncEngine::trash(const QString &id)
     const QStringList before = m.labels;
     m_labelsBeforeTrash.insert(id, before);
     m_trashInFlight.insert(id);
-    m_cache->modifyLabels(id, {QStringLiteral("TRASH")}, {QStringLiteral("INBOX")}); // optimistic
+    // Out of the Inbox and out of its folder: trashed mail still wearing a
+    // user label is counted in that label's total by Gmail.
+    m_cache->modifyLabels(id, {QStringLiteral("TRASH")}, QStringList{QStringLiteral("INBOX")} + userLabels(before)); // optimistic
     emit messagesChanged();
     m_api->trashMessage(id, [this, id, before](const QJsonObject &json, const ApiError &err) {
-        m_trashInFlight.remove(id);
-        const bool undone = m_untrashQueued.remove(id); // Undo pressed before Gmail answered
         if (err.isError) {
+            m_trashInFlight.remove(id);
+            const bool undone = m_untrashQueued.remove(id); // Undo pressed before Gmail answered
             m_cache->setLabels(id, before);
             m_labelsBeforeTrash.remove(id);
             if (!undone) {
@@ -760,16 +847,37 @@ void SyncEngine::trash(const QString &id)
             emit messagesChanged();
             return;
         }
-        if (undone) {
-            sendUntrash(id, before, json);
+        // The trash is "in flight" until the labels are off too, so an Undo
+        // can't cross with that second call.
+        const auto finish = [this, id, before](const QJsonObject &trashed) {
+            m_trashInFlight.remove(id);
+            if (m_untrashQueued.remove(id)) { // Undo pressed before Gmail answered
+                sendUntrash(id, before, trashed);
+                return;
+            }
+            emit trashSucceeded(id);
+            const QStringList labels = labelIds(trashed);
+            if (!labels.isEmpty()) {
+                m_cache->setLabels(id, labels);
+                emit messagesChanged();
+            }
+        };
+        const QStringList folders = userLabels(labelIds(json));
+        if (folders.isEmpty() || m_untrashQueued.contains(id)) {
+            finish(json);
             return;
         }
-        emit trashSucceeded(id);
-        const QStringList labels = labelIds(json);
-        if (!labels.isEmpty()) {
-            m_cache->setLabels(id, labels);
-            emit messagesChanged();
-        }
+        m_api->modifyLabels(id, {}, folders, [this, json, finish](const QJsonObject &json2, const ApiError &err2) {
+            if (err2.isError) {
+                reportError(err2, tr("Moving to Trash")); // trashed, but still labelled
+                finish(json);
+            } else {
+                finish(json2);
+            }
+            if (!err2.isError) {
+                m_labelsRefreshSoon->start(); // the folder's count
+            }
+        });
     });
 }
 
@@ -879,6 +987,63 @@ void SyncEngine::renameLabel(const QString &id, const QString &newName)
             return;
         }
         refreshLabels();
+    });
+}
+
+void SyncEngine::emptyLabel(const QString &id, int round)
+{
+    if (!m_running || id.isEmpty()) {
+        return;
+    }
+    const int gen = m_generation;
+    const auto done = [this]() {
+        refreshLabels();
+        emit messagesChanged();
+    };
+    if (round >= kCleanTrashedRounds) {
+        done(); // 10,000 messages: the rest on the next Empty Folder
+        return;
+    }
+    // Trashed mail isn't listed, so each round asks for the first page again.
+    m_api->listMessages(id, 500, {}, [this, gen, id, round, done](const QJsonObject &json, const ApiError &err) {
+        if (gen != m_generation) {
+            return;
+        }
+        if (err.isError) {
+            reportError(err, tr("Emptying folder"));
+            done();
+            return;
+        }
+        QStringList ids;
+        for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
+            ids.append(v.toObject().value(QStringLiteral("id")).toString());
+        }
+        if (ids.isEmpty()) {
+            done();
+            return;
+        }
+        const QStringList remove{id, kInbox};
+        m_api->batchModifyLabels(ids, {QStringLiteral("TRASH")}, remove,
+                                 [this, gen, id, round, ids, remove, done](const QJsonObject &, const ApiError &err2) {
+            if (gen != m_generation) {
+                return;
+            }
+            if (err2.isError) {
+                reportError(err2, tr("Emptying folder"));
+                done();
+                return;
+            }
+            {
+                const MailCache::Batch batch(*m_cache);
+                for (const QString &messageId : ids) {
+                    if (m_cache->contains(messageId)) {
+                        m_cache->modifyLabels(messageId, {QStringLiteral("TRASH")}, remove);
+                    }
+                }
+            }
+            emit messagesChanged();
+            emptyLabel(id, round + 1);
+        });
     });
 }
 

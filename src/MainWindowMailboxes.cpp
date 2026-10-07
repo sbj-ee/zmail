@@ -327,6 +327,10 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
                 renameLabelFolder(id, fullName);
             });
             ren->setObjectName(QStringLiteral("actionRenameFolder"));
+            const QString shownName = fullName.isEmpty() ? item->text(0) : fullName;
+            QAction *empty = menu->addAction(tr("&Empty Folder…"), menu,
+                                             [this, id, shownName]() { emptyLabelFolder(id, shownName); });
+            empty->setObjectName(QStringLiteral("actionEmptyFolder"));
             QAction *del = menu->addAction(icon(QStringLiteral("trash")), tr("&Delete Folder…"), menu,
                                            [this, id, fullName, item]() {
                                                deleteLabelFolder(id, fullName.isEmpty() ? item->text(0) : fullName);
@@ -462,6 +466,34 @@ void MainWindow::deleteLabelFolder(const QString &labelId, const QString &displa
     }
     m_session->sync()->deleteLabel(labelId);
     statusBar()->showMessage(tr("Deleting folder \"%1\"\u2026").arg(displayName), 4000);
+}
+
+void MainWindow::emptyLabelFolder(const QString &labelId, const QString &displayName)
+{
+    if (!(m_live && m_session && m_session->sync()) || labelId.isEmpty()) {
+        return;
+    }
+    int total = 0;
+    for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+        if (l.id == labelId) {
+            total = l.total;
+        }
+    }
+    const auto choice = QMessageBox::question(
+        this, tr("Empty Folder"),
+        tr("Move every message in \"%1\" to Trash?\n\n"
+           "%2 The folder itself stays. Gmail keeps the messages in Trash for "
+           "30 days; Undo Delete does not bring them back.")
+            .arg(displayName, total == 1 ? tr("It holds 1 message.") : tr("It holds %1 messages.").arg(total)),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (choice != QMessageBox::Yes) {
+        return;
+    }
+    if (m_proxy->mailbox() == QLatin1String("gmail:") + labelId) {
+        m_view->clear(); // the message on show is about to go
+    }
+    m_session->sync()->emptyLabel(labelId);
+    statusBar()->showMessage(tr("Emptying folder \"%1\"\u2026").arg(displayName), 4000);
 }
 
 void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId)

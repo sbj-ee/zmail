@@ -72,6 +72,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QItemSelection>
+#include <QPainter>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -221,16 +222,38 @@ protected:
         QTreeWidgetItem *it = itemAt(e->position().toPoint());
         const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
         if (!dropLabel(key).isEmpty()) {
+            setDropTarget(it);
             e->acceptProposedAction();
         } else {
+            setDropTarget(nullptr);
             e->ignore();
         }
+    }
+    void dragLeaveEvent(QDragLeaveEvent *e) override
+    {
+        setDropTarget(nullptr);
+        QTreeWidget::dragLeaveEvent(e);
+    }
+    // The folder a drop would go to is lit while the drag is over it.
+    void drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        if (m_dropTarget.isValid() && index.row() == m_dropTarget.row() && index.parent() == m_dropTarget.parent()) {
+            QColor fill = palette().color(QPalette::Highlight);
+            painter->save();
+            painter->setPen(fill);
+            fill.setAlphaF(0.30);
+            painter->setBrush(fill);
+            painter->drawRect(QRect(0, option.rect.top(), viewport()->width() - 1, option.rect.height() - 1));
+            painter->restore();
+        }
+        QTreeWidget::drawRow(painter, option, index);
     }
     void dropEvent(QDropEvent *e) override
     {
         QTreeWidgetItem *it = itemAt(e->position().toPoint());
         const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
         if (dropLabel(key).isEmpty() || !onDrop) {
+            setDropTarget(nullptr);
             e->ignore();
             return;
         }
@@ -243,10 +266,24 @@ protected:
             }
         }
         e->acceptProposedAction();
+        setDropTarget(nullptr);
         onDrop(dropLabel(key), ids);
     }
 
 private:
+    void setDropTarget(QTreeWidgetItem *item)
+    {
+        const QModelIndex index = item ? indexFromItem(item) : QModelIndex();
+        if (index == m_dropTarget) {
+            return;
+        }
+        m_dropTarget = index;
+        // For the tests: the key of the row that is lit, or nothing.
+        setProperty("dropTarget", item ? item->data(0, Qt::UserRole).toString() : QString());
+        viewport()->update();
+    }
+    QPersistentModelIndex m_dropTarget;
+
     // The Gmail label a drop on this row moves to; empty: not a drop target.
     static QString dropLabel(const QString &key)
     {
@@ -1168,22 +1205,31 @@ void MainWindow::showContacts()
 
 void MainWindow::addSenderToContacts()
 {
+    if (m_shownId.isEmpty() || !m_session || !m_session->cache()) {
+        statusBar()->showMessage(m_live ? tr("Select a message first.") : tr("Sign in to Gmail to save contacts."), 5000);
+        return;
+    }
+    const zmail::CachedMessage c = m_session->cache()->message(m_shownId);
+    addToContacts(c.fromName, c.fromAddr);
+}
+
+void MainWindow::addToContacts(const QString &name, const QString &address)
+{
     zmail::ContactStore *store = m_live && m_session ? m_session->contacts() : nullptr;
     if (!store || !store->isOpen()) {
         statusBar()->showMessage(tr("Sign in to Gmail to save contacts."), 5000);
         return;
     }
-    if (m_shownId.isEmpty() || !m_session->cache()) {
-        statusBar()->showMessage(tr("Select a message first."), 5000);
-        return;
-    }
-    const zmail::CachedMessage c = m_session->cache()->message(m_shownId);
-    if (c.fromAddr.isEmpty()) {
+    if (address.trimmed().isEmpty()) {
         statusBar()->showMessage(tr("This message has no From address."), 5000);
         return;
     }
-    store->addLocalContact(c.fromName, c.fromAddr);
-    statusBar()->showMessage(tr("Saved %1 locally (not uploaded to Google).").arg(c.fromAddr), 5000);
+    if (store->hasEmail(address)) {
+        statusBar()->showMessage(tr("%1 is already in Contacts.").arg(address), 5000);
+        return;
+    }
+    store->addLocalContact(name, address);
+    statusBar()->showMessage(tr("Added %1 to Contacts (kept on this computer, not uploaded to Google).").arg(address), 5000);
 }
 
 void MainWindow::runFullTextSearch(const QString &text)
@@ -1473,6 +1519,16 @@ QMenu *MainWindow::buildListMenu()
         }
         if (nSel == 1 && !m.address.isEmpty()) {
             menu->addSeparator();
+            // Offered only for a sender who isn't a contact yet (a hidden
+            // contact is still a contact).
+            zmail::ContactStore *contacts = m_live && m_session ? m_session->contacts() : nullptr;
+            if (contacts && contacts->isOpen() && !contacts->hasEmail(m.address)) {
+                const QString name = m.who;
+                const QString address = m.address;
+                QAction *add = menu->addAction(tr("Add %1 to Contacts").arg(address), menu,
+                                               [this, name, address]() { addToContacts(name, address); });
+                add->setObjectName(QStringLiteral("actionAddToContacts"));
+            }
             const QString addr = m.address;
             QAction *copy = menu->addAction(icon(QStringLiteral("copy")), tr("Copy Address"), menu,
                                             [addr]() { QGuiApplication::clipboard()->setText(addr); });

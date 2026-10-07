@@ -573,6 +573,14 @@ QString ContactStore::addLocalContact(const QString &displayName, const QString 
     return c.id;
 }
 
+bool ContactStore::hasEmail(const QString &email) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT 1 FROM contact_emails WHERE email = ? LIMIT 1"));
+    q.addBindValue(email.trimmed().toLower());
+    return q.exec() && q.next();
+}
+
 void ContactStore::setTrusted(const QString &email, bool trusted)
 {
     const QString addr = email.trimmed().toLower();

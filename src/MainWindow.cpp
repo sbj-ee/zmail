@@ -17,6 +17,7 @@
 #include "ui/ContactsWindow.h"
 #include "ui/Flags.h"
 #include "core/ContactStore.h"
+#include "core/GmailClient.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
 #include "ui/SoundDialog.h"
@@ -74,6 +75,14 @@
 #include <QKeyEvent>
 #include <QItemSelection>
 #include <QPainter>
+#include <QPrintDialog>
+#include <QPrinter>
+#include <QSaveFile>
+#include <QFileDialog>
+#include <QTextDocument>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -439,14 +448,20 @@ void MainWindow::buildMenus()
     m_signInAction->setEnabled(false);
     m_signOutAction->setEnabled(false);
     file->addSeparator();
-    later(file, tr("&Save Attachments\u2026"));
-    later(file, tr("&Print\u2026"), QKeySequence::Print);
+    QAction *saveAtt = file->addAction(icon(QStringLiteral("paperclip")), tr("&Save Attachments\u2026"), this,
+                                       [this]() { saveAttachments(); });
+    saveAtt->setObjectName(QStringLiteral("actionSaveAttachments"));
+    QAction *print = file->addAction(tr("&Print\u2026"), this, [this]() { printMessage(); });
+    print->setObjectName(QStringLiteral("actionPrint"));
+    print->setShortcut(QKeySequence::Print);
     file->addSeparator();
     QAction *quit = file->addAction(tr("&Quit"), qApp, &QApplication::quit);
     quit->setShortcut(QKeySequence::Quit);
 
     QMenu *edit = addMenu("menuEdit", tr("&Edit"));
-    later(edit, tr("&Copy"), QKeySequence::Copy);
+    QAction *copy = edit->addAction(icon(QStringLiteral("copy")), tr("&Copy"), this, &MainWindow::copySelection);
+    copy->setObjectName(QStringLiteral("actionCopy"));
+    copy->setShortcut(QKeySequence::Copy);
     QAction *find = edit->addAction(tr("&Find\u2026"), this, [this]() { m_search->setFocus(); });
     find->setShortcut(QKeySequence::Find);
     edit->addSeparator();
@@ -456,7 +471,11 @@ void MainWindow::buildMenus()
     m_undoDeleteAction->setEnabled(false);
 
     QMenu *view = addMenu("menuView", tr("&View"));
-    later(view, tr("View as &Plain Text"));
+    QAction *plain = view->addAction(tr("View as &Plain Text"));
+    plain->setObjectName(QStringLiteral("actionPlainText"));
+    plain->setCheckable(true);
+    plain->setChecked(QSettings().value(QStringLiteral("viewer/plainText"), false).toBool());
+    connect(plain, &QAction::toggled, this, &MainWindow::setViewAsPlainText);
     QMenu *pane = view->addMenu(tr("&Preview Pane"));
     pane->setObjectName(QStringLiteral("menuPreviewPane"));
     auto *paneGroup = new QActionGroup(this);
@@ -1334,6 +1353,11 @@ void MainWindow::applyListAppearance()
     if (h->sectionSize(MessageListModel::Size) < size) {
         h->resizeSection(MessageListModel::Size, size);
     }
+    // ...and for "12/31/2026  12:59 PM".
+    const int date = m_list->fontMetrics().horizontalAdvance(QStringLiteral("88/88/8888  88:88 PM")) + 18;
+    if (h->sectionSize(MessageListModel::Date) < date) {
+        h->resizeSection(MessageListModel::Date, date);
+    }
     m_list->doItemsLayout(); // uniform row heights are measured once
 }
 
@@ -1368,6 +1392,161 @@ void MainWindow::loadMoreIfListIsShort()
         }
         m_session->sync()->fetchMore(label);
     });
+}
+
+// ---- File > Save Attachments / Print, Edit > Copy, View as Plain Text --------
+
+namespace {
+// A name that is safe to create inside `dir`, and not taken: "a.pdf", "a (2).pdf".
+QString freeFileName(const QDir &dir, const QString &wanted)
+{
+    QString name = QFileInfo(wanted).fileName(); // no directories from the sender
+    name.remove(QLatin1Char('/'));
+    name.remove(QLatin1Char('\\'));
+    name.remove(QChar(0));
+    while (name.startsWith(QLatin1Char('.'))) {
+        name.remove(0, 1); // not a hidden file
+    }
+    if (name.trimmed().isEmpty()) {
+        name = QStringLiteral("attachment");
+    }
+    const QFileInfo fi(name);
+    const QString stem = fi.completeBaseName().isEmpty() ? name : fi.completeBaseName();
+    const QString ext = fi.completeBaseName().isEmpty() || fi.suffix().isEmpty() ? QString() : QLatin1Char('.') + fi.suffix();
+    QString candidate = name;
+    for (int n = 2; dir.exists(candidate); ++n) {
+        candidate = QStringLiteral("%1 (%2)%3").arg(stem).arg(n).arg(ext);
+    }
+    return candidate;
+}
+} // namespace
+
+void MainWindow::saveAttachments(const QString &folder)
+{
+    m_savedAttachments.clear();
+    if (!(m_live && m_session && m_session->api()) || m_shownId.isEmpty()) {
+        statusBar()->showMessage(m_live ? tr("Select a message first.") : tr("Sign in to Gmail to save attachments."), 5000);
+        return;
+    }
+    QString dir = folder;
+    if (dir.isEmpty()) {
+        dir = QFileDialog::getExistingDirectory(
+            this, tr("Save Attachments To"),
+            QSettings().value(QStringLiteral("attachments/folder"),
+                              QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).toString());
+        if (dir.isEmpty()) {
+            return;
+        }
+        QSettings().setValue(QStringLiteral("attachments/folder"), dir);
+    }
+    const QString id = m_shownId;
+    zmail::GmailClient *api = m_session->api();
+    statusBar()->showMessage(tr("Fetching attachments\u2026"));
+    api->getMessageFull(id, [this, api, id, dir](const QJsonObject &json, const zmail::ApiError &err) {
+        if (err.isError) {
+            statusBar()->showMessage(tr("Couldn't fetch the attachments: %1").arg(err.message), 8000);
+            return;
+        }
+        const QList<zmail::MessageParser::AttachmentRef> refs = zmail::MessageParser::bodyFromFull(json).attachmentRefs;
+        if (refs.isEmpty()) {
+            statusBar()->showMessage(tr("This message has no attachments."), 5000);
+            return;
+        }
+        auto left = std::make_shared<int>(int(refs.size()));
+        auto failed = std::make_shared<int>(0);
+        const auto write = [this, dir, left, failed](const QString &name, const QByteArray &data, bool ok) {
+            if (ok) {
+                const QDir d(dir);
+                const QString file = d.filePath(freeFileName(d, name));
+                QSaveFile out(file);
+                if (out.open(QIODevice::WriteOnly) && out.write(data) == data.size() && out.commit()) {
+                    m_savedAttachments << file;
+                } else {
+                    ++*failed;
+                }
+            } else {
+                ++*failed;
+            }
+            if (--*left > 0) {
+                return;
+            }
+            const int saved = int(m_savedAttachments.size());
+            QString text = saved == 1 ? tr("Saved 1 attachment to %1.").arg(QDir::toNativeSeparators(dir))
+                                      : tr("Saved %1 attachments to %2.").arg(saved).arg(QDir::toNativeSeparators(dir));
+            if (*failed > 0) {
+                text += QLatin1Char(' ') + (*failed == 1 ? tr("1 could not be saved.") : tr("%1 could not be saved.").arg(*failed));
+            }
+            statusBar()->showMessage(text, 8000);
+        };
+        for (const auto &ref : refs) {
+            if (ref.attachmentId.isEmpty()) {
+                write(ref.fileName, ref.inlineData, true);
+                continue;
+            }
+            api->getAttachment(id, ref.attachmentId, [this, ref, write](const QJsonObject &a, const zmail::ApiError &e) {
+                write(ref.fileName, zmail::MessageParser::decodeBase64Url(a.value(QStringLiteral("data")).toString()), !e.isError);
+            });
+        }
+    });
+}
+
+bool MainWindow::printMessage(QPrinter *printer)
+{
+    if (m_view->message().id.isEmpty() && m_view->body()->document()->isEmpty()) {
+        statusBar()->showMessage(tr("Select a message to print."), 5000);
+        return false;
+    }
+    QPrinter own(QPrinter::HighResolution);
+    if (!printer) {
+        QPrintDialog dlg(&own, this);
+        dlg.setWindowTitle(tr("Print Message"));
+        if (dlg.exec() != QDialog::Accepted) {
+            return false;
+        }
+        printer = &own;
+    }
+    const std::unique_ptr<QTextDocument> doc(m_view->printableDocument());
+    doc->print(printer);
+    statusBar()->showMessage(tr("Sent to the printer."), 4000);
+    return true;
+}
+
+void MainWindow::copySelection()
+{
+    // What is selected where the cursor is: a text field, the message...
+    if (auto *edit = qobject_cast<QLineEdit *>(QApplication::focusWidget()); edit && edit->hasSelectedText()) {
+        edit->copy();
+        return;
+    }
+    if (m_view->body()->textCursor().hasSelection()) {
+        m_view->body()->copy();
+        return;
+    }
+    // ...or else the selected messages, a line each.
+    QStringList lines;
+    for (int row : selectedSourceRows()) {
+        const MailItem &m = m_model->item(row);
+        lines << QStringLiteral("%1\t%2\t%3").arg(m.who, MessageListModel::formatDate(m.date).simplified(), m.subject);
+    }
+    if (lines.isEmpty()) {
+        return;
+    }
+    QGuiApplication::clipboard()->setText(lines.join(QLatin1Char('\n')));
+    statusBar()->showMessage(lines.size() == 1 ? tr("Copied 1 message's sender, date and subject.")
+                                               : tr("Copied %1 messages' senders, dates and subjects.").arg(lines.size()),
+                             4000);
+}
+
+void MainWindow::setViewAsPlainText(bool on)
+{
+    m_view->setPlainText(on);
+    for (MessageWindow *w : messageWindows()) {
+        w->view()->setPlainText(on);
+    }
+    if (QAction *a = findChild<QAction *>(QStringLiteral("actionPlainText")); a && a->isChecked() != on) {
+        const QSignalBlocker block(a);
+        a->setChecked(on);
+    }
 }
 
 // ---- filters ----------------------------------------------------------------
@@ -1479,7 +1658,7 @@ void MainWindow::filterSelected()
             ++changed;
         }
     }
-    statusBar()->showMessage(changed ? tr("Filtered %n message(s).", nullptr, changed) : tr("No filter had anything to do."),
+    statusBar()->showMessage(changed ? (changed == 1 ? tr("Filtered 1 message.") : tr("Filtered %1 messages.").arg(changed)) : tr("No filter had anything to do."),
                              5000);
 }
 

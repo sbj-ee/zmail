@@ -14,11 +14,19 @@
 #include "ui/ComposeWindow.h"
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
+#include "ui/SafeHtmlView.h"
 #include "ui/Theme.h"
 
 #include <QAbstractItemView>
 #include <QAction>
 #include <QCompleter>
+#include <QClipboard>
+#include <QPrinter>
+#include <QTemporaryDir>
+#include <QTextDocument>
+#include <QTextFrame>
+#include <QFileInfo>
+#include <QTextCursor>
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QLineEdit>
@@ -375,6 +383,90 @@ private slots:
         // A word that is no nickname is left as typed.
         to->setText(QStringLiteral("nobody"));
         QCOMPARE(c.message().to, QStringLiteral("nobody"));
+    }
+
+    // File > Save Attachments, File > Print, Edit > Copy, View as Plain Text.
+    void saveAttachmentsPrintCopyAndPlainText()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        MockGoogle::Message m;
+        m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+        m.to = QStringLiteral("Demo User <demo.user@example.com>");
+        m.subject = QStringLiteral("Files for you");
+        m.text = QStringLiteral("Plain part.");
+        m.html = QStringLiteral("<table><tr><td><b>Rich</b> part</td><td>second cell</td></tr></table>");
+        m.labels = {QStringLiteral("INBOX")};
+        m.date = QDateTime::currentDateTimeUtc();
+        m.attachments = {QStringLiteral("report.pdf"), QStringLiteral("../../etc/evil.txt"), QStringLiteral(".hidden")};
+        m.attachmentData = {QByteArray("PDF BYTES"), QByteArray("not so evil"), QByteArray("dot")};
+        const QString id = f.g.addMessage(m, true);
+        f.session->sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 4, 10000);
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(id), 0)));
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->shownMessageId(), id, 5000);
+        auto *view = f.w->findChild<MessageView *>(QStringLiteral("messageView"));
+        QTRY_VERIFY_WITH_TIMEOUT(view->body()->toPlainText().contains(QStringLiteral("Rich")), 5000);
+
+        // Save Attachments: every one, under safe names, never over a file
+        // that is there already.
+        QTemporaryDir dir;
+        f.w->saveAttachments(dir.path());
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->savedAttachments().size(), 3, 10000);
+        const auto read = [&dir](const QString &name) {
+            QFile file(dir.filePath(name));
+            return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray("<missing>");
+        };
+        QCOMPARE(read(QStringLiteral("report.pdf")), QByteArray("PDF BYTES"));
+        QCOMPARE(read(QStringLiteral("evil.txt")), QByteArray("not so evil")); // inside the folder, whatever the sender called it
+        QCOMPARE(read(QStringLiteral("hidden")), QByteArray("dot"));
+        for (const QString &path : f.w->savedAttachments()) {
+            QCOMPARE(QFileInfo(path).absolutePath(), QDir(dir.path()).absolutePath());
+        }
+        f.w->saveAttachments(dir.path());
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->savedAttachments().size(), 3, 10000);
+        QCOMPARE(read(QStringLiteral("report (2).pdf")), QByteArray("PDF BYTES"));
+        QCOMPARE(read(QStringLiteral("report.pdf")), QByteArray("PDF BYTES"));
+
+        // Print: header and body, here to a PDF.
+        QPrinter pdf;
+        pdf.setOutputFormat(QPrinter::PdfFormat);
+        pdf.setOutputFileName(dir.filePath(QStringLiteral("out.pdf")));
+        QVERIFY(f.w->printMessage(&pdf));
+        QVERIFY(QFileInfo(dir.filePath(QStringLiteral("out.pdf"))).size() > 500);
+        const std::unique_ptr<QTextDocument> printable(view->printableDocument());
+        const QString page = printable->toPlainText();
+        QVERIFY(page.contains(QStringLiteral("Files for you")));
+        QVERIFY(page.contains(QStringLiteral("priya.raman@example.com")));
+        QVERIFY(page.contains(QStringLiteral("report.pdf")));
+        QVERIFY(page.indexOf(QStringLiteral("Files for you")) < page.indexOf(QStringLiteral("Rich")));
+
+        // View as Plain Text: the text part instead of the HTML, remembered.
+        QAction *plain = f.w->findChild<QAction *>(QStringLiteral("actionPlainText"));
+        QVERIFY(plain && plain->isCheckable() && !plain->isChecked());
+        QCOMPARE(view->body()->document()->rootFrame()->childFrames().size(), 1); // the HTML's table
+        plain->setChecked(true);
+        QVERIFY(view->plainText());
+        QVERIFY(view->body()->toPlainText().contains(QStringLiteral("Plain part.")));
+        QVERIFY(!view->body()->toPlainText().contains(QStringLiteral("Rich")));
+        QCOMPARE(view->body()->document()->rootFrame()->childFrames().size(), 0);
+        QVERIFY(QSettings().value(QStringLiteral("viewer/plainText")).toBool());
+        plain->setChecked(false);
+        QTRY_VERIFY(view->body()->toPlainText().contains(QStringLiteral("Rich")));
+
+        // Copy: the text selected in the message, or else the selected
+        // messages a line each.
+        view->body()->selectAll();
+        f.w->findChild<QAction *>(QStringLiteral("actionCopy"))->trigger();
+        QVERIFY(QGuiApplication::clipboard()->text().contains(QStringLiteral("second cell")));
+        QTextCursor none = view->body()->textCursor();
+        none.clearSelection();
+        view->body()->setTextCursor(none);
+        f.list->setFocus();
+        f.w->copySelection();
+        const QString line = QGuiApplication::clipboard()->text();
+        QVERIFY2(line.contains(QStringLiteral("Files for you")) && line.contains(QStringLiteral("Priya Raman")), qPrintable(line));
+        QSettings().remove(QStringLiteral("viewer/plainText"));
     }
 
     // Drag a message from the list onto a folder in the sidebar.

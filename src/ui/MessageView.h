@@ -9,6 +9,7 @@ class QFrame;
 class QGridLayout;
 class QLabel;
 class QPushButton;
+class QTextDocument;
 class QTimer;
 
 namespace zmail::ui {
@@ -81,6 +82,12 @@ public:
     // A message whose layout would stall the window (HtmlFit::kLayoutBudget)
     // is shown with its tables simplified, under a bar that offers the full
     // layout for those willing to wait for it.
+    // View > View as Plain Text: the message's text part (or the text of
+    // its HTML, when it has none), remembered in QSettings.
+    bool plainText() const { return m_plain; }
+    void setPlainText(bool on);
+    // The header and body as one document, for File > Print. The caller owns it.
+    QTextDocument *printableDocument() const;
     bool layoutSimplified() const { return m_simplified; }
     void showFullLayout();
 
@@ -109,6 +116,7 @@ private:
     QPushButton *m_loadImages = nullptr;
     QPushButton *m_alwaysForSender = nullptr;
     QFrame *m_layoutBar = nullptr;
+    bool m_plain = false;       // View as Plain Text
     bool m_simplified = false;  // the last render gave up tables to stay within budget
     bool m_fullLayout = false;  // this message: the user asked for all of it
     SafeHtmlView *m_body = nullptr;

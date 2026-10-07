@@ -34,6 +34,13 @@ qint64 monoMs()
     return t.elapsed();
 }
 const QString kInbox = QStringLiteral("INBOX");
+
+// "1 message" / "5 messages". No translation is loaded, so tr()'s "%n
+// message(s)" form showed its "(s)" on screen.
+QString countText(const QString &one, const QString &many, int n)
+{
+    return n == 1 ? one : many.arg(n);
+}
 } // namespace
 
 SyncEngine::SyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
@@ -295,7 +302,7 @@ void SyncEngine::fullSync(const QString &reason)
                     m_cache->setHistoryId(startHistory);
                     m_lastPollMs = monoMs();
                     emit messagesChanged();
-                    setBusy(false, tr("Inbox synced: %n message(s)", nullptr, m_cache->count(kInbox)));
+                    setBusy(false, countText(tr("Inbox synced: 1 message"), tr("Inbox synced: %1 messages"), m_cache->count(kInbox)));
                     // Anything that changed while we were listing comes in via history.
                     QTimer::singleShot(0, this, [this] { pollNow(true); });
                 }, /*force=*/true);
@@ -364,12 +371,12 @@ void SyncEngine::fetchMore(const QString &labelId)
             m_cache->setMeta(QStringLiteral("pageToken:") + labelId, {});
             listPage(labelId, {}, m_pageSize, [this, labelId](bool) {
                 m_loadingLabels.remove(labelId);
-                emit statusChanged(tr("%n message(s) cached", nullptr, m_cache->count()));
+                emit statusChanged(countText(tr("1 message cached"), tr("%1 messages cached"), m_cache->count()));
             });
             return;
         }
         m_loadingLabels.remove(labelId);
-        emit statusChanged(tr("%n message(s) cached", nullptr, m_cache->count()));
+        emit statusChanged(countText(tr("1 message cached"), tr("%1 messages cached"), m_cache->count()));
     });
 }
 

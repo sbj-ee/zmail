@@ -16,6 +16,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
@@ -39,7 +40,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.1"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.2"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -136,6 +137,23 @@ private slots:
         QCOMPARE(again.listRowSpacing(), 10);
         QSettings().remove(QStringLiteral("ui/listFontSize"));
         QSettings().remove(QStringLiteral("ui/listRowSpacing"));
+    }
+
+    // Dates in the list read 01/01/2026: two-digit month and day, four-digit
+    // year, whatever the system locale, and the Date column has room for it.
+    void listDatesAreTwoDigitMonthDayAndFourDigitYear()
+    {
+        QCOMPARE(MessageListModel::formatDate(QDateTime(QDate(2026, 1, 1), QTime(9, 5))), QStringLiteral("01/01/2026  9:05 AM"));
+        QCOMPARE(MessageListModel::formatDate(QDateTime(QDate(2026, 12, 31), QTime(23, 59))), QStringLiteral("12/31/2026  11:59 PM"));
+        MainWindow w;
+        w.resize(1200, 700);
+        w.show();
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        const QString shown = list->model()->index(0, MessageListModel::Date).data().toString();
+        QVERIFY2(QRegularExpression(QStringLiteral("^\\d{2}/\\d{2}/\\d{4}  \\d{1,2}:\\d{2} [AP]M$")).match(shown).hasMatch(),
+                 qPrintable(shown));
+        QVERIFY(list->header()->sectionSize(MessageListModel::Date) >=
+                list->fontMetrics().horizontalAdvance(QStringLiteral("12/31/2026  12:59 PM")) + 8);
     }
 
     void rowStripesSliderIsRemembered()

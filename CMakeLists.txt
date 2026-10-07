@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.5.14 LANGUAGES CXX)
+project(zmail VERSION 0.6.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +91,8 @@ add_library(zmail_app STATIC
   src/core/MimeBuilder.cpp
   src/core/MimeBuilder.h
   src/core/Pkce.cpp
+  src/core/Rules.cpp
+  src/core/Rules.h
   src/core/Pkce.h
   src/core/PeopleClient.cpp
   src/core/PeopleClient.h
@@ -150,6 +152,8 @@ add_library(zmail_app STATIC
   src/ui/SignaturesDialog.h
   src/ui/SpellHighlighter.cpp
   src/ui/SpellHighlighter.h
+  src/ui/RulesDialog.cpp
+  src/ui/RulesDialog.h
   src/ui/ListDialog.cpp
   src/ui/ListDialog.h
   src/ui/StripesDialog.cpp

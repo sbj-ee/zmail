@@ -492,6 +492,15 @@ happen. The scanner never deletes, moves or hides mail. It only labels and
 warns, and Gmail's own spam filtering is still the first line of defense.
 
 ### 4.9 Rules: sound, color, notification, priority
+> **Built in 0.6.0 as Filters** (`core/Rules`, `ui/RulesDialog`): ordered rules,
+> first match wins; conditions on from / to / subject / any with contains,
+> does not contain, is, starts with, ends with, regex, ANDed or ORed; actions
+> colour, flag, move to folder, mark read, sound (a WAV, the usual one, or
+> none). The file is `<config>/rules.json` with explicit condition objects
+> rather than the glob map sketched below. Not built yet: label / contact /
+> group / keyword / scan conditions, notify and priority actions, quiet
+> hours, OGG/MP3 and the sound import folder.
+
 One rule list, edited in **Settings → Rules**, stored as JSON at
 `~/.config/zmail/rules.json`. **First match wins**, as in Eudora's filters.
 That's predictable, and order is easy to reason about in the editor

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/Rules.h"
+
 #include <QMainWindow>
 #include <QPointer>
 #include <QList>
@@ -41,6 +43,7 @@ enum class ThemeMode;
 class PrivacyDialog;
 class StripesDialog;
 class ListDialog;
+class RulesDialog;
 class ContactsWindow;
 } // namespace zmail::ui
 
@@ -100,6 +103,16 @@ public:
     // Flag the selected messages in a colour (ui/Flags.h); empty clears.
     void setFlagOnSelected(const QString &color);
     void emptyTrash(bool confirm = true); // right-click Trash > Empty Trash
+    // Filters (Settings > Filters): the rules in force, the editor, and
+    // Message > Filter Messages for the selection. A rule passed to the
+    // editor is added to the list there (Make Filter).
+    const zmail::Rules &rules() const { return m_rules; }
+    void setRules(const QList<zmail::Rule> &rules); // saved, and the list recoloured
+    zmail::ui::RulesDialog *showRulesDialog(const zmail::Rule *add = nullptr); // non-modal; returned for tests
+    void filterSelected();
+    // What a batch of newly arrived messages gets: each one's matching rule
+    // applied, and one sound for the lot.
+    void applyRulesToNewMail(const QStringList &ids);
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
     zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
     // Any theme id, built-in or custom ("custom:<stem>", "zterminal:<stem>");
@@ -241,6 +254,8 @@ private:
     int m_listRowSpacing = 6;
     void applyListAppearance();
     void loadMoreIfListIsShort();
+    zmail::Rules m_rules;
+    bool applyRule(const zmail::Rule &rule, const QString &messageId); // its flag / move / mark read
     QString m_lastSync;     // "8:45 AM"
     QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
     bool m_keepSyncErrorAcrossIdle = false;

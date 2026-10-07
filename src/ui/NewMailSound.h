@@ -27,6 +27,9 @@ public:
     void play();
     // Always play the resolved source (Settings > Sounds > Test).
     void playPreview();
+    // A filter's own sound: this .wav, or the usual sound if it has gone
+    // missing. Muted like play() unless preview is set (the editor's Test).
+    void playFile(const QString &path, bool preview = false);
 
     int playCount() const { return m_plays; }
 

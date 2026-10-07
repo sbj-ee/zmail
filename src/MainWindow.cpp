@@ -29,6 +29,7 @@
 #include "ui/MessageListModel.h"
 #include "ui/SelectionAfterRemoval.h"
 #include "ui/ListDialog.h"
+#include "ui/RulesDialog.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
@@ -550,6 +551,9 @@ void MainWindow::buildMenus()
     markUnread->setObjectName(QStringLiteral("actionMarkUnread"));
     markUnread->setProperty("lucide", QStringLiteral("mail"));
     message->addMenu(buildFlagMenu(message));
+    QAction *filterNow = message->addAction(tr("Fi&lter Messages"), this, [this]() { filterSelected(); });
+    filterNow->setObjectName(QStringLiteral("actionFilterMessages"));
+    filterNow->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_J)); // as in Eudora
     QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
                                       [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
@@ -579,7 +583,9 @@ void MainWindow::buildMenus()
 
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
     later(settings, tr("&Account\u2026"));
-    later(settings, tr("&Rules (Sounds && Colours)\u2026"));
+    QAction *filters = settings->addAction(tr("&Filters\u2026"), this, [this]() { showRulesDialog(); });
+    filters->setObjectName(QStringLiteral("actionFilters"));
+    m_rules.load();
     QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
     sigs->setObjectName(QStringLiteral("actionSignatures"));
     QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showPrivacyDialog()->open(); });
@@ -1364,6 +1370,119 @@ void MainWindow::loadMoreIfListIsShort()
     });
 }
 
+// ---- filters ----------------------------------------------------------------
+
+void MainWindow::setRules(const QList<zmail::Rule> &rules)
+{
+    m_rules.rules = rules;
+    if (!m_rules.save()) {
+        statusBar()->showMessage(tr("Couldn't save the filters to %1.").arg(zmail::Rules::defaultPath()), 8000);
+    }
+    reloadFromCache(); // row colours
+}
+
+RulesDialog *MainWindow::showRulesDialog(const zmail::Rule *add)
+{
+    QList<RulesDialog::Folder> folders;
+    if (m_live && m_session && m_session->cache()) {
+        for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+            if (l.type == QLatin1String("user")) {
+                folders.append({l.id, l.name});
+            }
+        }
+        std::sort(folders.begin(), folders.end(),
+                  [](const auto &a, const auto &b) { return a.second.compare(b.second, Qt::CaseInsensitive) < 0; });
+    }
+    auto *dlg = new RulesDialog(m_rules.rules, folders, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    if (add) {
+        dlg->addRule(*add);
+    }
+    connect(dlg, &RulesDialog::previewSound, this, [this](const QString &sound) {
+        if (sound == QLatin1String(zmail::kRuleSoundNone)) {
+            return;
+        }
+        sound.isEmpty() ? m_sound->playPreview() : m_sound->playFile(sound, /*preview=*/true);
+    });
+    connect(dlg, &QDialog::accepted, this, [this, dlg]() { setRules(dlg->rules()); });
+    dlg->show();
+    return dlg;
+}
+
+bool MainWindow::applyRule(const zmail::Rule &rule, const QString &messageId)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync || messageId.isEmpty() || !rule.hasArrivalActions()) {
+        return false;
+    }
+    if (!rule.flag.isEmpty()) {
+        sync->setFlag(messageId, rule.flag);
+    }
+    if (rule.markRead) {
+        sync->markRead(messageId);
+    }
+    if (!rule.moveTo.isEmpty()) {
+        sync->moveToLabel(messageId, rule.moveTo);
+    }
+    return true;
+}
+
+namespace {
+zmail::RuleMessage ruleMessage(const zmail::CachedMessage &c)
+{
+    zmail::RuleMessage m;
+    m.from = c.fromName.isEmpty() ? c.fromAddr : QStringLiteral("%1 <%2>").arg(c.fromName, c.fromAddr);
+    m.to = c.to;
+    m.subject = c.subject;
+    return m;
+}
+} // namespace
+
+void MainWindow::applyRulesToNewMail(const QStringList &ids)
+{
+    // One sound for the batch: the first message a filter has a say about
+    // decides; otherwise the usual one.
+    QString sound;
+    if (m_live && m_session && m_session->cache()) {
+        for (const QString &id : ids) {
+            const zmail::CachedMessage c = m_session->cache()->summary(id);
+            if (c.id.isEmpty()) {
+                continue;
+            }
+            const zmail::Rule *rule = m_rules.match(ruleMessage(c));
+            if (!rule) {
+                continue;
+            }
+            if (sound.isEmpty()) {
+                sound = rule->sound;
+            }
+            applyRule(*rule, id);
+        }
+    }
+    if (sound == QLatin1String(zmail::kRuleSoundNone)) {
+        return;
+    }
+    sound.isEmpty() ? m_sound->play() : m_sound->playFile(sound);
+}
+
+void MainWindow::filterSelected()
+{
+    if (!(m_live && m_session && m_session->cache())) {
+        statusBar()->showMessage(tr("Sign in to Gmail to filter messages."), 5000);
+        return;
+    }
+    int changed = 0;
+    for (const QString &id : selectedMessageIds()) {
+        const zmail::CachedMessage c = m_session->cache()->summary(id);
+        const zmail::Rule *rule = c.id.isEmpty() ? nullptr : m_rules.match(ruleMessage(c));
+        if (rule && applyRule(*rule, id)) {
+            ++changed;
+        }
+    }
+    statusBar()->showMessage(changed ? tr("Filtered %n message(s).", nullptr, changed) : tr("No filter had anything to do."),
+                             5000);
+}
+
 StripesDialog *MainWindow::showStripesDialog()
 {
     auto *dlg = new StripesDialog(m_stripes, this);
@@ -1528,6 +1647,15 @@ QMenu *MainWindow::buildListMenu()
                 QAction *add = menu->addAction(tr("Add %1 to Contacts").arg(address), menu,
                                                [this, name, address]() { addToContacts(name, address); });
                 add->setObjectName(QStringLiteral("actionAddToContacts"));
+            }
+            {
+                // Make Filter: a new rule for this sender, ready to finish.
+                zmail::Rule fromSender;
+                fromSender.name = m.who.isEmpty() ? m.address : m.who;
+                fromSender.conditions.append({QStringLiteral("from"), QStringLiteral("contains"), m.address});
+                QAction *make = menu->addAction(tr("Make Filter\u2026"), menu,
+                                                [this, fromSender]() { showRulesDialog(&fromSender); });
+                make->setObjectName(QStringLiteral("actionMakeFilter"));
             }
             const QString addr = m.address;
             QAction *copy = menu->addAction(icon(QStringLiteral("copy")), tr("Copy Address"), menu,

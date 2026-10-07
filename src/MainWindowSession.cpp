@@ -146,7 +146,7 @@ void MainWindow::attachSync()
     });
     connect(sync, &zmail::SyncEngine::messagesChanged, m_reloadTimer, qOverload<>(&QTimer::start));
     connect(sync, &zmail::SyncEngine::newMail, this, [this](const QStringList &ids) {
-        m_sound->play();
+        applyRulesToNewMail(ids); // each one's filter, and the sound
         statusBar()->showMessage(tr("%n new message(s)", nullptr, int(ids.size())), 8000);
     });
     connect(sync, &zmail::SyncEngine::statusChanged, this, [this](const QString &s) { updateSyncLabel(s); });
@@ -210,6 +210,15 @@ void MainWindow::reloadFromCache()
         m.id = c.id;
         if (c.labels.contains(QStringLiteral("STARRED"))) {
             m.flag = flags.value(c.id, QString::fromLatin1(kStarredFlag));
+        }
+        if (!m_rules.rules.isEmpty()) {
+            zmail::RuleMessage rm;
+            rm.from = c.fromName.isEmpty() ? c.fromAddr : QStringLiteral("%1 <%2>").arg(c.fromName, c.fromAddr);
+            rm.to = c.to;
+            rm.subject = c.subject;
+            if (const zmail::Rule *rule = m_rules.match(rm); rule && !rule->color.isEmpty()) {
+                m.ruleColor = QColor(rule->color);
+            }
         }
         const bool sent = c.labels.contains(QStringLiteral("SENT"));
         m.status = c.unread() ? MailStatus::Unread : sent ? MailStatus::Sent : MailStatus::Read;

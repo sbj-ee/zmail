@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 
+#include <QHash>
 #include <QImage>
 #include <QRegularExpression>
 #include <QStringList>
@@ -13,6 +14,7 @@
 #include <QVariant>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace zmail::ui::HtmlFit {
@@ -196,9 +198,15 @@ bool isRealColour(const QString &v)
 
 QString attr(const QString &tag, const QString &name)
 {
-    const QRegularExpression re(QStringLiteral("\\b%1\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))").arg(name),
-                                QRegularExpression::CaseInsensitiveOption);
-    const auto m = re.match(tag);
+    // Compiled once per attribute name: this runs for every tag of a message.
+    static QHash<QString, QRegularExpression> compiled;
+    auto found = compiled.constFind(name);
+    if (found == compiled.constEnd()) {
+        found = compiled.insert(name, QRegularExpression(
+                                          QStringLiteral("\\b%1\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))").arg(name),
+                                          QRegularExpression::CaseInsensitiveOption));
+    }
+    const auto m = found->match(tag);
     if (!m.hasMatch()) {
         return {};
     }
@@ -399,7 +407,7 @@ QString neutraliseAutoMargins(const QString &html)
 
 } // namespace
 
-QString prepare(const QString &input)
+QString prepare(const QString &input, double layoutBudget, int *depthUsed)
 {
     static const QRegularExpression comments(QStringLiteral("<!--.*?-->"),
                                              QRegularExpression::DotMatchesEverythingOption);
@@ -484,7 +492,76 @@ QString prepare(const QString &input)
         pos = m.capturedEnd();
     }
     linked += QStringView(out).mid(pos);
-    return limitTableDepth(linked);
+    int depth = kMaxTableDepth;
+    QString limited = limitTableDepth(linked, depth);
+    // Nesting is not the only way to be slow: a wide grid costs its cells
+    // times its columns at any depth. Over budget, give up a level of tables
+    // at a time, down to none (plain blocks lay out in linear time).
+    if (layoutBudget > 0 && layoutCost(limited) > layoutBudget) {
+        // Start at the nesting the message really has: limits above that change nothing.
+        static const QRegularExpression table(QStringLiteral("<(/?)table\\b"), QRegularExpression::CaseInsensitiveOption);
+        int nesting = 0, deepest = 0;
+        for (auto t = table.globalMatch(limited); t.hasNext();) {
+            nesting = std::max(0, nesting + (t.next().capturedLength(1) > 0 ? -1 : 1));
+            deepest = std::max(deepest, nesting);
+        }
+        // No tables at all: just a long message, laid out in linear time.
+        if (deepest > 0) {
+            depth = std::min(depth, deepest);
+            do {
+                limited = limitTableDepth(linked, --depth);
+            } while (depth > 0 && layoutCost(limited) > layoutBudget);
+        }
+    }
+    if (depthUsed) {
+        *depthUsed = depth;
+    }
+    return limited;
+}
+
+double layoutCost(const QString &html)
+{
+    static const QRegularExpression tag(QStringLiteral("<(/?)(table|tr|td|th)\\b[^>]*>"),
+                                        QRegularExpression::CaseInsensitiveOption);
+    struct Open { int cells = 0; int rowCells = 0; int columns = 0; };
+    QList<Open> open;
+    double cost = 0;
+    qsizetype last = 0;
+    // A table d levels down is laid out 2^(d-1) times; what is in its cells, 2^d.
+    const auto times = [](qsizetype depth) { return std::ldexp(1.0, int(std::min<qsizetype>(depth, 40))); };
+    const auto close = [&]() {
+        const Open t = open.takeLast();
+        cost += double(t.cells) * std::max(1, std::max(t.columns, t.rowCells)) * times(open.size());
+    };
+    auto it = tag.globalMatch(html);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        cost += double(m.capturedStart() - last) / 256.0 * times(open.size());
+        last = m.capturedEnd();
+        const bool closing = m.capturedLength(1) > 0;
+        const qsizetype name = m.capturedLength(2);
+        if (name == 5) { // table
+            if (!closing) {
+                open.append(Open());
+            } else if (!open.isEmpty()) {
+                close();
+            }
+        } else if (!open.isEmpty() && !closing) {
+            Open &t = open.last();
+            if (m.capturedView(2).compare(QLatin1String("tr"), Qt::CaseInsensitive) == 0) {
+                t.columns = std::max(t.columns, t.rowCells);
+                t.rowCells = 0;
+            } else {
+                ++t.cells;
+                ++t.rowCells;
+            }
+        }
+    }
+    while (!open.isEmpty()) {
+        close(); // never closed: the parser closes them at the end
+    }
+    cost += double(html.size() - last) / 256.0;
+    return cost;
 }
 
 QString limitTableDepth(const QString &html, int maxDepth)

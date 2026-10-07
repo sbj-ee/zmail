@@ -33,6 +33,7 @@
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QTextFrame>
 #include <QTextTable>
 #include <QTreeView>
 #include <QtTest>
@@ -888,6 +889,85 @@ private slots:
         }
         QCOMPARE(tableDepth(HtmlFit::prepare(divs)), HtmlFit::kMaxTableDepth);
         QCOMPARE(tableDepth(HtmlFit::prepare(wrap(20, plain, grid))), HtmlFit::kMaxTableDepth);
+    }
+
+    // Nesting is not the only way to stall the window: a wide grid is slow
+    // at any depth. The estimate sees both, prepare() thins tables until the
+    // estimate fits, and the view says so and offers the full layout.
+    void layoutBudgetBoundsWideAndNestedTables()
+    {
+        const auto grid = [](int cols, int rows, const QString &cell) {
+            QString h = QStringLiteral("<table width=\"100%\">");
+            for (int r = 0; r < rows; ++r) {
+                h += QStringLiteral("<tr>");
+                for (int c = 0; c < cols; ++c) {
+                    h += QStringLiteral("<td>") + cell + QStringLiteral("</td>");
+                }
+                h += QStringLiteral("</tr>");
+            }
+            return h + QStringLiteral("</table>");
+        };
+        const QString small = grid(3, 4, QStringLiteral("x"));
+        const QString wide = grid(40, 40, QStringLiteral("x"));
+        const QString nested = grid(2, 2, grid(2, 2, grid(2, 2, grid(2, 2, grid(2, 2, QStringLiteral("x"))))));
+
+        // The estimate: cells times columns, doubled per level of nesting.
+        QCOMPARE(qRound(HtmlFit::layoutCost(QStringLiteral("<p>hello</p>"))), 0);
+        QVERIFY(HtmlFit::layoutCost(small) < 100);
+        QVERIFY(HtmlFit::layoutCost(wide) > HtmlFit::kLayoutBudget);
+        QVERIFY(HtmlFit::layoutCost(nested) > HtmlFit::layoutCost(grid(2, 2, grid(2, 2, QStringLiteral("x")))) * 8);
+        QVERIFY(HtmlFit::layoutCost(grid(1, 1, small)) > HtmlFit::layoutCost(small) * 1.9); // one level down: twice the work
+
+        // No budget: only the standing depth limit. With one: under it.
+        int depth = -1;
+        QCOMPARE(HtmlFit::prepare(wide, 0, &depth), HtmlFit::prepare(wide));
+        QCOMPARE(depth, HtmlFit::kMaxTableDepth);
+        const QString fitted = HtmlFit::prepare(wide, HtmlFit::kLayoutBudget, &depth);
+        QCOMPARE(depth, 0); // a flat grid: nothing to give up but the grid itself
+        QVERIFY(HtmlFit::layoutCost(fitted) <= HtmlFit::kLayoutBudget);
+        QCOMPARE(tableDepth(fitted), 0);
+        HtmlFit::prepare(nested, 600, &depth);
+        QVERIFY2(depth > 0 && depth < 5, qPrintable(QString::number(depth))); // the inner levels go, the outer stay
+        // Ordinary mail is left alone.
+        for (const char *name : {"retail-rx.html"}) {
+            HtmlFit::prepare(fixture(name), HtmlFit::kLayoutBudget, &depth);
+            QCOMPARE(depth, HtmlFit::kMaxTableDepth);
+        }
+
+        MessageView v;
+        v.resize(900, 600);
+        v.show();
+        auto *bar = v.findChild<QWidget *>(QStringLiteral("simplifiedLayoutBar"));
+        QVERIFY(bar && bar->isHidden());
+        ViewMessage m;
+        m.id = QStringLiteral("wide");
+        m.bodyHtml = wide;
+        QElapsedTimer timer;
+        timer.start();
+        v.setMessage(m);
+        const qint64 simplified = timer.elapsed();
+        QVERIFY2(simplified < 1500, qPrintable(QStringLiteral("%1 ms").arg(simplified)));
+        QVERIFY(v.layoutSimplified());
+        QVERIFY(!bar->isHidden());
+        QVERIFY(v.body()->toPlainText().contains(QLatin1Char('x'))); // the content is all there
+        QCOMPARE(v.body()->document()->rootFrame()->childFrames().size(), 0); // as blocks, not a table
+
+        // On request, the layout as sent (slow, and the user was told so).
+        v.findChild<QPushButton *>(QStringLiteral("fullLayoutButton"))->click();
+        QVERIFY(!v.layoutSimplified());
+        QVERIFY(bar->isHidden());
+        QCOMPARE(v.body()->document()->rootFrame()->childFrames().size(), 1);
+        // The next message starts simplified again; a plain one shows no bar.
+        ViewMessage plain;
+        plain.id = QStringLiteral("plain");
+        plain.bodyHtml = small;
+        v.setMessage(plain);
+        QVERIFY(bar->isHidden());
+        m.id = QStringLiteral("wide again");
+        v.setMessage(m);
+        QVERIFY(!bar->isHidden());
+        v.clear();
+        QVERIFY(bar->isHidden());
     }
 
 private:

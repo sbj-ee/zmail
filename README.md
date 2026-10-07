@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.13: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.14: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -52,7 +52,8 @@ the Contacts list separates one contact from the next, and contacts can be
 exported to JSON. New in 0.5.12: the Snooze entry in the message
 right-click menu has its label. New in 0.5.13: the folder under a dragged
 message lights up, and a message's right-click menu can add its sender to
-Contacts. See
+Contacts. New in 0.5.14: a message whose tables would stall the window is
+shown simplified, with a button for the full layout. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -119,7 +120,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.13_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.14_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -142,6 +143,9 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   **Block tracking pixels**.
 - Emoji in subjects and messages use Noto Color Emoji when it's installed
   (`fonts-noto-color-emoji`, recommended by the .deb).
+- A message whose layout would stall the window (very wide or deeply nested
+  tables) is shown simplified, with a **Show full layout** button for when
+  you want it as sent and don't mind the wait.
 - Ctrl+= and Ctrl+- (or Ctrl+wheel) zoom the message; Ctrl+0 resets it.
 - **View → Preview Pane** shows the preview below the list or to its right;
   by default the message gets about two thirds of the space. Drag the divider to resize it; zmail remembers the layout.

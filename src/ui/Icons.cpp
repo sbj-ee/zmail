@@ -51,6 +51,15 @@ QIcon icon(const QString &name, const QColor &color)
     return ic;
 }
 
+QIcon appIcon()
+{
+    QIcon ic;
+    for (int s : {16, 24, 32, 48, 64, 128, 256}) {
+        ic.addFile(QStringLiteral(":/icons/zmail-%1.png").arg(s), QSize(s, s));
+    }
+    return ic;
+}
+
 QIcon swatch(const QColor &color, int size)
 {
     QPixmap pm(size, size);

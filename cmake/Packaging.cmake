@@ -5,6 +5,14 @@ include(GNUInstallDirs)
 install(TARGETS zmail RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES ${CMAKE_SOURCE_DIR}/packaging/zmail.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+# App icon: assets/icons/zmail-<N>.png -> hicolor/<N>x<N>/apps/zmail.png
+# (Icon=zmail in the .desktop file). zmail-1024.png is the master only:
+# hicolor has no 1024x1024 directory.
+foreach(_sz 16 24 32 48 64 128 256 512)
+  install(FILES ${CMAKE_SOURCE_DIR}/assets/icons/zmail-${_sz}.png
+          DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/${_sz}x${_sz}/apps
+          RENAME zmail.png)
+endforeach()
 # Bundled default new-mail chime (also compiled into Qt resources).
 install(FILES ${CMAKE_SOURCE_DIR}/assets/sounds/new-mail.wav
         DESTINATION ${CMAKE_INSTALL_DATADIR}/zmail/sounds)

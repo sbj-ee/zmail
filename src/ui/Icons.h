@@ -13,6 +13,11 @@ namespace zmail::ui {
 // selected rows (QIcon::Selected).
 QIcon icon(const QString &name, const QColor &color = QColor());
 
+// zmail's own app icon (window/taskbar), from the PNG set bundled as
+// :/icons/zmail-<N>.png (assets/icons/zmail-<N>.png; the same files are
+// installed to share/icons/hicolor/<N>x<N>/apps/zmail.png).
+QIcon appIcon();
+
 // Solid rounded swatch used for label colours in lists and trees.
 QIcon swatch(const QColor &color, int size = 12);
 

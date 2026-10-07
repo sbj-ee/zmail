@@ -167,6 +167,16 @@ qt_add_resources(zmail_app "zmail_icons"
   PREFIX "/"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES ${ZMAIL_ICON_FILES})
+# zmail's own app icon (original artwork, see assets/icons/LICENSES) as
+# :/icons/zmail-<N>.png for QApplication::setWindowIcon (ui::appIcon()).
+set(ZMAIL_APP_ICON_FILES)
+foreach(_sz 16 24 32 48 64 128 256)
+  list(APPEND ZMAIL_APP_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/zmail-${_sz}.png")
+endforeach()
+qt_add_resources(zmail_app "zmail_appicon"
+  PREFIX "/"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  FILES ${ZMAIL_APP_ICON_FILES})
 # Bundled CC0 new-mail chime (see assets/sounds/LICENSES) as :/sounds/new-mail.wav
 qt_add_resources(zmail_app "zmail_sounds"
   PREFIX "/"

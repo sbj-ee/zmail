@@ -50,6 +50,12 @@ jobs:
           dpkg-deb -c zmail_*_amd64.deb
           dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/bin/zmail$'
           dpkg-deb -c zmail_*_amd64.deb | grep -q './usr/share/zmail/sounds/new-mail.wav$'
+          dpkg-deb -c zmail_*_amd64.deb > deb-contents.txt
+          for sz in 16 24 32 48 64 128 256 512; do
+            grep -q "./usr/share/icons/hicolor/${sz}x${sz}/apps/zmail.png$" deb-contents.txt
+          done
+          dpkg-deb --fsys-tarfile zmail_*_amd64.deb | tar -xO ./usr/share/applications/zmail.desktop > zmail.desktop.out
+          grep -qx 'Icon=zmail' zmail.desktop.out
           want="$(sed -nE 's/^project\(zmail VERSION ([0-9.]+).*/\1/p' ../CMakeLists.txt)"
           echo "expect Version $want"
           dpkg-deb -f zmail_*_amd64.deb Version | grep -qx "$want"

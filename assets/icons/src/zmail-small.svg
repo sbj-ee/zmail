@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>zmail (small-size variant v4: light gray envelope, 32-48 px)</title>
+  <!-- Small-size zmail icon: larger light envelope with a dim-green edge and
+       bold flap, smaller thickened Z inset on its front so the envelope shows
+       all round it. zterminal palette only. -->
+  <defs>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+    <path id="z" d="M 250 450
+                    C 390 356 590 304 802 270
+                    C 690 410 560 560 440 676
+                    C 580 658 700 628 808 578
+                    C 680 676 470 746 222 822
+                    C 360 670 500 520 640 372
+                    C 520 366 360 390 250 450 Z"/>
+  </defs>
+  <rect x="68" y="72" width="888" height="888" rx="170" fill="#37383d"/>
+  <rect x="124" y="128" width="776" height="776" rx="120" fill="#0a0e11"/>
+  <!-- envelope -->
+  <rect x="176" y="272" width="672" height="480" rx="40" fill="#c8cacd" stroke="#53833e" stroke-width="32"/>
+  <path d="M 204 300 L 512 540 L 820 300" stroke="#8e9196" stroke-width="60" stroke-linejoin="round" stroke-linecap="round" fill="none"/>
+  <path d="M 206 724 L 400 590 M 818 724 L 624 590" stroke="#8e9196" stroke-width="40" stroke-linecap="round" fill="none"/>
+  <!-- Z, scaled to sit inside the envelope front -->
+  <g transform="translate(512 560) scale(0.6) translate(-515 -546)">
+    <use href="#z" fill="#53833e" stroke="#53833e" stroke-width="60" filter="url(#glow)" opacity="0.5"/>
+    <use href="#z" fill="none" stroke="#0a0e11" stroke-width="150" stroke-linejoin="round"/>
+    <use href="#z" fill="#82e164" stroke="#82e164" stroke-width="70" stroke-linejoin="round"/>
+  </g>
+</svg>

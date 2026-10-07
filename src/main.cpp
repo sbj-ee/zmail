@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "core/MailSession.h"
 #include "ui/ComposeWindow.h"
+#include "ui/Icons.h"
 #include "ui/Theme.h"
 #include "version.hpp"
 
@@ -15,6 +16,8 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QString::fromLatin1(zmail::kVersionString));
     QApplication::setOrganizationName(QStringLiteral("sbj-ee"));
     QApplication::setDesktopFileName(QStringLiteral("zmail"));
+    // Window/taskbar icon on X11 (Wayland shells use the .desktop Icon=zmail).
+    QApplication::setWindowIcon(zmail::ui::appIcon());
 
     QCommandLineParser cli;
     cli.setApplicationDescription(QStringLiteral("zmail: Gmail with Eudora-style sounds"));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QSqlDatabase>
 #include <QString>
 #include <QStringList>
@@ -88,6 +89,10 @@ public:
     QList<Contact> contacts(const QString &query = {}, int limit = 500) const;
     QList<Contact> contacts(const ContactQuery &query) const;
     int count(const ContactQuery &query) const; // ignores limit
+    // The contacts a query finds (every one: limit is ignored) as a JSON
+    // document: name, addresses, source, and the user's categories, fields,
+    // comment and hidden flag.
+    QByteArray exportJson(const ContactQuery &query) const;
 
     // Categories exist on their own (an empty one is kept until deleted);
     // a contact can be in several. Names are trimmed; case is kept, but

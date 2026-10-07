@@ -4,7 +4,9 @@
 #include "ui/ContactsWindow.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
 #include <QCheckBox>
 #include <QListWidget>
 #include <QPlainTextEdit>
@@ -341,6 +343,73 @@ private slots:
         QCOMPARE(w.group(), QString::fromLatin1(zmail::ui::ContactsWindow::kAll));
         QCOMPARE(list->count(), 3);
         QVERIFY(s.contact(QStringLiteral("people/2")).categories.isEmpty());
+    }
+
+    // Export: the contacts on show, or all of them, as JSON with the user's
+    // own organisation, in a file nobody else can read.
+    void exportsToJson()
+    {
+        ContactStore s;
+        QVERIFY(s.open(QStringLiteral(":memory:")));
+        google(s, QStringLiteral("people/1"), QStringLiteral("Ada \"Countess\" Lovelace"), QStringLiteral("ada@example.org"));
+        google(s, QStringLiteral("people/2"), QStringLiteral("Brook"), QStringLiteral("brook@example.org"));
+        google(s, QStringLiteral("otherContacts/3"), QStringLiteral("noreply"), QStringLiteral("noreply@shop.example.com"),
+               QStringLiteral("other"));
+        s.addToCategory({QStringLiteral("people/1")}, QStringLiteral("Work"));
+        s.setFields(QStringLiteral("people/1"), {{QStringLiteral("Phone"), QStringLiteral("555 0100")}});
+        s.setComment(QStringLiteral("people/1"), QStringLiteral("Line one\nline two \u2014 caf\u00e9"));
+        s.setHidden({QStringLiteral("otherContacts/3")}, true);
+
+        QTemporaryDir dir;
+        zmail::ui::ContactsWindow w(&s);
+        QVERIFY(w.findChild<QPushButton *>(QStringLiteral("contactsExportButton")));
+        const auto read = [](const QString &path) {
+            QFile f(path);
+            return f.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(f.readAll()).object() : QJsonObject();
+        };
+
+        // What is on show: the Work category.
+        w.showGroup(QStringLiteral("Work"));
+        const QString shown = dir.filePath(QStringLiteral("shown.json"));
+        QVERIFY(w.exportJson(shown, false));
+        QJsonObject doc = read(shown);
+        QCOMPARE(doc.value(QStringLiteral("format")).toString(), QStringLiteral("zmail-contacts"));
+        QCOMPARE(doc.value(QStringLiteral("count")).toInt(), 1);
+        const QJsonObject ada = doc.value(QStringLiteral("contacts")).toArray().first().toObject();
+        QCOMPARE(ada.value(QStringLiteral("name")).toString(), QStringLiteral("Ada \"Countess\" Lovelace"));
+        QCOMPARE(ada.value(QStringLiteral("emails")).toArray().first().toObject().value(QStringLiteral("email")).toString(),
+                 QStringLiteral("ada@example.org"));
+        QCOMPARE(ada.value(QStringLiteral("categories")).toArray().first().toString(), QStringLiteral("Work"));
+        QCOMPARE(ada.value(QStringLiteral("fields")).toArray().first().toObject().value(QStringLiteral("value")).toString(),
+                 QStringLiteral("555 0100"));
+        QCOMPARE(ada.value(QStringLiteral("comment")).toString(), QStringLiteral("Line one\nline two \u2014 caf\u00e9"));
+        QCOMPARE(ada.value(QStringLiteral("hidden")).toBool(), false);
+        QCOMPARE(QFile::permissions(shown) & (QFileDevice::ReadGroup | QFileDevice::ReadOther | QFileDevice::WriteGroup |
+                                               QFileDevice::WriteOther),
+                 QFileDevice::Permissions());
+
+        // Everything, hidden ones too, whatever is on show.
+        const QString all = dir.filePath(QStringLiteral("all.json"));
+        QVERIFY(w.exportJson(all, true));
+        doc = read(all);
+        QCOMPARE(doc.value(QStringLiteral("count")).toInt(), 3);
+        int hidden = 0;
+        for (const auto &v : doc.value(QStringLiteral("contacts")).toArray()) {
+            hidden += v.toObject().value(QStringLiteral("hidden")).toBool();
+        }
+        QCOMPARE(hidden, 1);
+
+        // Nowhere to write: reported, not ignored.
+        QVERIFY(!w.exportJson(dir.filePath(QStringLiteral("no/such/dir/x.json")), true));
+
+        // More than the list's display limit still exports in full.
+        for (int i = 0; i < 2100; ++i) {
+            google(s, QStringLiteral("people/x%1").arg(i), QStringLiteral("Bulk %1").arg(i),
+                   QStringLiteral("bulk%1@example.com").arg(i));
+        }
+        ContactQuery q;
+        q.show = ContactQuery::Show::All;
+        QCOMPARE(QJsonDocument::fromJson(s.exportJson(q)).object().value(QStringLiteral("contacts")).toArray().size(), 2103);
     }
 };
 

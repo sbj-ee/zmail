@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.11: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.12: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -49,7 +49,8 @@ coloured flags, Empty Trash, dragging a message to a folder works again (a
 list reload while the mouse button was down cancelled the drag), and range
 selection always starts from the current message. New in 0.5.11:
 the Contacts list separates one contact from the next, and contacts can be
-exported to JSON. See
+exported to JSON. New in 0.5.12: the Snooze entry in the message
+right-click menu has its label. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -116,7 +117,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.11_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.12_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

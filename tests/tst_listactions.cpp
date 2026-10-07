@@ -159,6 +159,20 @@ private slots:
         // Exactly one of Mark Read / Mark Unread, matching the row.
         QCOMPARE(int(names.contains(QStringLiteral("actionMarkRead"))) +
                      int(names.contains(QStringLiteral("actionMarkUnread"))), 1);
+        // Every row says what it is: no entry without a label (the Snooze
+        // and Flag submenus are rows too).
+        QStringList submenus;
+        for (QAction *a : menu->actions()) {
+            if (a->isSeparator() || !a->isVisible()) {
+                continue;
+            }
+            QVERIFY2(!a->text().trimmed().isEmpty(), qPrintable(a->objectName()));
+            if (a->menu()) {
+                submenus << a->text().remove(QLatin1Char('&'));
+            }
+        }
+        QVERIFY2(submenus.contains(QStringLiteral("Snooze")), qPrintable(submenus.join(QLatin1Char(','))));
+        QVERIFY2(submenus.contains(QStringLiteral("Flag")), qPrintable(submenus.join(QLatin1Char(','))));
         // The menu shows the menu-bar shortcut (it's the same action).
         QAction *del = w.findChild<QAction *>(QStringLiteral("menuActionDelete"));
         QCOMPARE(del->shortcut(), QKeySequence(QKeySequence::Delete));

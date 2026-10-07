@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.4: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.5: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -32,7 +32,9 @@ no longer livelocks the UI thread. New in 0.5.4:
 sync fixes (snoozes survive a full resync, a failed fetch no longer skips
 mail, folders can't get stuck loading), a faster message list and cache,
 interactive Gmail calls ahead of background sync, a stricter HTML sanitizer,
-and the theme editor's colour picker no longer freezes it on Wayland. See
+and the theme editor's colour picker no longer freezes it on Wayland. New in 0.5.5:
+a zmail app icon (a green Z on a light envelope, matching zterminal's style),
+installed at all Linux hicolor sizes, plus a window icon. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -99,7 +101,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.4_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.5_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

@@ -8,6 +8,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
+#include <QVariant>
 #include <QtMath>
 #include <algorithm>
 
@@ -94,8 +95,22 @@ bool ContactStore::open(const QString &path)
 
 bool ContactStore::migrate()
 {
-    // schema 1 is the initial contacts layout; future ALTERs go here.
-    return true;
+    // schema 1 is the initial contacts layout. Schema 2 (0.5.9) adds the
+    // user's own organisation. No foreign keys to contacts: a Google resync
+    // deletes those rows and must not take these with them.
+    const bool ok =
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS categories (name TEXT PRIMARY KEY COLLATE NOCASE)")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS contact_categories (contact_id TEXT NOT NULL, "
+                            "category TEXT NOT NULL COLLATE NOCASE, PRIMARY KEY (contact_id, category))")) &&
+        exec(QStringLiteral("CREATE INDEX IF NOT EXISTS contact_categories_category ON contact_categories(category)")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS contact_fields (contact_id TEXT NOT NULL, position INTEGER NOT NULL, "
+                            "name TEXT NOT NULL, value TEXT, PRIMARY KEY (contact_id, position))")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS contact_notes (contact_id TEXT PRIMARY KEY, "
+                            "comment TEXT, hidden INTEGER DEFAULT 0)"));
+    if (ok) {
+        setMeta(QStringLiteral("schema"), QStringLiteral("2"));
+    }
+    return ok;
 }
 
 QString ContactStore::meta(const QString &key) const
@@ -155,6 +170,12 @@ void ContactStore::upsertContact(const Contact &c)
 void ContactStore::removeContact(const QString &id)
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
+    // Removed for good (unlike a resync): its organisation goes with it.
+    for (const char *table : {"contact_categories", "contact_fields", "contact_notes"}) {
+        q.prepare(QStringLiteral("DELETE FROM %1 WHERE contact_id = ?").arg(QLatin1String(table)));
+        q.addBindValue(id);
+        q.exec();
+    }
     q.prepare(QStringLiteral("DELETE FROM contacts WHERE id = ?"));
     q.addBindValue(id);
     q.exec();
@@ -189,7 +210,282 @@ Contact ContactStore::contact(const QString &id) const
     if (!c.emails.isEmpty()) {
         c.trusted = isTrusted(c.emails.first().email);
     }
+    q.prepare(QStringLiteral("SELECT g.name FROM contact_categories cc JOIN categories g ON g.name = cc.category "
+                             "WHERE cc.contact_id = ? ORDER BY g.name COLLATE NOCASE"));
+    q.addBindValue(id);
+    if (q.exec()) {
+        while (q.next()) {
+            c.categories.append(q.value(0).toString());
+        }
+    }
+    q.prepare(QStringLiteral("SELECT name, value FROM contact_fields WHERE contact_id = ? ORDER BY position"));
+    q.addBindValue(id);
+    if (q.exec()) {
+        while (q.next()) {
+            c.fields.append({q.value(0).toString(), q.value(1).toString()});
+        }
+    }
+    q.prepare(QStringLiteral("SELECT comment, hidden FROM contact_notes WHERE contact_id = ?"));
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        c.comment = q.value(0).toString();
+        c.hidden = q.value(1).toBool();
+    }
     return c;
+}
+
+namespace {
+// The WHERE clause for a ContactQuery (alias c = contacts) and its bindings.
+QString contactFilter(const ContactQuery &query, QVariantList *binds)
+{
+    QStringList where;
+    const QString hidden = QStringLiteral("EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND n.hidden = 1)");
+    if (query.show == ContactQuery::Show::Visible) {
+        where << QStringLiteral("NOT ") + hidden;
+    } else if (query.show == ContactQuery::Show::Hidden) {
+        where << hidden;
+    }
+    if (query.uncategorized) {
+        where << QStringLiteral("NOT EXISTS (SELECT 1 FROM contact_categories cc WHERE cc.contact_id = c.id)");
+    } else if (!query.category.trimmed().isEmpty()) {
+        where << QStringLiteral("EXISTS (SELECT 1 FROM contact_categories cc WHERE cc.contact_id = c.id AND cc.category = ?)");
+        binds->append(query.category.trimmed());
+    }
+    const QString search = query.search.trimmed();
+    if (!search.isEmpty()) {
+        where << QStringLiteral(
+            "(c.display_name LIKE ? "
+            "OR EXISTS (SELECT 1 FROM contact_emails e WHERE e.contact_id = c.id AND e.email LIKE ?) "
+            "OR EXISTS (SELECT 1 FROM contact_categories cc WHERE cc.contact_id = c.id AND cc.category LIKE ?) "
+            "OR EXISTS (SELECT 1 FROM contact_fields f WHERE f.contact_id = c.id AND f.value LIKE ?) "
+            "OR EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND n.comment LIKE ?))");
+        const QString like = QLatin1Char('%') + search + QLatin1Char('%');
+        for (int i = 0; i < 5; ++i) {
+            binds->append(like);
+        }
+    }
+    return where.isEmpty() ? QString() : QStringLiteral(" WHERE ") + where.join(QStringLiteral(" AND "));
+}
+} // namespace
+
+QList<Contact> ContactStore::contacts(const ContactQuery &query) const
+{
+    QList<Contact> out;
+    QVariantList binds;
+    const QString where = contactFilter(query, &binds);
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT c.id FROM contacts c") + where +
+              QStringLiteral(" ORDER BY c.display_name COLLATE NOCASE, c.id LIMIT ?"));
+    for (const QVariant &b : std::as_const(binds)) {
+        q.addBindValue(b);
+    }
+    q.addBindValue(query.limit);
+    QStringList ids;
+    if (q.exec()) {
+        while (q.next()) {
+            ids.append(q.value(0).toString());
+        }
+    }
+    for (const QString &id : std::as_const(ids)) {
+        out.append(contact(id));
+    }
+    return out;
+}
+
+int ContactStore::count(const ContactQuery &query) const
+{
+    QVariantList binds;
+    const QString where = contactFilter(query, &binds);
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT COUNT(*) FROM contacts c") + where);
+    for (const QVariant &b : std::as_const(binds)) {
+        q.addBindValue(b);
+    }
+    return q.exec() && q.next() ? q.value(0).toInt() : 0;
+}
+
+QString ContactStore::canonicalCategory(const QString &name) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT name FROM categories WHERE name = ?"));
+    q.addBindValue(name.trimmed());
+    return q.exec() && q.next() ? q.value(0).toString() : QString();
+}
+
+QList<CategoryCount> ContactStore::categories() const
+{
+    QList<CategoryCount> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    // Counts are of contacts that exist and aren't hidden: what the list shows.
+    if (q.exec(QStringLiteral(
+            "SELECT g.name, (SELECT COUNT(*) FROM contact_categories cc JOIN contacts c ON c.id = cc.contact_id "
+            "WHERE cc.category = g.name AND NOT EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND n.hidden = 1)) "
+            "FROM categories g ORDER BY g.name COLLATE NOCASE"))) {
+        while (q.next()) {
+            out.append({q.value(0).toString(), q.value(1).toInt()});
+        }
+    }
+    return out;
+}
+
+bool ContactStore::addCategory(const QString &name)
+{
+    const QString n = name.trimmed();
+    if (n.isEmpty()) {
+        return false;
+    }
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO categories(name) VALUES (?)"));
+    q.addBindValue(n);
+    return q.exec();
+}
+
+bool ContactStore::renameCategory(const QString &from, const QString &to)
+{
+    const QString old = canonicalCategory(from);
+    const QString n = to.trimmed();
+    if (old.isEmpty() || n.isEmpty()) {
+        return false;
+    }
+    if (old == n) {
+        return true;
+    }
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    const bool sameCategory = old.compare(n, Qt::CaseInsensitive) == 0; // only the spelling changes
+    if (sameCategory) {
+        q.prepare(QStringLiteral("UPDATE categories SET name = ? WHERE name = ?"));
+        q.addBindValue(n);
+        q.addBindValue(old);
+        q.exec();
+    } else {
+        // Into `to`, which may exist already: its members and these, once each.
+        q.prepare(QStringLiteral("INSERT OR IGNORE INTO categories(name) VALUES (?)"));
+        q.addBindValue(n);
+        q.exec();
+        q.prepare(QStringLiteral("INSERT OR IGNORE INTO contact_categories(contact_id, category) "
+                                 "SELECT contact_id, ? FROM contact_categories WHERE category = ?"));
+        q.addBindValue(n);
+        q.addBindValue(old);
+        q.exec();
+        q.prepare(QStringLiteral("DELETE FROM contact_categories WHERE category = ?"));
+        q.addBindValue(old);
+        q.exec();
+        q.prepare(QStringLiteral("DELETE FROM categories WHERE name = ?"));
+        q.addBindValue(old);
+        q.exec();
+    }
+    return db.commit();
+}
+
+void ContactStore::deleteCategory(const QString &name)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM contact_categories WHERE category = ?"));
+    q.addBindValue(name.trimmed());
+    q.exec();
+    q.prepare(QStringLiteral("DELETE FROM categories WHERE name = ?"));
+    q.addBindValue(name.trimmed());
+    q.exec();
+    db.commit();
+}
+
+void ContactStore::setCategories(const QString &contactId, const QStringList &names)
+{
+    if (contactId.isEmpty()) {
+        return;
+    }
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM contact_categories WHERE contact_id = ?"));
+    q.addBindValue(contactId);
+    q.exec();
+    db.commit();
+    for (const QString &name : names) {
+        addToCategory({contactId}, name);
+    }
+}
+
+void ContactStore::addToCategory(const QStringList &contactIds, const QString &name)
+{
+    if (!addCategory(name)) {
+        return;
+    }
+    const QString stored = canonicalCategory(name);
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO contact_categories(contact_id, category) VALUES (?, ?)"));
+    for (const QString &id : contactIds) {
+        if (id.isEmpty()) {
+            continue;
+        }
+        q.addBindValue(id);
+        q.addBindValue(stored);
+        q.exec();
+    }
+    db.commit();
+}
+
+void ContactStore::setFields(const QString &contactId, const QList<ContactField> &fields)
+{
+    if (contactId.isEmpty()) {
+        return;
+    }
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM contact_fields WHERE contact_id = ?"));
+    q.addBindValue(contactId);
+    q.exec();
+    q.prepare(QStringLiteral("INSERT INTO contact_fields(contact_id, position, name, value) VALUES (?,?,?,?)"));
+    int position = 0;
+    for (const ContactField &f : fields) {
+        if (f.name.trimmed().isEmpty()) {
+            continue;
+        }
+        q.addBindValue(contactId);
+        q.addBindValue(position++);
+        q.addBindValue(f.name.trimmed());
+        q.addBindValue(f.value);
+        q.exec();
+    }
+    db.commit();
+}
+
+void ContactStore::setComment(const QString &contactId, const QString &comment)
+{
+    if (contactId.isEmpty()) {
+        return;
+    }
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("INSERT INTO contact_notes(contact_id, comment) VALUES (?, ?) "
+                             "ON CONFLICT(contact_id) DO UPDATE SET comment = excluded.comment"));
+    q.addBindValue(contactId);
+    q.addBindValue(comment);
+    q.exec();
+}
+
+void ContactStore::setHidden(const QStringList &contactIds, bool hidden)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("INSERT INTO contact_notes(contact_id, hidden) VALUES (?, ?) "
+                             "ON CONFLICT(contact_id) DO UPDATE SET hidden = excluded.hidden"));
+    for (const QString &id : contactIds) {
+        if (id.isEmpty()) {
+            continue;
+        }
+        q.addBindValue(id);
+        q.addBindValue(hidden ? 1 : 0);
+        q.exec();
+    }
+    db.commit();
 }
 
 QList<Contact> ContactStore::contacts(const QString &query, int limit) const
@@ -309,7 +605,8 @@ QList<AutocompleteHit> ContactStore::autocomplete(const QString &prefix, int lim
     QSqlQuery q(QSqlDatabase::database(m_conn));
     q.prepare(QStringLiteral(
         "SELECT e.email, c.display_name FROM contact_emails e JOIN contacts c ON c.id = e.contact_id "
-        "WHERE e.email LIKE ? OR lower(c.display_name) LIKE ? OR lower(c.display_name) LIKE ?"));
+        "WHERE (e.email LIKE ? OR lower(c.display_name) LIKE ? OR lower(c.display_name) LIKE ?) "
+        "AND NOT EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND n.hidden = 1)"));
     q.addBindValue(like);
     q.addBindValue(like); // display name prefix
     q.addBindValue(QLatin1String("% ") + like); // word-prefix in multi-word names
@@ -322,7 +619,10 @@ QList<AutocompleteHit> ContactStore::autocomplete(const QString &prefix, int lim
         }
     }
     q.prepare(QStringLiteral(
-        "SELECT email, sent_count, last_sent_ms FROM address_stats WHERE email LIKE ?"));
+        "SELECT email, sent_count, last_sent_ms FROM address_stats WHERE email LIKE ? "
+        // Hiding a contact hides its addresses, however often they were written to.
+        "AND email NOT IN (SELECT e.email FROM contact_emails e JOIN contact_notes n ON n.contact_id = e.contact_id "
+        "WHERE n.hidden = 1)"));
     q.addBindValue(like);
     if (q.exec()) {
         while (q.next()) {

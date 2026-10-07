@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.5.8: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.5.9: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -42,7 +42,9 @@ message (a move drops the other labels; drag onto In to move back). New in 0.5.7
 deleting a message takes it out of its folder, and right-click a folder for
 Empty Folder. New in 0.5.8: a folder whose list is too short to scroll now
 loads the rest of its mail (it could show 2 messages under a count of 212),
-and the 0.5.7 startup pass that removed labels from mail in Trash is gone. See
+and the 0.5.7 startup pass that removed labels from mail in Trash is gone. New in 0.5.9:
+Contacts can be organised (categories, your own fields, a comment per
+contact) and hidden; all of it local, none of it written to Google. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -109,7 +111,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.5.8_amd64.deb
+cd build && cpack -G DEB   # zmail_0.5.9_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -144,6 +146,11 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   short to scroll.
   Right-click a folder for **Empty Folder** (all its mail to Trash) or
   **Delete Folder** (the label only; its mail is kept).
+- **Settings → Contacts** organises the contacts synced from Google: put
+  them in categories (a contact can be in several), add your own fields
+  (Phone, Company, anything) and a comment, and hide the ones you don't
+  want. Hidden contacts leave the list and are not suggested when you write
+  a message. All of this stays on your computer; nothing is written to Google.
 - **Settings → Message List** sets the message list's text size and the
   space between its rows (Compact / Comfortable / Roomy presets, or any value).
 - **Settings → Row Stripes** sets how strongly alternate rows in the message

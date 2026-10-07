@@ -150,6 +150,7 @@ private:
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
     void showContacts();
     void addSenderToContacts();
+    void addToContacts(const QString &name, const QString &address); // unless already there
     void trashMessage(QString id); // single id (Message window); list actions use trashSelected
     void trashSelected();
     void trashMessages(const QStringList &ids);

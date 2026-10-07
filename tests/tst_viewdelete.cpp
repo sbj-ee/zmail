@@ -5,6 +5,7 @@
 // the row and the selection go back where they were and the error is shown.
 // All mail here is fake (MockGoogle, example.com addresses).
 #include "MainWindow.hpp"
+#include "core/ContactStore.h"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/SyncEngine.h"
@@ -18,6 +19,7 @@
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -51,6 +53,7 @@ SessionOptions mockOptions(MockGoogle &g, MemoryTokenStore *store)
     o.apiBase = g.apiBase();
     o.revokeUri = g.revokeUri();
     o.cachePathOverride = QStringLiteral(":memory:");
+    o.contactsPathOverride = QStringLiteral(":memory:");
     o.rememberAccount = false;
     o.pollIntervalMs = 3600 * 1000;
     o.backoffBaseMs = 5;
@@ -280,6 +283,58 @@ private slots:
         QCOMPARE(rows(), (QList<int>{0, 1, 2}));
     }
 
+    // Right-click a message: its sender can be added to Contacts, unless
+    // that address is a contact already.
+    void contextMenuAddsTheSenderToContacts()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const QString address = QStringLiteral("priya.raman@example.com");
+        QVERIFY(f.session->contacts() && f.session->contacts()->isOpen());
+        QVERIFY(!f.session->contacts()->hasEmail(address));
+        const auto openMenu = [&]() -> QMenu * {
+            emit f.list->customContextMenuRequested(f.list->visualRect(f.list->currentIndex()).center());
+            QMenu *found = nullptr;
+            (void)QTest::qWaitFor([&] {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible() && m->objectName() == QLatin1String("messageListMenu")) {
+                        found = m;
+                    }
+                }
+                return found != nullptr;
+            }, 3000);
+            return found;
+        };
+        const auto addAction = [](QMenu *menu) -> QAction * {
+            for (QAction *a : menu->actions()) {
+                if (a->objectName() == QLatin1String("actionAddToContacts")) {
+                    return a;
+                }
+            }
+            return nullptr;
+        };
+        QMenu *menu = openMenu();
+        QVERIFY(menu);
+        QAction *add = addAction(menu);
+        QVERIFY(add);
+        QVERIFY(add->text().contains(address));
+        add->trigger();
+        menu->close();
+        QVERIFY(f.session->contacts()->hasEmail(address));
+        const QList<Contact> saved = f.session->contacts()->contacts(address, 10);
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.first().displayName, QStringLiteral("Priya Raman"));
+        QCOMPARE(saved.first().source, QStringLiteral("local"));
+
+        // Already a contact (hidden ones count too): not offered again.
+        f.session->contacts()->setHidden({saved.first().id}, true);
+        menu = openMenu();
+        QVERIFY(menu);
+        QVERIFY(!addAction(menu));
+        menu->close();
+        QCOMPARE(f.session->contacts()->contacts(address, 10).size(), 1);
+    }
+
     // Drag a message from the list onto a folder in the sidebar.
     void dragOntoAFolderMovesTheMessage()
     {
@@ -311,12 +366,42 @@ private slots:
         QDragEnterEvent enter(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(tree->viewport(), &enter);
         QVERIFY(enter.isAccepted());
+        QCOMPARE(tree->property("dropTarget").toString(), QString());
         QDragMoveEvent move(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(tree->viewport(), &move);
         QVERIFY(move.isAccepted());
+        // The folder under the drag is lit...
+        QCOMPARE(tree->property("dropTarget").toString(), QLatin1String("gmail:") + kLabel);
+        const QPoint rowEdge(tree->viewport()->width() - 4, at.y()); // right of the text, inside the row
+        const QColor lit = tree->viewport()->grab().toImage().pixelColor(rowEdge);
+        // ...a row that takes no mail is not (the "Gmail Labels" heading)...
+        QTreeWidgetItem *heading = folder->parent();
+        QVERIFY(heading);
+        QDragMoveEvent off(tree->visualItemRect(heading).center(), Qt::CopyAction | Qt::MoveAction, mime.get(),
+                           Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &off);
+        QVERIFY(!off.isAccepted());
+        QCOMPARE(tree->property("dropTarget").toString(), QString());
+        const QColor plain = tree->viewport()->grab().toImage().pixelColor(rowEdge);
+        QVERIFY2(lit != plain, qPrintable(lit.name() + QLatin1Char(' ') + plain.name())); // it is drawn differently
+        // ...and leaving the sidebar puts it out.
+        QDragMoveEvent back(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &back);
+        QCOMPARE(tree->property("dropTarget").toString(), QLatin1String("gmail:") + kLabel);
+        QDragLeaveEvent leave;
+        QApplication::sendEvent(tree->viewport(), &leave);
+        QCOMPARE(tree->property("dropTarget").toString(), QString());
+        // Back in, and dropped.
+        QDragEnterEvent again(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &again);
+        QDragMoveEvent over(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(tree->viewport(), &over);
+        QVERIFY(over.isAccepted());
+        QCOMPARE(tree->property("dropTarget").toString(), QLatin1String("gmail:") + kLabel);
         QDropEvent drop(at, Qt::CopyAction | Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
         QApplication::sendEvent(tree->viewport(), &drop);
         QVERIFY(drop.isAccepted());
+        QCOMPARE(tree->property("dropTarget").toString(), QString()); // dropped: no longer lit
         QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(kLabel), 10000);
         QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000); // it left the Inbox list

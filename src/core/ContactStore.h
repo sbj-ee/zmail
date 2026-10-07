@@ -108,6 +108,7 @@ public:
     void setHidden(const QStringList &contactIds, bool hidden);
     // Local-only contact from a sender (never writes to Google).
     QString addLocalContact(const QString &displayName, const QString &email);
+    bool hasEmail(const QString &email) const; // some contact, hidden or not, has this address
 
     void setTrusted(const QString &email, bool trusted);
     bool isTrusted(const QString &email) const;

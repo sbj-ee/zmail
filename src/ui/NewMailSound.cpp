@@ -102,4 +102,19 @@ void NewMailSound::playPreview()
     playResolved();
 }
 
+void NewMailSound::playFile(const QString &path, bool preview)
+{
+    if (!m_enabled && !preview) {
+        return;
+    }
+    if (!isUsableSoundFile(path)) {
+        playResolved();
+        return;
+    }
+    ++m_plays;
+    ensureEffect();
+    m_effect->setSource(QUrl::fromLocalFile(path));
+    m_effect->play();
+}
+
 } // namespace zmail::ui

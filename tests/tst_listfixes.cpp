@@ -237,7 +237,7 @@ private slots:
                 }
             }
         }
-        QCOMPARE(placeholders, 6); // Mark as Suspicious became Mark as Junk; Snooze is implemented
+        QCOMPARE(placeholders, 5); // Mark as Suspicious became Mark as Junk; Snooze and Filters (Rules) are implemented
         for (const char *gone : {"&Save Attachments\u2026", "&Print\u2026", "&Copy", "View as &Plain Text",
                                  "&Account\u2026"}) {
             for (QAction *a : w.findChildren<QAction *>()) {

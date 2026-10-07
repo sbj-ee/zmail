@@ -5,6 +5,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -302,6 +305,41 @@ int ContactStore::count(const ContactQuery &query) const
         q.addBindValue(b);
     }
     return q.exec() && q.next() ? q.value(0).toInt() : 0;
+}
+
+QByteArray ContactStore::exportJson(const ContactQuery &query) const
+{
+    ContactQuery all = query;
+    all.limit = -1; // SQLite: no limit
+    QJsonArray contacts;
+    for (const Contact &c : this->contacts(all)) {
+        QJsonArray emails;
+        for (const ContactEmail &e : c.emails) {
+            emails.append(QJsonObject{{QStringLiteral("email"), e.email}, {QStringLiteral("primary"), e.primary}});
+        }
+        QJsonArray fields;
+        for (const ContactField &f : c.fields) {
+            fields.append(QJsonObject{{QStringLiteral("name"), f.name}, {QStringLiteral("value"), f.value}});
+        }
+        QJsonObject o{{QStringLiteral("name"), c.displayName},
+                      {QStringLiteral("emails"), emails},
+                      {QStringLiteral("source"), c.source},
+                      {QStringLiteral("categories"), QJsonArray::fromStringList(c.categories)},
+                      {QStringLiteral("fields"), fields},
+                      {QStringLiteral("comment"), c.comment},
+                      {QStringLiteral("hidden"), c.hidden},
+                      {QStringLiteral("trusted"), c.trusted}};
+        if (!c.googleResource.isEmpty()) {
+            o.insert(QStringLiteral("googleResource"), c.googleResource);
+        }
+        contacts.append(o);
+    }
+    const QJsonObject doc{{QStringLiteral("format"), QStringLiteral("zmail-contacts")},
+                          {QStringLiteral("version"), 1},
+                          {QStringLiteral("exported"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+                          {QStringLiteral("count"), contacts.size()},
+                          {QStringLiteral("contacts"), contacts}};
+    return QJsonDocument(doc).toJson(QJsonDocument::Indented);
 }
 
 QString ContactStore::canonicalCategory(const QString &name) const

@@ -4,6 +4,14 @@
 #include "Icons.h"
 
 #include <QAbstractButton>
+#include <QStyledItemDelegate>
+#include <QStandardPaths>
+#include <QSaveFile>
+#include <QPainter>
+#include <QFileDialog>
+#include <QDir>
+#include <QDate>
+#include <QApplication>
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -26,6 +34,56 @@ namespace zmail::ui {
 
 namespace {
 constexpr int kListLimit = 2000;
+
+constexpr int kNameRole = Qt::UserRole + 1;
+constexpr int kDetailRole = Qt::UserRole + 2;
+
+// One contact per row: the name in bold over its addresses and categories,
+// with a rule underneath so it is plain where one contact ends and the next
+// begins.
+class ContactRowDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &) const override
+    {
+        QFont bold = option.font;
+        bold.setBold(true);
+        return QSize(120, QFontMetrics(bold).height() + option.fontMetrics.height() + 2 * kPad + 3);
+    }
+    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem o = option;
+        initStyleOption(&o, index);
+        o.text.clear(); // the panel (selection, hover) only
+        const QWidget *w = o.widget;
+        (w ? w->style() : QApplication::style())->drawControl(QStyle::CE_ItemViewItem, &o, p, w);
+        const bool selected = o.state & QStyle::State_Selected;
+        const QPalette::ColorGroup group = (o.state & QStyle::State_Active) ? QPalette::Active : QPalette::Inactive;
+        const QRect r = o.rect.adjusted(8, kPad, -8, -kPad - 1);
+        p->save();
+        QFont bold = o.font;
+        bold.setBold(true);
+        const QFontMetrics bm(bold);
+        p->setFont(bold);
+        p->setPen(o.palette.color(group, selected ? QPalette::HighlightedText : QPalette::Text));
+        p->drawText(QRect(r.left(), r.top(), r.width(), bm.height()), Qt::AlignLeft | Qt::AlignVCenter,
+                    bm.elidedText(index.data(kNameRole).toString(), Qt::ElideRight, r.width()));
+        p->setFont(o.font);
+        QColor dim = o.palette.color(group, selected ? QPalette::HighlightedText : QPalette::Text);
+        dim.setAlphaF(selected ? 0.85 : 0.65);
+        p->setPen(dim);
+        p->drawText(QRect(r.left(), r.top() + bm.height() + 1, r.width(), o.fontMetrics.height()),
+                    Qt::AlignLeft | Qt::AlignVCenter,
+                    o.fontMetrics.elidedText(index.data(kDetailRole).toString(), Qt::ElideRight, r.width()));
+        p->setPen(o.palette.color(QPalette::Mid));
+        p->drawLine(o.rect.bottomLeft(), o.rect.bottomRight());
+        p->restore();
+    }
+
+private:
+    static constexpr int kPad = 5;
+};
 
 bool isCategory(const QString &group)
 {
@@ -94,6 +152,8 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     m_list->setObjectName(QStringLiteral("contactsList"));
     m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_list->setItemDelegate(new ContactRowDelegate(m_list));
+    m_list->setUniformItemSizes(true);
     ml->addWidget(m_list, 1);
     auto *listButtons = new QHBoxLayout;
     m_hide = new QPushButton(middle);
@@ -199,6 +259,30 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     syncBtn->setAutoDefault(false);
     syncBtn->setEnabled(m_sync != nullptr);
     row->addWidget(syncBtn);
+    auto *exportBtn = new QPushButton(tr("Export"), this);
+    exportBtn->setObjectName(QStringLiteral("contactsExportButton"));
+    exportBtn->setAutoDefault(false);
+    exportBtn->setToolTip(tr("Save contacts, with their categories, fields and comments, as a JSON file"));
+    auto *exportMenu = new QMenu(exportBtn);
+    const auto ask = [this](bool everything) {
+        const QString path = QFileDialog::getSaveFileName(
+            this, tr("Export Contacts"),
+            QDir(QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation))
+                .filePath(QStringLiteral("zmail-contacts-%1.json").arg(QDate::currentDate().toString(Qt::ISODate))),
+            tr("JSON files (*.json)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        if (!exportJson(path, everything)) {
+            QMessageBox::warning(this, tr("Export Contacts"), tr("Couldn't write %1.").arg(path));
+        }
+    };
+    exportMenu->addAction(tr("The Contacts Shown\u2026"), this, [ask]() { ask(false); })
+        ->setObjectName(QStringLiteral("actionExportShown"));
+    exportMenu->addAction(tr("All Contacts, Hidden Ones Too\u2026"), this, [ask]() { ask(true); })
+        ->setObjectName(QStringLiteral("actionExportAll"));
+    exportBtn->setMenu(exportMenu);
+    row->addWidget(exportBtn);
     auto *local = new QLabel(tr("Categories, fields, comments and hidden contacts stay on this computer."), this);
     local->setForegroundRole(QPalette::PlaceholderText);
     row->addWidget(local, 1);
@@ -374,6 +458,8 @@ void ContactsWindow::refreshList()
             }
             auto *item = new QListWidgetItem(QStringLiteral("%1\n%2").arg(c.displayName, second), m_list);
             item->setData(Qt::UserRole, c.id);
+            item->setData(kNameRole, c.displayName);
+            item->setData(kDetailRole, second);
             QString tip = sourceText(c);
             if (c.trusted) {
                 tip += tr(" · trusted");
@@ -535,6 +621,24 @@ void ContactsWindow::removeCurrentField()
         m_loading = was;
     }
     saveFields();
+}
+
+bool ContactsWindow::exportJson(const QString &path, bool everything)
+{
+    ContactQuery q = query();
+    if (everything) {
+        q = ContactQuery();
+        q.show = ContactQuery::Show::All;
+    }
+    const int n = m_store->count(q);
+    QSaveFile file(path);
+    // Names, addresses and private notes: readable by the user only.
+    if (!file.open(QIODevice::WriteOnly) || file.write(m_store->exportJson(q)) < 0 ||
+        !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) || !file.commit()) {
+        return false;
+    }
+    m_status->setText(tr("Exported %n contact(s) to %1", nullptr, n).arg(QDir::toNativeSeparators(path)));
+    return true;
 }
 
 QString ContactsWindow::askCategoryName(const QString &title, const QString &current)

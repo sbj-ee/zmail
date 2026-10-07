@@ -58,6 +58,10 @@ public:
     void removeSelectedFromCategory(const QString &name);
     void addField(const QString &name);
     void removeCurrentField();
+    // Write the contacts on show (this category and search), or with
+    // everything=true all of them, hidden ones included, to a JSON file
+    // only the user can read. False if the file couldn't be written.
+    bool exportJson(const QString &path, bool everything);
 
 public slots:
     void refresh();

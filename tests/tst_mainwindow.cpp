@@ -2,6 +2,7 @@
 #include "MainWindow.hpp"
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
+#include "ui/ListDialog.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "version.hpp"
@@ -17,6 +18,7 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QSlider>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -37,7 +39,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.5.5"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.5.6"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -54,6 +56,86 @@ private slots:
             titles << a->text().remove(QLatin1Char('&'));
         }
         QCOMPARE(titles, (QStringList{"File", "Edit", "View", "Message", "Settings", "Help"}));
+    }
+
+    void messageListTextSizeAndSpacingAreRemembered()
+    {
+        QSettings().remove(QStringLiteral("ui/listFontSize"));
+        QSettings().remove(QStringLiteral("ui/listRowSpacing"));
+        {
+            MainWindow w;
+            w.resize(1000, 700);
+            w.show();
+            auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+            QVERIFY(list && list->model()->rowCount() > 0);
+            const auto rowHeight = [list]() { return list->visualRect(list->model()->index(0, 0)).height(); };
+            QVERIFY(w.findChild<QAction *>(QStringLiteral("actionMessageList")));
+
+            // Defaults: the application font, a little air between rows.
+            QCOMPARE(w.listFontSize(), kListFontDefault);
+            QCOMPARE(w.listRowSpacing(), kListSpacingDefault);
+            const int appPt = QFontInfo(QApplication::font()).pointSize();
+            QCOMPARE(QFontInfo(list->font()).pointSize(), appPt);
+            const int comfortable = rowHeight();
+
+            // The dialog previews live; Cancel puts everything back.
+            ListDialog *dlg = w.showListDialog();
+            QCOMPARE(dlg->fontSize(), kListFontDefault);
+            dlg->findChild<QPushButton *>(QStringLiteral("listPresetCompact"))->click();
+            QCOMPARE(rowHeight(), comfortable - kListSpacingDefault);
+            dlg->findChild<QPushButton *>(QStringLiteral("listPresetRoomy"))->click();
+            QCOMPARE(rowHeight(), comfortable - kListSpacingDefault + 12);
+            dlg->fontSpin()->setValue(appPt + 6);
+            QCOMPARE(QFontInfo(list->font()).pointSize(), appPt + 6);
+            QVERIFY(rowHeight() > comfortable - kListSpacingDefault + 12); // taller text, taller rows
+            dlg->reject();
+            QCOMPARE(w.listFontSize(), kListFontDefault);
+            QCOMPARE(QFontInfo(list->font()).pointSize(), appPt);
+            QCOMPARE(rowHeight(), comfortable);
+
+            // OK keeps them. Unread rows are bold at the list's size, and
+            // the column headers follow.
+            dlg = w.showListDialog();
+            dlg->fontSpin()->setValue(appPt + 4);
+            dlg->spacingSpin()->setValue(10);
+            dlg->accept();
+            QCOMPARE(w.listFontSize(), appPt + 4);
+            QCOMPARE(w.listRowSpacing(), 10);
+            QCOMPARE(QFontInfo(list->header()->font()).pointSize(), appPt + 4);
+            bool sawBold = false;
+            for (int r = 0; r < list->model()->rowCount(); ++r) {
+                const QVariant v = list->model()->index(r, MessageListModel::Subject).data(Qt::FontRole);
+                if (v.isValid()) {
+                    const QFont f = v.value<QFont>().resolve(list->font());
+                    QVERIFY(f.bold());
+                    QCOMPARE(QFontInfo(f).pointSize(), appPt + 4);
+                    sawBold = true;
+                }
+            }
+            QVERIFY(sawBold);
+
+            // "Default" hands the size back to the application font.
+            dlg = w.showListDialog();
+            QCOMPARE(dlg->fontSpin()->value(), appPt + 4);
+            dlg->findChild<QPushButton *>(QStringLiteral("listFontDefault"))->click();
+            QCOMPARE(dlg->fontSize(), kListFontDefault);
+            QCOMPARE(QFontInfo(list->font()).pointSize(), appPt);
+            dlg->reject();
+            QCOMPARE(w.listFontSize(), appPt + 4);
+
+            // Out-of-range values are clamped.
+            w.setListAppearance(500, -3);
+            QCOMPARE(w.listFontSize(), kListFontMax);
+            QCOMPARE(w.listRowSpacing(), 0);
+            w.setListAppearance(appPt + 4, 10);
+        }
+        const int appPt = QFontInfo(QApplication::font()).pointSize();
+        QCOMPARE(QSettings().value(QStringLiteral("ui/listFontSize")).toInt(), appPt + 4);
+        MainWindow again;
+        QCOMPARE(again.listFontSize(), appPt + 4);
+        QCOMPARE(again.listRowSpacing(), 10);
+        QSettings().remove(QStringLiteral("ui/listFontSize"));
+        QSettings().remove(QStringLiteral("ui/listRowSpacing"));
     }
 
     void rowStripesSliderIsRemembered()

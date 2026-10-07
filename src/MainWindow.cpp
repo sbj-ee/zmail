@@ -27,6 +27,7 @@
 #include "ui/Icons.h"
 #include "ui/MessageListModel.h"
 #include "ui/SelectionAfterRemoval.h"
+#include "ui/ListDialog.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
@@ -95,8 +96,21 @@ public:
     }
 };
 
+// Message-list rows: the space between them is the user's choice
+// (Settings > Message List), read from the list's "rowSpacing" property.
+class MessageRowDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QSize sizeHint(const QStyleOptionViewItem &opt, const QModelIndex &index) const override
+    {
+        return QStyledItemDelegate::sizeHint(opt, index) + QSize(0, parent()->property("rowSpacing").toInt());
+    }
+};
+
 // Sidebar mailbox tree: accepts message-list drops onto user Gmail labels
-// (folder-style move). onDrop(labelId, ids) is set by MainWindow.
+// and onto In (folder-style move; back to the Inbox). onDrop(labelId, ids)
+// is set by MainWindow; In is "INBOX".
 class MailboxTree : public QTreeWidget
 {
 public:
@@ -125,7 +139,7 @@ protected:
         }
         QTreeWidgetItem *it = itemAt(e->position().toPoint());
         const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
-        if (isUserLabelKey(key)) {
+        if (!dropLabel(key).isEmpty()) {
             e->acceptProposedAction();
         } else {
             e->ignore();
@@ -135,7 +149,7 @@ protected:
     {
         QTreeWidgetItem *it = itemAt(e->position().toPoint());
         const QString key = it ? it->data(0, Qt::UserRole).toString() : QString();
-        if (!isUserLabelKey(key) || !onDrop) {
+        if (dropLabel(key).isEmpty() || !onDrop) {
             e->ignore();
             return;
         }
@@ -148,15 +162,22 @@ protected:
             }
         }
         e->acceptProposedAction();
-        onDrop(key.mid(6), ids);
+        onDrop(dropLabel(key), ids);
     }
 
 private:
-    static bool isUserLabelKey(const QString &key)
+    // The Gmail label a drop on this row moves to; empty: not a drop target.
+    static QString dropLabel(const QString &key)
     {
+        if (key == QLatin1String("In")) {
+            return QStringLiteral("INBOX");
+        }
         // User labels have Gmail ids like Label_12. System rows under Gmail
         // Labels (STARRED, …) are not folder drop targets.
-        return key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"));
+        if (key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"))) {
+            return key.mid(6);
+        }
+        return {};
     }
 };
 
@@ -459,6 +480,8 @@ void MainWindow::buildMenus()
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
+    QAction *listLook = settings->addAction(tr("Message &List\u2026"), this, [this]() { showListDialog(); });
+    listLook->setObjectName(QStringLiteral("actionMessageList"));
     stripes->setObjectName(QStringLiteral("actionRowStripes"));
 
     QMenu *help = addMenu("menuHelp", tr("&Help"));
@@ -608,6 +631,10 @@ void MainWindow::buildPanes()
     // Room for "888.8 MB" plus padding, at any font size or scale.
     h->resizeSection(MessageListModel::Size,
                      std::max(68, m_list->fontMetrics().horizontalAdvance(QStringLiteral("888.8 MB")) + 18));
+    m_list->setItemDelegate(new MessageRowDelegate(m_list));
+    m_listFontSize = QSettings().value(QStringLiteral("ui/listFontSize"), kListFontDefault).toInt();
+    m_listRowSpacing = QSettings().value(QStringLiteral("ui/listRowSpacing"), kListSpacingDefault).toInt();
+    applyListAppearance();
     connect(m_list->selectionModel(), &QItemSelectionModel::currentChanged, this,
             [this](const QModelIndex &cur) { showMessage(cur); });
 
@@ -1125,6 +1152,54 @@ SoundDialog *MainWindow::showSoundDialog()
         // Keep View/toolbar mute in step with Settings > Sounds.
         setNewMailSoundOn(m_sound->isEnabled());
     });
+    return dlg;
+}
+
+void MainWindow::setListAppearance(int fontSize, int rowSpacing)
+{
+    m_listFontSize = fontSize;
+    m_listRowSpacing = rowSpacing;
+    applyListAppearance(); // clamps
+    QSettings().setValue(QStringLiteral("ui/listFontSize"), m_listFontSize);
+    QSettings().setValue(QStringLiteral("ui/listRowSpacing"), m_listRowSpacing);
+}
+
+void MainWindow::applyListAppearance()
+{
+    m_listFontSize = m_listFontSize <= 0 ? kListFontDefault : std::clamp(m_listFontSize, kListFontMin, kListFontMax);
+    m_listRowSpacing = std::clamp(m_listRowSpacing, 0, kListSpacingMax);
+    if (!m_list) {
+        return;
+    }
+    // Only the size is set, so the family still follows the theme's UI font;
+    // an empty font hands the size back to the application font too.
+    QFont f;
+    if (m_listFontSize != kListFontDefault) {
+        f.setPointSize(m_listFontSize);
+    }
+    m_list->setFont(f);
+    m_list->setProperty("rowSpacing", m_listRowSpacing);
+    // Room for "888.8 MB" plus padding, at any font size or scale.
+    QHeaderView *h = m_list->header();
+    const int size = std::max(68, m_list->fontMetrics().horizontalAdvance(QStringLiteral("888.8 MB")) + 18);
+    if (h->sectionSize(MessageListModel::Size) < size) {
+        h->resizeSection(MessageListModel::Size, size);
+    }
+    m_list->doItemsLayout(); // uniform row heights are measured once
+}
+
+ListDialog *MainWindow::showListDialog()
+{
+    auto *dlg = new ListDialog(m_listFontSize, m_listRowSpacing, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &ListDialog::changed, this, [this](int fontSize, int rowSpacing) {
+        // Live preview without touching the saved values.
+        m_listFontSize = fontSize;
+        m_listRowSpacing = rowSpacing;
+        applyListAppearance();
+    });
+    connect(dlg, &ListDialog::finishedWith, this, &MainWindow::setListAppearance);
+    dlg->show();
     return dlg;
 }
 

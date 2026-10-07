@@ -2,6 +2,7 @@
 
 #include "core/HtmlSanitizer.h"
 
+#include <QPixmap>
 #include <QTextDocument>
 
 namespace zmail::ui {
@@ -9,10 +10,10 @@ namespace zmail::ui {
 QVariant SafeTextEdit::loadResource(int type, const QUrl &name)
 {
     if (type == QTextDocument::ImageResource && name.scheme().compare(QLatin1String("data"), Qt::CaseInsensitive) == 0) {
-        return html::dataImage(name);
+        return QPixmap::fromImage(html::dataImage(name)); // a pixmap: see SafeHtmlView::loadResource
     }
     ++m_blocked;
-    return html::blockedResource();
+    return QPixmap::fromImage(html::blockedResource());
 }
 
 } // namespace zmail::ui

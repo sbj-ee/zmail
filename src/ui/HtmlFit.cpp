@@ -12,6 +12,7 @@
 #include <QTextTable>
 #include <QVariant>
 
+#include <algorithm>
 #include <utility>
 
 namespace zmail::ui::HtmlFit {
@@ -483,7 +484,161 @@ QString prepare(const QString &input)
         pos = m.capturedEnd();
     }
     linked += QStringView(out).mid(pos);
-    return linked;
+    return limitTableDepth(linked);
+}
+
+QString limitTableDepth(const QString &html, int maxDepth)
+{
+    static const QRegularExpression tag(QStringLiteral("<(/?)(table|tbody|thead|tfoot|tr|td|th)\\b([^>]*)>"),
+                                        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression pixels(QStringLiteral("^\\d+(?:\\.\\d+)?(?:px)?$"),
+                                           QRegularExpression::CaseInsensitiveOption);
+    enum Part { TableOpen, TableClose, Row, CellOpen, CellClose };
+    enum Kind { Plain, FixedWidth, Coloured, Grid }; // the order tables are given up in
+    struct Piece { qsizetype start; qsizetype end; int table; Part part; QString align; };
+    struct Table {
+        int parent = -1;
+        int cells = 0;
+        bool fixedWidth = false;
+        bool coloured = false;
+        bool flat = false;
+        bool cellOpen = false; // while writing
+        int depth = 0;         // tables kept above this one
+        int height = 0;        // tables kept on the deepest path from here down, this one included
+        Kind kind() const { return cells > 1 ? Grid : coloured ? Coloured : fixedWidth ? FixedWidth : Plain; }
+    };
+    const auto hasColour = [](const QString &attrs) {
+        const QString style = attr(attrs, QStringLiteral("style"));
+        return isRealColour(lastStyleValue(style, QStringLiteral("background-color"))) ||
+               isRealColour(lastStyleValue(style, QStringLiteral("background"))) ||
+               isRealColour(attr(attrs, QStringLiteral("bgcolor")));
+    };
+
+    QList<Piece> pieces;
+    QList<Table> tables;
+    QList<int> open;
+    int deepest = 0;
+    auto it = tag.globalMatch(html);
+    while (it.hasNext()) {
+        const auto m = it.next();
+        const bool closing = m.capturedLength(1) > 0;
+        const QString name = m.captured(2).toLower();
+        const QString attrs = m.captured(3);
+        Piece p{m.capturedStart(), m.capturedEnd(), -1, Row, {}};
+        if (name == QLatin1String("table")) {
+            if (closing) {
+                if (open.isEmpty()) {
+                    continue; // stray </table>: leave it to the parser
+                }
+                p.table = open.takeLast();
+                p.part = TableClose;
+            } else {
+                Table t;
+                t.parent = open.isEmpty() ? -1 : open.last();
+                const QString style = attr(attrs, QStringLiteral("style"));
+                t.fixedWidth = pixels.match(attr(attrs, QStringLiteral("width"))).hasMatch() ||
+                               pixels.match(lastStyleValue(style, QStringLiteral("width"))).hasMatch();
+                t.coloured = hasColour(attrs);
+                p.table = int(tables.size());
+                p.part = TableOpen;
+                tables.append(t);
+                open.append(p.table);
+                deepest = std::max(deepest, int(open.size()));
+            }
+        } else if (open.isEmpty()) {
+            continue;
+        } else {
+            p.table = open.last();
+            if (name == QLatin1String("td") || name == QLatin1String("th")) {
+                p.part = closing ? CellClose : CellOpen;
+                if (!closing) {
+                    Table &t = tables[p.table];
+                    ++t.cells;
+                    t.coloured = t.coloured || hasColour(attrs);
+                    p.align = attr(attrs, QStringLiteral("align")).toLower();
+                    if (p.align.isEmpty()) {
+                        p.align = lastStyleValue(attr(attrs, QStringLiteral("style")), QStringLiteral("text-align")).toLower();
+                    }
+                }
+            }
+        }
+        pieces.append(p);
+    }
+    if (deepest <= maxDepth) {
+        return html;
+    }
+
+    // Tables are in document order, so a parent always comes before its
+    // children: depths go down the list, heights come back up it.
+    const auto measure = [&tables]() {
+        for (Table &t : tables) {
+            t.height = t.flat ? 0 : 1;
+        }
+        int tallest = 0;
+        for (int i = int(tables.size()) - 1; i >= 0; --i) {
+            const Table &t = tables.at(i);
+            if (t.parent >= 0) {
+                Table &parent = tables[t.parent];
+                parent.height = std::max(parent.height, (parent.flat ? 0 : 1) + t.height);
+            } else {
+                tallest = std::max(tallest, t.height);
+            }
+        }
+        return tallest;
+    };
+    for (Kind kind : {Plain, FixedWidth, Coloured, Grid}) {
+        if (measure() <= maxDepth) {
+            break;
+        }
+        for (Table &t : tables) {
+            if (t.parent >= 0) {
+                const Table &parent = tables.at(t.parent);
+                t.depth = parent.depth + (parent.flat ? 0 : 1);
+            }
+            if (t.flat) {
+                continue;
+            }
+            // One-cell tables: the outermost on a path that is too deep.
+            // Grids: only the ones past the limit, so the innermost.
+            if (kind == Grid ? t.depth >= maxDepth : t.kind() == kind && t.depth + t.height > maxDepth) {
+                t.flat = true;
+            }
+        }
+    }
+
+    static const QStringList alignments = {QStringLiteral("left"), QStringLiteral("center"), QStringLiteral("right")};
+    QString out;
+    out.reserve(html.size());
+    qsizetype last = 0;
+    for (const Piece &p : std::as_const(pieces)) {
+        Table &t = tables[p.table];
+        if (!t.flat) {
+            continue;
+        }
+        out += QStringView(html).mid(last, p.start - last);
+        last = p.end;
+        if (t.cellOpen && p.part != CellClose) {
+            out += QStringLiteral("</div>"); // a cell with no </td>
+            t.cellOpen = false;
+        }
+        switch (p.part) {
+        case TableOpen: out += QStringLiteral("<div>"); break;
+        case TableClose: out += QStringLiteral("</div>"); break;
+        case Row: break;
+        case CellOpen:
+            out += alignments.contains(p.align) ? QStringLiteral("<div align=\"%1\">").arg(p.align) : QStringLiteral("<div>");
+            t.cellOpen = true;
+            break;
+        case CellClose:
+            if (t.cellOpen) {
+                out += QStringLiteral("</div>");
+                t.cellOpen = false;
+            }
+            break;
+        }
+    }
+    out += QStringView(html).mid(last);
+    return out;
 }
 
 void fit(QTextDocument *doc, const Options &opt)

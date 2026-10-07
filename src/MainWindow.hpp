@@ -183,6 +183,7 @@ private:
     void newLabelFolder(const QString &namePrefix = {});
     void renameLabelFolder(const QString &labelId, const QString &currentName);
     void deleteLabelFolder(const QString &labelId, const QString &displayName);
+    void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
     void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
     void setCurrentRead(bool read); // selected rows (Shift/Ctrl multi-select)
     void offerUndoDelete(const QStringList &ids);

@@ -364,6 +364,135 @@ private slots:
         QVERIFY(got.contains(QStringLiteral("STARRED")));
         QVERIFY(!r.cache.message(mid).labels.contains(QStringLiteral("Label_2")));
     }
+
+    // Deleting takes a message out of its folder (Gmail counts trashed mail
+    // that still has the label in the folder's total); Undo puts it back.
+    void trashLeavesTheFolderAndUndoReturnsIt()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
+        const QStringList start{QStringLiteral("STARRED"), QStringLiteral("Label_1")};
+        const QString mid = r.g.addMessage(r.msg(QStringLiteral("Filed"), start), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+        if (!r.cache.contains(mid)) {
+            CachedMessage local;
+            local.id = mid;
+            local.threadId = mid;
+            local.subject = QStringLiteral("Filed");
+            local.labels = start;
+            local.internalDateMs = QDateTime::currentMSecsSinceEpoch();
+            r.cache.upsert(local);
+        }
+
+        QSignalSpy trashed(r.sync.get(), &SyncEngine::trashSucceeded);
+        r.sync->trash(mid);
+        QVERIFY(!r.cache.message(mid).labels.contains(QStringLiteral("Label_1"))); // at once
+        QTRY_COMPARE_WITH_TIMEOUT(trashed.size(), 1, 10000);
+        QStringList got = r.g.messages().value(mid).labels;
+        QVERIFY(got.contains(QStringLiteral("TRASH")));
+        QVERIFY(!got.contains(QStringLiteral("Label_1")));
+        QVERIFY(got.contains(QStringLiteral("STARRED")));
+        QVERIFY(!r.cache.message(mid).labels.contains(QStringLiteral("Label_1")));
+
+        QVERIFY(r.sync->untrash(mid));
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_1")), 10000);
+        got = r.g.messages().value(mid).labels;
+        QVERIFY(!got.contains(QStringLiteral("TRASH")));
+        QTRY_VERIFY(r.cache.message(mid).labels.contains(QStringLiteral("Label_1")));
+
+        // Undo before Gmail has answered: still back in its folder.
+        r.sync->trash(mid);
+        QVERIFY(r.sync->untrash(mid));
+        QTRY_VERIFY_WITH_TIMEOUT(!r.g.messages().value(mid).labels.contains(QStringLiteral("TRASH"))
+                                     && r.g.untrashCalls.size() == 2,
+                                 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_1")), 10000);
+        QTest::qWait(300); // nothing arrives late and takes it off again
+        QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_1")));
+        QVERIFY(r.cache.message(mid).labels.contains(QStringLiteral("Label_1")));
+    }
+
+    // Mail already in Trash with a folder label on it (trashed in Gmail, or
+    // by an older zmail) is taken out of its folders when zmail starts.
+    void startTakesTrashedMailOutOfFolders()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        const QString binned = r.g.addMessage(
+            r.msg(QStringLiteral("Binned"), {QStringLiteral("TRASH"), QStringLiteral("Label_1"), QStringLiteral("Label_2")}), false);
+        const QString kept = r.g.addMessage(r.msg(QStringLiteral("Kept"), {QStringLiteral("Label_1")}), false);
+        const QString plain = r.g.addMessage(r.msg(QStringLiteral("Plain"), {QStringLiteral("TRASH")}), false);
+        r.sync->start();
+        QTRY_COMPARE_WITH_TIMEOUT(r.g.messages().value(binned).labels, QStringList{QStringLiteral("TRASH")}, 20000);
+        QCOMPARE(r.g.messages().value(kept).labels, QStringList{QStringLiteral("Label_1")});
+        QCOMPARE(r.g.messages().value(plain).labels, QStringList{QStringLiteral("TRASH")});
+
+        // Nothing left to clean: it stops there.
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+        QTest::qWait(300);
+        QCOMPARE(r.g.count(QStringLiteral("POST /gmail/v1/users/me/messages/batchModify")), 1);
+    }
+
+    // Right-click > Empty Folder: all of the folder's mail goes to Trash,
+    // cached or not, in pages; the folder stays and other mail is untouched.
+    void emptyFolderTrashesEverythingInIt()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Alerts"), QStringLiteral("user"), {}});
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        QStringList filed;
+        for (int i = 0; i < 520; ++i) { // more than one page of 500
+            filed << r.g.addMessage(r.msg(QStringLiteral("Alert %1").arg(i),
+                                          i % 2 ? QStringList{QStringLiteral("Label_1")}
+                                                : QStringList{QStringLiteral("INBOX"), QStringLiteral("UNREAD"),
+                                                              QStringLiteral("Label_1")}),
+                                    false);
+        }
+        const QString other = r.g.addMessage(r.msg(QStringLiteral("Family"), {QStringLiteral("Label_2")}), false);
+        const QString inbox = r.g.addMessage(r.msg(QStringLiteral("Inbox"), {QStringLiteral("INBOX")}), false);
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 30000);
+
+        r.sync->emptyLabel(QStringLiteral("Label_1"));
+        const auto left = [&r, &filed]() {
+            int n = 0;
+            for (const QString &id : filed) {
+                n += r.g.messages().value(id).labels.contains(QStringLiteral("Label_1"));
+            }
+            return n;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(left(), 0, 30000);
+        for (const QString &id : std::as_const(filed)) {
+            const QStringList l = r.g.messages().value(id).labels;
+            QVERIFY(l.contains(QStringLiteral("TRASH")));
+            QVERIFY(!l.contains(QStringLiteral("INBOX")));
+        }
+        QCOMPARE(r.g.messages().value(other).labels, QStringList{QStringLiteral("Label_2")});
+        QCOMPARE(r.g.messages().value(inbox).labels, QStringList{QStringLiteral("INBOX")});
+        // The cache follows for the mail it had (the Inbox half was synced).
+        QTRY_COMPARE_WITH_TIMEOUT(r.cache.messageIds(QStringLiteral("Label_1")).size(), 0, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(r.cache.labels().size() > 0 && labelTotal(r, QStringLiteral("Label_1")) == 0, true, 20000);
+        bool stillThere = false;
+        for (const CachedLabel &l : r.cache.labels()) {
+            stillThere = stillThere || l.id == QLatin1String("Label_1");
+        }
+        QVERIFY(stillThere);
+    }
+
+    static int labelTotal(Rig &r, const QString &id)
+    {
+        for (const CachedLabel &l : r.cache.labels()) {
+            if (l.id == id) {
+                return l.total;
+            }
+        }
+        return -1;
+    }
 };
 
 QTEST_MAIN(TstLabels)

@@ -98,6 +98,7 @@ private:
     QLabel *m_name = nullptr;
     QLabel *m_emails = nullptr;
     QLabel *m_source = nullptr;
+    QLineEdit *m_nickname = nullptr;
     QCheckBox *m_hidden = nullptr;
     QListWidget *m_categoryChecks = nullptr;
     QTableWidget *m_fields = nullptr;

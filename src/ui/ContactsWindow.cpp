@@ -195,6 +195,14 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     m_source->setForegroundRole(QPalette::PlaceholderText);
     m_source->setWordWrap(true);
     dl->addWidget(m_source);
+    auto *nickRow = new QFormLayout;
+    m_nickname = new QLineEdit(m_detail);
+    m_nickname->setObjectName(QStringLiteral("contactNickname"));
+    m_nickname->setPlaceholderText(tr("A short name to type in To instead of the address"));
+    m_nickname->setToolTip(tr("Type the nickname in To, Cc or Bcc and zmail fills in the address. "
+                              "A category's name works the same way, for everyone in it."));
+    nickRow->addRow(tr("Nickname:"), m_nickname);
+    dl->addLayout(nickRow);
     m_hidden = new QCheckBox(tr("Hide this contact"), m_detail);
     m_hidden->setObjectName(QStringLiteral("contactHidden"));
     m_hidden->setToolTip(tr("Hidden contacts are left out of this list and are not suggested when you write a message."));
@@ -348,6 +356,11 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     connect(m_fields, &QTableWidget::itemSelectionChanged, this,
             [this]() { m_removeField->setEnabled(m_fields->currentRow() >= 0); });
     connect(m_removeField, &QPushButton::clicked, this, &ContactsWindow::removeCurrentField);
+    connect(m_nickname, &QLineEdit::textEdited, this, [this](const QString &text) {
+        if (!m_loading && !m_detailId.isEmpty()) {
+            m_store->setNickname(m_detailId, text);
+        }
+    });
     connect(m_comment, &QPlainTextEdit::textChanged, this, [this]() {
         if (!m_loading && !m_detailId.isEmpty()) {
             m_store->setComment(m_detailId, m_comment->toPlainText());
@@ -425,7 +438,9 @@ void ContactsWindow::refreshGroups()
     none.uncategorized = true;
     add(tr("Uncategorized"), m_store->count(none), QString::fromLatin1(kUncategorized));
     for (const CategoryCount &c : cats) {
-        add(c.name, c.contacts, c.name)->setIcon(icon(QStringLiteral("folder")));
+        QListWidgetItem *row = add(c.name, c.contacts, c.name);
+        row->setIcon(icon(QStringLiteral("folder")));
+        row->setToolTip(tr("Type \u201c%1\u201d in To, Cc or Bcc to write to everyone in this category.").arg(c.name));
     }
     ContactQuery hidden;
     hidden.show = ContactQuery::Show::Hidden;
@@ -453,6 +468,9 @@ void ContactsWindow::refreshList()
                 emails << e.email;
             }
             QString second = emails.isEmpty() ? tr("(no email)") : emails.join(QStringLiteral(", "));
+            if (!c.nickname.isEmpty()) {
+                second = QStringLiteral("\u201c%1\u201d   ").arg(c.nickname) + second;
+            }
             if (!c.categories.isEmpty()) {
                 second += QStringLiteral("   • ") + c.categories.join(QStringLiteral(", "));
             }
@@ -539,6 +557,9 @@ void ContactsWindow::showDetail()
         m_source->setText(sourceText(c));
     }
     m_hidden->setChecked(c.hidden);
+    if (m_nickname->text() != c.nickname) {
+        m_nickname->setText(c.nickname);
+    }
     m_categoryChecks->clear();
     for (const CategoryCount &cat : m_store->categories()) {
         auto *it = new QListWidgetItem(cat.name, m_categoryChecks);

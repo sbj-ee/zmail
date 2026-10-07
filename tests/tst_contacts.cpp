@@ -131,7 +131,7 @@ private slots:
         {
             ContactStore s;
             QVERIFY(s.open(path));
-            QCOMPARE(s.meta(QStringLiteral("schema")), QStringLiteral("2"));
+            QCOMPARE(s.meta(QStringLiteral("schema")), QStringLiteral("3"));
             google(s, QStringLiteral("people/1"), QStringLiteral("Ada Lovelace"), QStringLiteral("ada@example.org"));
             google(s, QStringLiteral("otherContacts/2"), QStringLiteral("noreply"), QStringLiteral("noreply@shop.example.com"),
                    QStringLiteral("other"));
@@ -410,6 +410,82 @@ private slots:
         ContactQuery q;
         q.show = ContactQuery::Show::All;
         QCOMPARE(QJsonDocument::fromJson(s.exportJson(q)).object().value(QStringLiteral("contacts")).toArray().size(), 2103);
+    }
+
+    // Nicknames, as in Eudora: a contact's short name, or a category's name
+    // for everyone in it, typed in an address field.
+    void nicknamesExpandToAddresses()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("contacts.db"));
+        {
+            ContactStore s;
+            QVERIFY(s.open(path));
+            google(s, QStringLiteral("people/1"), QStringLiteral("Ada Lovelace"), QStringLiteral("ada@example.org"));
+            google(s, QStringLiteral("people/2"), QStringLiteral("Brook Plumbing"), QStringLiteral("brook@example.org"));
+            google(s, QStringLiteral("people/3"), QStringLiteral("Cy Vance"), QStringLiteral("cy@example.com"));
+            google(s, QStringLiteral("people/4"), QStringLiteral("dana@example.net"), QStringLiteral("dana@example.net"));
+            s.setNickname(QStringLiteral("people/1"), QStringLiteral("  ada, <the> \"countess\"@ "));
+            QCOMPARE(s.contact(QStringLiteral("people/1")).nickname, QStringLiteral("ada the countess")); // nothing that breaks an address list
+            s.setNickname(QStringLiteral("people/1"), QStringLiteral("ada"));
+            s.setNickname(QStringLiteral("people/2"), QStringLiteral("plumber"));
+            s.addToCategory({QStringLiteral("people/2"), QStringLiteral("people/3"), QStringLiteral("people/4")}, QStringLiteral("Crew"));
+        }
+        ContactStore s; // nicknames are kept across a restart
+        QVERIFY(s.open(path));
+        QCOMPARE(s.expandNickname(QStringLiteral("ADA")), QStringList{QStringLiteral("Ada Lovelace <ada@example.org>")});
+        QCOMPARE(s.expandNickname(QStringLiteral("nobody")), QStringList{});
+        QCOMPARE(s.expandNickname(QStringLiteral("ada@example.org")), QStringList{}); // an address is never a nickname
+        // A category: everyone in it, by name; a bare address has no name to repeat.
+        QCOMPARE(s.expandNickname(QStringLiteral("crew")),
+                 (QStringList{QStringLiteral("Brook Plumbing <brook@example.org>"), QStringLiteral("Cy Vance <cy@example.com>"),
+                              QStringLiteral("dana@example.net")}));
+        // Hidden contacts are left out, of a category and of their own nickname.
+        s.setHidden({QStringLiteral("people/3")}, true);
+        QCOMPARE(s.expandNickname(QStringLiteral("Crew")).size(), 2);
+        s.setHidden({QStringLiteral("people/1")}, true);
+        QCOMPARE(s.expandNickname(QStringLiteral("ada")), QStringList{});
+        s.setHidden({QStringLiteral("people/1"), QStringLiteral("people/3")}, false);
+        // A contact's nickname wins over a category of the same name; two
+        // contacts sharing a nickname are both written to.
+        s.setNickname(QStringLiteral("people/3"), QStringLiteral("crew"));
+        QCOMPARE(s.expandNickname(QStringLiteral("crew")), QStringList{QStringLiteral("Cy Vance <cy@example.com>")});
+        s.setNickname(QStringLiteral("people/3"), QStringLiteral("plumber"));
+        QCOMPARE(s.expandNickname(QStringLiteral("plumber")).size(), 2);
+        s.setNickname(QStringLiteral("people/3"), QString());
+
+        // A whole field: nicknames written out, the rest as typed, nobody twice.
+        QCOMPARE(s.expandRecipients(QStringLiteral("ada, Someone Else <else@example.com>; crew , brook@example.org, typo")),
+                 QStringLiteral("Ada Lovelace <ada@example.org>, Someone Else <else@example.com>, "
+                                "Brook Plumbing <brook@example.org>, Cy Vance <cy@example.com>, dana@example.net, typo"));
+        QCOMPARE(s.expandRecipients(QStringLiteral("\"Lovelace, Ada\" <ada@example.org>")),
+                 QStringLiteral("\"Lovelace, Ada\" <ada@example.org>"));
+        QCOMPARE(s.expandRecipients(QString()), QString());
+
+        // Suggested while typing, ahead of addresses; found by search; exported.
+        const QList<AutocompleteHit> hits = s.autocomplete(QStringLiteral("cr"), 10);
+        QVERIFY(!hits.isEmpty());
+        QCOMPARE(hits.first().displayName, QStringLiteral("Crew"));
+        QVERIFY(hits.first().email.isEmpty());
+        QCOMPARE(s.autocomplete(QStringLiteral("plu"), 10).first().displayName, QStringLiteral("plumber"));
+        s.addCategory(QStringLiteral("Crickets")); // nobody in it: nothing to suggest
+        for (const AutocompleteHit &h : s.autocomplete(QStringLiteral("cr"), 10)) {
+            QVERIFY(h.displayName != QLatin1String("Crickets"));
+        }
+        ContactQuery q;
+        q.search = QStringLiteral("plumber");
+        QCOMPARE(names(s.contacts(q)), QStringList{QStringLiteral("Brook Plumbing")});
+        QVERIFY(s.exportJson(q).contains("\"nickname\": \"plumber\""));
+
+        // In the Contacts window: typed into the contact's Nickname field.
+        zmail::ui::ContactsWindow w(&s);
+        w.selectContacts({QStringLiteral("people/4")});
+        auto *nick = w.findChild<QLineEdit *>(QStringLiteral("contactNickname"));
+        QVERIFY(nick && nick->text().isEmpty());
+        QTest::keyClicks(nick, QStringLiteral("dana"));
+        QCOMPARE(s.contact(QStringLiteral("people/4")).nickname, QStringLiteral("dana"));
+        w.selectContacts({QStringLiteral("people/2")});
+        QCOMPARE(nick->text(), QStringLiteral("plumber"));
     }
 };
 

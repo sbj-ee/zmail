@@ -1,5 +1,7 @@
 #include "ContactStore.h"
 #include "Log.h"
+#include "MimeBuilder.h"
+#include "MessageParser.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -8,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -110,10 +113,24 @@ bool ContactStore::migrate()
                             "name TEXT NOT NULL, value TEXT, PRIMARY KEY (contact_id, position))")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS contact_notes (contact_id TEXT PRIMARY KEY, "
                             "comment TEXT, hidden INTEGER DEFAULT 0)"));
-    if (ok) {
-        setMeta(QStringLiteral("schema"), QStringLiteral("2"));
+    if (!ok) {
+        return false;
     }
-    return ok;
+    // Schema 3 (0.6.1): nicknames.
+    bool hasNickname = false;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        if (q.exec(QStringLiteral("PRAGMA table_info(contact_notes)"))) {
+            while (q.next()) {
+                hasNickname = hasNickname || q.value(1).toString() == QLatin1String("nickname");
+            }
+        }
+    }
+    if (!hasNickname && !exec(QStringLiteral("ALTER TABLE contact_notes ADD COLUMN nickname TEXT"))) {
+        return false;
+    }
+    setMeta(QStringLiteral("schema"), QStringLiteral("3"));
+    return true;
 }
 
 QString ContactStore::meta(const QString &key) const
@@ -228,11 +245,12 @@ Contact ContactStore::contact(const QString &id) const
             c.fields.append({q.value(0).toString(), q.value(1).toString()});
         }
     }
-    q.prepare(QStringLiteral("SELECT comment, hidden FROM contact_notes WHERE contact_id = ?"));
+    q.prepare(QStringLiteral("SELECT comment, hidden, nickname FROM contact_notes WHERE contact_id = ?"));
     q.addBindValue(id);
     if (q.exec() && q.next()) {
         c.comment = q.value(0).toString();
         c.hidden = q.value(1).toBool();
+        c.nickname = q.value(2).toString();
     }
     return c;
 }
@@ -261,9 +279,9 @@ QString contactFilter(const ContactQuery &query, QVariantList *binds)
             "OR EXISTS (SELECT 1 FROM contact_emails e WHERE e.contact_id = c.id AND e.email LIKE ?) "
             "OR EXISTS (SELECT 1 FROM contact_categories cc WHERE cc.contact_id = c.id AND cc.category LIKE ?) "
             "OR EXISTS (SELECT 1 FROM contact_fields f WHERE f.contact_id = c.id AND f.value LIKE ?) "
-            "OR EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND n.comment LIKE ?))");
+            "OR EXISTS (SELECT 1 FROM contact_notes n WHERE n.contact_id = c.id AND (n.comment LIKE ? OR n.nickname LIKE ?)))");
         const QString like = QLatin1Char('%') + search + QLatin1Char('%');
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 6; ++i) {
             binds->append(like);
         }
     }
@@ -327,6 +345,7 @@ QByteArray ContactStore::exportJson(const ContactQuery &query) const
                       {QStringLiteral("categories"), QJsonArray::fromStringList(c.categories)},
                       {QStringLiteral("fields"), fields},
                       {QStringLiteral("comment"), c.comment},
+                      {QStringLiteral("nickname"), c.nickname},
                       {QStringLiteral("hidden"), c.hidden},
                       {QStringLiteral("trusted"), c.trusted}};
         if (!c.googleResource.isEmpty()) {
@@ -508,6 +527,94 @@ void ContactStore::setComment(const QString &contactId, const QString &comment)
     q.exec();
 }
 
+void ContactStore::setNickname(const QString &contactId, const QString &nickname)
+{
+    if (contactId.isEmpty()) {
+        return;
+    }
+    // One word, no commas or "@": it has to survive being typed in an address field.
+    QString nick = nickname.trimmed();
+    nick.remove(QLatin1Char(','));
+    nick.remove(QLatin1Char(';'));
+    nick.remove(QLatin1Char('@'));
+    nick.remove(QLatin1Char('<'));
+    nick.remove(QLatin1Char('>'));
+    nick.remove(QLatin1Char('"'));
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("INSERT INTO contact_notes(contact_id, nickname) VALUES (?, ?) "
+                             "ON CONFLICT(contact_id) DO UPDATE SET nickname = excluded.nickname"));
+    q.addBindValue(contactId);
+    q.addBindValue(nick);
+    q.exec();
+}
+
+QStringList ContactStore::expandNickname(const QString &name) const
+{
+    const QString key = name.trimmed();
+    if (key.isEmpty() || key.contains(QLatin1Char('@'))) {
+        return {};
+    }
+    const QString visible = QStringLiteral(
+        " AND NOT EXISTS (SELECT 1 FROM contact_notes h WHERE h.contact_id = c.id AND h.hidden = 1)");
+    // The address to write to: the primary one, else the first.
+    const QString address = QStringLiteral(
+        "(SELECT e.email FROM contact_emails e WHERE e.contact_id = c.id ORDER BY e.is_primary DESC, e.email LIMIT 1)");
+    QStringList out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    const auto collect = [&]() {
+        if (!q.exec()) {
+            return;
+        }
+        while (q.next()) {
+            const QString display = q.value(0).toString().trimmed();
+            const QString email = q.value(1).toString();
+            if (email.isEmpty()) {
+                continue;
+            }
+            out << (display.isEmpty() || display == email ? email : QStringLiteral("%1 <%2>").arg(display, email));
+        }
+    };
+    // A contact's own nickname first; a category of the same name only if no contact has it.
+    q.prepare(QStringLiteral("SELECT c.display_name, %1 FROM contacts c JOIN contact_notes n ON n.contact_id = c.id "
+                             "WHERE n.nickname = ? COLLATE NOCASE%2 ORDER BY c.display_name COLLATE NOCASE")
+                  .arg(address, visible));
+    q.addBindValue(key);
+    collect();
+    if (out.isEmpty()) {
+        q.prepare(QStringLiteral("SELECT c.display_name, %1 FROM contacts c JOIN contact_categories cc ON cc.contact_id = c.id "
+                                 "WHERE cc.category = ?%2 ORDER BY c.display_name COLLATE NOCASE")
+                      .arg(address, visible));
+        q.addBindValue(key);
+        collect();
+    }
+    return out;
+}
+
+QString ContactStore::expandRecipients(const QString &field) const
+{
+    QStringList out;
+    QSet<QString> seen;
+    const auto add = [&](const QString &entry) {
+        const QString email = MessageParser::splitAddress(entry).second.trimmed().toLower();
+        const QString key = email.isEmpty() ? entry.trimmed().toLower() : email;
+        if (!seen.contains(key)) {
+            seen.insert(key);
+            out << entry.trimmed();
+        }
+    };
+    for (const QString &entry : MimeBuilder::splitAddresses(field)) {
+        const QStringList expanded = expandNickname(entry);
+        if (expanded.isEmpty()) {
+            add(entry);
+        } else {
+            for (const QString &e : expanded) {
+                add(e);
+            }
+        }
+    }
+    return out.join(QStringLiteral(", "));
+}
+
 void ContactStore::setHidden(const QStringList &contactIds, bool hidden)
 {
     QSqlDatabase db = QSqlDatabase::database(m_conn);
@@ -680,6 +787,27 @@ QList<AutocompleteHit> ContactStore::autocomplete(const QString &prefix, int lim
     }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     QList<AutocompleteHit> hits;
+    // Nicknames and categories first: typed as they are, expanded when the
+    // message is addressed.
+    q.prepare(QStringLiteral(
+        "SELECT DISTINCT n.nickname FROM contact_notes n JOIN contacts c ON c.id = n.contact_id "
+        "WHERE n.nickname LIKE ? AND n.nickname <> '' AND n.hidden = 0 ORDER BY n.nickname COLLATE NOCASE"));
+    q.addBindValue(like);
+    if (q.exec()) {
+        while (q.next()) {
+            hits.append({QString(), q.value(0).toString(), 3000.0});
+        }
+    }
+    q.prepare(QStringLiteral("SELECT name FROM categories WHERE name LIKE ? ORDER BY name COLLATE NOCASE"));
+    q.addBindValue(like);
+    if (q.exec()) {
+        while (q.next()) {
+            const QString name = q.value(0).toString();
+            if (!expandNickname(name).isEmpty()) { // an empty category addresses nobody
+                hits.append({QString(), name, 2000.0});
+            }
+        }
+    }
     for (auto it = byEmail.begin(); it != byEmail.end(); ++it) {
         const Row &r = it.value();
         // Contacts rank above frecency; within each group score by recent sends.
@@ -695,7 +823,7 @@ QList<AutocompleteHit> ContactStore::autocomplete(const QString &prefix, int lim
         if (a.score != b.score) {
             return a.score > b.score;
         }
-        return a.email < b.email;
+        return a.email != b.email ? a.email < b.email : a.displayName.compare(b.displayName, Qt::CaseInsensitive) < 0;
     });
     if (hits.size() > limit) {
         hits.resize(limit);

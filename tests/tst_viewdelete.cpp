@@ -169,6 +169,49 @@ private slots:
         applyTheme(ThemeMode::Light);
     }
 
+    // A folder with more mail than it has loaded: once the list is too
+    // short to scroll (here, after a Delete), the next page comes by itself.
+    void shortListLoadsTheNextPage()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("gmail:") + kLabel, {kLabel}));
+        // Five older messages the app hasn't listed yet, as if the folder's
+        // first page had ended after Charlie.
+        QStringList older;
+        for (int i = 0; i < 5; ++i) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+            m.subject = QStringLiteral("Older %1").arg(i);
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {kLabel};
+            m.date = QDateTime::currentDateTimeUtc().addDays(-1 - i);
+            older << f.g.addMessage(m, false);
+        }
+        f.session->cache()->setMeta(QStringLiteral("pageToken:") + kLabel, QStringLiteral("3"));
+        QCOMPARE(f.proxy->rowCount(), 3);
+
+        QTest::keyClick(f.list, Qt::Key_Delete);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 7, 10000); // Alpha, Charlie and the five older ones
+        const QStringList shown = f.visibleIds();
+        for (const QString &id : std::as_const(older)) {
+            QVERIFY(shown.contains(id));
+        }
+        QVERIFY(!f.session->sync()->hasMore(kLabel));
+
+        // A page token Gmail refuses: the listing starts over instead of sticking.
+        MockGoogle::Message m;
+        m.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+        m.subject = QStringLiteral("Oldest");
+        m.text = QStringLiteral("Fake test mail.");
+        m.labels = {kLabel};
+        m.date = QDateTime::currentDateTimeUtc().addDays(-30);
+        const QString oldest = f.g.addMessage(m, false);
+        f.g.addFault({QStringLiteral("/gmail/v1/users/me/messages"), 400, 1, -1});
+        f.session->cache()->setMeta(QStringLiteral("pageToken:") + kLabel, QStringLiteral("expired"));
+        f.session->sync()->fetchMore(kLabel);
+        QTRY_VERIFY_WITH_TIMEOUT(f.visibleIds().contains(oldest), 10000);
+    }
+
     void deleteTrashesInEveryView_data()
     {
         QTest::addColumn<QString>("view");

@@ -121,15 +121,6 @@ void GmailClient::listMessages(const QString &labelId, int maxResults, const QSt
     call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb), Priority::Background);
 }
 
-void GmailClient::searchMessages(const QString &query, int maxResults, JsonCb cb)
-{
-    QUrlQuery q;
-    q.addQueryItem(QStringLiteral("q"), QString::fromUtf8(QUrl::toPercentEncoding(query)));
-    q.addQueryItem(QStringLiteral("includeSpamTrash"), QStringLiteral("true"));
-    q.addQueryItem(QStringLiteral("maxResults"), QString::number(maxResults));
-    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb), Priority::Background);
-}
-
 void GmailClient::batchModifyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove, JsonCb cb)
 {
     QJsonObject o;

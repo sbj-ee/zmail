@@ -333,8 +333,11 @@ void MainWindow::showSpamFolder()
 
 QMenu *MainWindow::buildSnoozeMenu(QWidget *parent)
 {
-    auto *menu = new QMenu(parent ? parent : this);
+    // Titled here, so every menu it is put in shows it: the message list's
+    // context menu got it with no title, a blank row with an arrow (0.5.11).
+    auto *menu = new QMenu(tr("S&nooze"), parent ? parent : this);
     menu->setObjectName(QStringLiteral("snoozePresetMenu"));
+    menu->setIcon(icon(QStringLiteral("clock")));
     struct P { const char *id; const char *text; };
     for (const P &p : {P{"laterToday", QT_TR_NOOP("Later Today (+3 hours)")},
                        P{"tomorrow", QT_TR_NOOP("Tomorrow 8:00 AM")},

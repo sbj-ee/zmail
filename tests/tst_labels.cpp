@@ -365,8 +365,8 @@ private slots:
         QVERIFY(!r.cache.message(mid).labels.contains(QStringLiteral("Label_2")));
     }
 
-    // Deleting takes a message out of its folder (Gmail counts trashed mail
-    // that still has the label in the folder's total); Undo puts it back.
+    // Deleting takes a message out of its folder (one folder per message,
+    // and Trash is one); Undo puts it back.
     void trashLeavesTheFolderAndUndoReturnsIt()
     {
         Rig r;
@@ -412,29 +412,6 @@ private slots:
         QTest::qWait(300); // nothing arrives late and takes it off again
         QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_1")));
         QVERIFY(r.cache.message(mid).labels.contains(QStringLiteral("Label_1")));
-    }
-
-    // Mail already in Trash with a folder label on it (trashed in Gmail, or
-    // by an older zmail) is taken out of its folders when zmail starts.
-    void startTakesTrashedMailOutOfFolders()
-    {
-        Rig r;
-        r.g.seedSystemLabels();
-        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
-        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
-        const QString binned = r.g.addMessage(
-            r.msg(QStringLiteral("Binned"), {QStringLiteral("TRASH"), QStringLiteral("Label_1"), QStringLiteral("Label_2")}), false);
-        const QString kept = r.g.addMessage(r.msg(QStringLiteral("Kept"), {QStringLiteral("Label_1")}), false);
-        const QString plain = r.g.addMessage(r.msg(QStringLiteral("Plain"), {QStringLiteral("TRASH")}), false);
-        r.sync->start();
-        QTRY_COMPARE_WITH_TIMEOUT(r.g.messages().value(binned).labels, QStringList{QStringLiteral("TRASH")}, 20000);
-        QCOMPARE(r.g.messages().value(kept).labels, QStringList{QStringLiteral("Label_1")});
-        QCOMPARE(r.g.messages().value(plain).labels, QStringList{QStringLiteral("TRASH")});
-
-        // Nothing left to clean: it stops there.
-        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
-        QTest::qWait(300);
-        QCOMPARE(r.g.count(QStringLiteral("POST /gmail/v1/users/me/messages/batchModify")), 1);
     }
 
     // Right-click > Empty Folder: all of the folder's mail goes to Trash,

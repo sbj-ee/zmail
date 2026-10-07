@@ -672,6 +672,11 @@ void MainWindow::buildPanes()
         }
     });
 
+    // ... and when the list is too short to scroll at all (see loadMoreIfListIsShort).
+    connect(m_proxy, &QAbstractItemModel::modelReset, this, &MainWindow::loadMoreIfListIsShort);
+    connect(m_proxy, &QAbstractItemModel::rowsRemoved, this, &MainWindow::loadMoreIfListIsShort);
+    connect(m_proxy, &QAbstractItemModel::layoutChanged, this, &MainWindow::loadMoreIfListIsShort);
+
     m_listSplitter->setStretchFactor(0, 1);
     m_listSplitter->setStretchFactor(1, 2);
     m_listSplitter->setChildrenCollapsible(false);
@@ -1201,6 +1206,24 @@ ListDialog *MainWindow::showListDialog()
     connect(dlg, &ListDialog::finishedWith, this, &MainWindow::setListAppearance);
     dlg->show();
     return dlg;
+}
+
+// Scrolling to the bottom loads a folder's next page, but a list that
+// doesn't fill the pane can't be scrolled: after deleting what a folder had
+// loaded, it showed 2 messages under a count of 212 and never fetched the
+// rest (0.5.7). Checked once the view has laid out the change.
+void MainWindow::loadMoreIfListIsShort()
+{
+    QTimer::singleShot(0, this, [this]() {
+        if (!(m_live && m_session && m_session->sync() && m_list && m_proxy)) {
+            return;
+        }
+        const QString label = labelForMailbox(m_proxy->mailbox());
+        if (label.isEmpty() || m_list->verticalScrollBar()->maximum() > 0 || !m_session->sync()->hasMore(label)) {
+            return;
+        }
+        m_session->sync()->fetchMore(label);
+    });
 }
 
 StripesDialog *MainWindow::showStripesDialog()

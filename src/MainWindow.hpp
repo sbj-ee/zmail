@@ -235,6 +235,7 @@ private:
     int m_listFontSize = 0;
     int m_listRowSpacing = 6;
     void applyListAppearance();
+    void loadMoreIfListIsShort();
     QString m_lastSync;     // "8:45 AM"
     QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
     bool m_keepSyncErrorAcrossIdle = false;

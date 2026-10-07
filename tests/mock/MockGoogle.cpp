@@ -620,25 +620,11 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
     }
     if (rest == QLatin1String("/messages")) {
         const QString label = q.queryItemValue(QStringLiteral("labelIds"));
-        // The one search the app sends: trashed mail that still has a user label.
-        const bool trashedWithFolders =
-            q.queryItemValue(QStringLiteral("q"), QUrl::FullyDecoded) == QLatin1String("in:trash has:userlabels");
-        QStringList userIds;
-        for (const Label &l : m_labels) {
-            if (l.type == QLatin1String("user")) userIds << l.id;
-        }
-        const auto matches = [&](const Message &m) {
-            if (!trashedWithFolders) {
-                return label.isEmpty() || m.labels.contains(label);
-            }
-            return m.labels.contains(QStringLiteral("TRASH")) &&
-                   std::any_of(userIds.begin(), userIds.end(), [&m](const QString &u) { return m.labels.contains(u); });
-        };
         const int max = std::clamp(q.queryItemValue(QStringLiteral("maxResults")).toInt(), 1, 500);
         const int offset = q.queryItemValue(QStringLiteral("pageToken")).toInt();
         QList<Message> sel;
         for (const Message &m : m_messages) {
-            if (matches(m)) {
+            if (label.isEmpty() || m.labels.contains(label)) {
                 sel.append(m);
             }
         }

@@ -84,8 +84,6 @@ public:
     void updateLabel(const QString &id, const QString &name, const QString &backgroundColor, JsonCb cb);
     void deleteLabel(const QString &id, JsonCb cb);
     void listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb);
-    // users.messages.list with a search query (q), Spam and Trash included.
-    void searchMessages(const QString &query, int maxResults, JsonCb cb);
     // users.messages.batchModify: up to 1000 ids, up to 100 labels each way.
     void batchModifyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove, JsonCb cb);
     void getMessageMetadata(const QString &id, JsonCb cb);

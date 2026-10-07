@@ -23,7 +23,17 @@ struct Options
 //  - other <div>s with a background colour become a 100 %-wide one-cell
 //    table carrying that colour, so the card/band shows behind its content.
 //  - tables nested deeper than kMaxTableDepth are thinned (limitTableDepth).
-QString prepare(const QString &html);
+// With a layout budget (in layoutCost units), tables are thinned further,
+// a level at a time down to none, until the estimated cost fits; depthUsed
+// reports the limit that was applied. A budget of 0 applies kMaxTableDepth
+// only.
+QString prepare(const QString &html, double layoutBudget = 0, int *depthUsed = nullptr);
+
+// What MessageView allows a message before it simplifies the layout: about
+// half a second of layout at the typical 20 microseconds a unit. Over a real
+// mailbox of 558 HTML messages the slowest took 1.05 s and four were above
+// this; a 60 x 60 table with no nesting at all took 4.8 s.
+inline constexpr double kLayoutBudget = 30000;
 
 // QTextDocument lays a nested table's cells out twice per level, so layout
 // time doubles with every level of nesting, on the GUI thread, on every
@@ -41,6 +51,13 @@ inline constexpr int kMaxTableDepth = 8;
 // width, then one-cell tables with a background, and only then the innermost
 // tables with several cells.
 QString limitTableDepth(const QString &html, int maxDepth = kMaxTableDepth);
+
+// A rough count of the work QTextDocument's layout will do for this HTML.
+// Each table costs its cells times its columns (wide grids are slow whatever
+// their depth), doubled for every table it is nested in; each 256 characters
+// of content cost one, doubled per level likewise. Measured at 7-40
+// microseconds a unit, about 20 typically.
+double layoutCost(const QString &html);
 
 // Make an email laid out for a fixed-width web client usable in a resizable
 // QTextDocument. Run after setHtml().

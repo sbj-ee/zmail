@@ -150,6 +150,27 @@ MessageView::MessageView(QWidget *parent)
     lay->addWidget(m_imagesBar);
     connect(m_loadImages, &QPushButton::clicked, this, &MessageView::loadImages);
 
+    m_layoutBar = new QFrame(this);
+    m_layoutBar->setObjectName(QStringLiteral("simplifiedLayoutBar"));
+    m_layoutBar->setFrameShape(QFrame::StyledPanel);
+    m_layoutBar->setAutoFillBackground(true);
+    m_layoutBar->setBackgroundRole(QPalette::ToolTipBase);
+    m_layoutBar->setForegroundRole(QPalette::ToolTipText);
+    auto *lb = new QHBoxLayout(m_layoutBar);
+    lb->setContentsMargins(12, 4, 8, 4);
+    auto *layoutText = new QLabel(tr("This message's layout is very complex. It is shown simplified so zmail stays responsive."),
+                                  m_layoutBar);
+    layoutText->setForegroundRole(QPalette::ToolTipText);
+    layoutText->setWordWrap(true);
+    lb->addWidget(layoutText, 1);
+    auto *full = new QPushButton(tr("Show full layout"), m_layoutBar);
+    full->setObjectName(QStringLiteral("fullLayoutButton"));
+    full->setToolTip(tr("Lay the message out as it was sent. This can take a while, and zmail won't respond until it is done."));
+    lb->addWidget(full);
+    connect(full, &QPushButton::clicked, this, &MessageView::showFullLayout);
+    m_layoutBar->hide();
+    lay->addWidget(m_layoutBar);
+
     auto *line = new QFrame(this);
     line->setFrameShape(QFrame::HLine);
     line->setFrameShadow(QFrame::Sunken);
@@ -218,6 +239,9 @@ void MessageView::clear()
     m_header->hide();
     m_attachments->hide();
     m_imagesBar->hide();
+    m_layoutBar->hide();
+    m_simplified = false;
+    m_fullLayout = false;
 }
 
 void MessageView::setMessage(const ViewMessage &m)
@@ -229,6 +253,7 @@ void MessageView::setMessage(const ViewMessage &m)
         m_showImages = RemoteImages::shouldLoadFor(m.from);
         m_body->clearRemoteImages();
         m_body->setRemoteImagesAllowed(m_showImages);
+        m_fullLayout = false;
     }
     m_msg = m;
     m_empty = false;
@@ -367,6 +392,7 @@ void MessageView::render()
     }
     m_blocked = 0;
     m_trackers = 0;
+    m_simplified = false;
     m_body->resetBlocked();
     m_effectiveZoom = m_zoom;
 
@@ -374,7 +400,9 @@ void MessageView::render()
         m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
         m_body->setLineWrapColumnOrWidth(vw);
         QString html = SafeHtmlView::sanitize(m_msg.bodyHtml, &m_blocked, m_showImages);
-        html = prefix + HtmlFit::prepare(html);
+        int tableDepth = HtmlFit::kMaxTableDepth;
+        html = prefix + HtmlFit::prepare(html, m_fullLayout ? 0 : HtmlFit::kLayoutBudget, &tableDepth);
+        m_simplified = tableDepth < HtmlFit::kMaxTableDepth;
         if (m_showImages && RemoteImages::blockTrackers()) {
             html = SafeHtmlView::dropTrackers(html, &m_trackers); // even in "Always load"
         }
@@ -430,9 +458,19 @@ void MessageView::render()
     } else {
         m_imagesBar->hide();
     }
+    m_layoutBar->setVisible(m_simplified && !m_msg.loading);
     if (ratio > 0) {
         vs->setValue(int(std::round(ratio * vs->maximum())));
     }
+}
+
+void MessageView::showFullLayout()
+{
+    if (m_empty || m_fullLayout) {
+        return;
+    }
+    m_fullLayout = true;
+    render();
 }
 
 void MessageView::alwaysLoadForSender()

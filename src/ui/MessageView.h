@@ -78,6 +78,11 @@ public:
     void alwaysLoadForSender();
     // Re-read Settings > Privacy > Remote images for the open message.
     void reloadImagePolicy();
+    // A message whose layout would stall the window (HtmlFit::kLayoutBudget)
+    // is shown with its tables simplified, under a bar that offers the full
+    // layout for those willing to wait for it.
+    bool layoutSimplified() const { return m_simplified; }
+    void showFullLayout();
 
 signals:
     void zoomChanged(qreal zoom);
@@ -103,6 +108,9 @@ private:
     QLabel *m_imagesText = nullptr;
     QPushButton *m_loadImages = nullptr;
     QPushButton *m_alwaysForSender = nullptr;
+    QFrame *m_layoutBar = nullptr;
+    bool m_simplified = false;  // the last render gave up tables to stay within budget
+    bool m_fullLayout = false;  // this message: the user asked for all of it
     SafeHtmlView *m_body = nullptr;
     QTimer *m_relayout = nullptr;
     qreal m_zoom = 1.0;

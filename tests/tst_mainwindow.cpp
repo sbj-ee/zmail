@@ -50,7 +50,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.7"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.8"));
     }
 
     void menuBarIsInWindowNotGlobal()

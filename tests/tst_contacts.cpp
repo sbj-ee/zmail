@@ -2,12 +2,16 @@
 #include "core/PeopleClient.h"
 #include "core/AuthManager.h"
 #include "ui/ContactsWindow.h"
+#include "ui/ContactEditDialog.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
 #include <QCheckBox>
+#include <QTextBrowser>
+#include <QLabel>
+#include <memory>
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -131,7 +135,7 @@ private slots:
         {
             ContactStore s;
             QVERIFY(s.open(path));
-            QCOMPARE(s.meta(QStringLiteral("schema")), QStringLiteral("3"));
+            QCOMPARE(s.meta(QStringLiteral("schema")), QStringLiteral("4"));
             google(s, QStringLiteral("people/1"), QStringLiteral("Ada Lovelace"), QStringLiteral("ada@example.org"));
             google(s, QStringLiteral("otherContacts/2"), QStringLiteral("noreply"), QStringLiteral("noreply@shop.example.com"),
                    QStringLiteral("other"));
@@ -258,11 +262,8 @@ private slots:
         w.show();
         auto *groups = w.findChild<QListWidget *>(QStringLiteral("contactGroups"));
         auto *list = w.findChild<QListWidget *>(QStringLiteral("contactsList"));
-        auto *detail = w.findChild<QWidget *>(QStringLiteral("contactDetail"));
-        auto *hidden = w.findChild<QCheckBox *>(QStringLiteral("contactHidden"));
-        auto *checks = w.findChild<QListWidget *>(QStringLiteral("contactCategories"));
-        auto *fields = w.findChild<QTableWidget *>(QStringLiteral("contactFields"));
-        auto *comment = w.findChild<QPlainTextEdit *>(QStringLiteral("contactComment"));
+        auto *summary = w.findChild<QTextBrowser *>(QStringLiteral("contactSummary"));
+        auto *editButton = w.findChild<QPushButton *>(QStringLiteral("editContactButton"));
         const auto groupTexts = [groups]() {
             QStringList out;
             for (int r = 0; r < groups->count(); ++r) {
@@ -273,52 +274,31 @@ private slots:
         QCOMPARE(groupTexts(), (QStringList{QStringLiteral("All Contacts  (3)"), QStringLiteral("Uncategorized  (3)"),
                                             QStringLiteral("Hidden  (0)")}));
         QCOMPARE(list->count(), 3);
-        QVERIFY(!detail->isEnabled()); // nothing selected
+        QVERIFY(!editButton->isEnabled()); // nothing selected
+        QVERIFY(w.findChild<QPushButton *>(QStringLiteral("newContactButton")));
 
-        // Categories: made on the left, ticked on the right, or in bulk.
+        // Categories: made on the left, or for several contacts at once.
         w.newCategory(QStringLiteral("Work"));
         QCOMPARE(w.group(), QStringLiteral("Work"));
         QCOMPARE(list->count(), 0);
         w.showGroup(QString::fromLatin1(zmail::ui::ContactsWindow::kAll));
-        w.selectContacts({QStringLiteral("people/1")});
-        QVERIFY(detail->isEnabled());
-        QCOMPARE(checks->count(), 1);
-        checks->item(0)->setCheckState(Qt::Checked);
-        QCOMPARE(s.contact(QStringLiteral("people/1")).categories, QStringList{QStringLiteral("Work")});
-        QCOMPARE(w.selectedIds(), QStringList{QStringLiteral("people/1")}); // still on show
         w.selectContacts({QStringLiteral("people/1"), QStringLiteral("people/2")});
-        QVERIFY(!detail->isEnabled()); // several: bulk actions only
+        QVERIFY(!editButton->isEnabled()); // several: bulk actions only
         w.addSelectedToCategory(QStringLiteral("Friends"));
         QCOMPARE(s.contact(QStringLiteral("people/2")).categories, QStringList{QStringLiteral("Friends")});
         QVERIFY(groupTexts().contains(QStringLiteral("Friends  (2)")));
         QVERIFY(groupTexts().contains(QStringLiteral("Uncategorized  (1)")));
 
-        // Fields and a comment, saved as they are typed.
+        // One selected: it can be read on the right, and Edit is offered.
         w.selectContacts({QStringLiteral("people/2")});
-        w.addField(QStringLiteral("Phone"));
-        fields->item(0, 1)->setText(QStringLiteral("555 0199"));
-        w.addField(QStringLiteral("Company"));
-        fields->item(1, 1)->setText(QStringLiteral("Brook & Co"));
-        comment->setPlainText(QStringLiteral("Plumber. Call before 9."));
-        Contact brook = s.contact(QStringLiteral("people/2"));
-        QCOMPARE(brook.fields, (QList<ContactField>{{QStringLiteral("Phone"), QStringLiteral("555 0199")},
-                                                    {QStringLiteral("Company"), QStringLiteral("Brook & Co")}}));
-        QCOMPARE(brook.comment, QStringLiteral("Plumber. Call before 9."));
-        fields->setCurrentCell(0, 0);
-        w.removeCurrentField();
-        QCOMPARE(s.contact(QStringLiteral("people/2")).fields.size(), 1);
-        // Another contact's comment is its own.
-        w.selectContacts({QStringLiteral("people/1")});
-        QCOMPARE(comment->toPlainText(), QString());
-        QCOMPARE(fields->rowCount(), 0);
-        QCOMPARE(s.contact(QStringLiteral("people/2")).comment, QStringLiteral("Plumber. Call before 9."));
-        w.findChild<QLineEdit *>(QStringLiteral("contactsSearch"))->setText(QStringLiteral("plumber"));
-        QCOMPARE(list->count(), 1);
-        w.findChild<QLineEdit *>(QStringLiteral("contactsSearch"))->clear();
+        QVERIFY(editButton->isEnabled());
+        QVERIFY(summary->toPlainText().contains(QStringLiteral("Brook")));
+        QVERIFY(summary->toPlainText().contains(QStringLiteral("brook@example.org")));
+        QVERIFY(summary->toPlainText().contains(QStringLiteral("Friends")));
 
-        // Hide: gone from the list, found under Hidden, and back again.
+        // Hide in bulk: gone from the list, found under Hidden, and back again.
         w.selectContacts({QStringLiteral("otherContacts/3")});
-        hidden->setChecked(true);
+        w.setSelectedHidden(true);
         QVERIFY(s.contact(QStringLiteral("otherContacts/3")).hidden);
         QCOMPARE(list->count(), 2);
         QVERIFY(groupTexts().contains(QStringLiteral("Hidden  (1)")));
@@ -343,6 +323,150 @@ private slots:
         QCOMPARE(w.group(), QString::fromLatin1(zmail::ui::ContactsWindow::kAll));
         QCOMPARE(list->count(), 3);
         QVERIFY(s.contact(QStringLiteral("people/2")).categories.isEmpty());
+    }
+
+    // A contact is edited in a window of its own: its name, addresses,
+    // nickname, categories, fields, comment and hidden, all at once, and
+    // nothing is saved unless OK is pressed.
+    void contactIsEditedInItsOwnDialog()
+    {
+        QTemporaryDir dir;
+        const QString path = dir.filePath(QStringLiteral("contacts.db"));
+        ContactStore s;
+        QVERIFY(s.open(path));
+        QCOMPARE(s.meta(QStringLiteral("schema")), QStringLiteral("4"));
+        google(s, QStringLiteral("people/1"), QStringLiteral("ada.l"), QStringLiteral("ada@example.org"));
+        google(s, QStringLiteral("people/2"), QStringLiteral("Brook"), QStringLiteral("brook@example.org"));
+        s.addCategory(QStringLiteral("Work"));
+        zmail::ui::ContactsWindow w(&s);
+        using zmail::ui::ContactEditDialog;
+
+        std::unique_ptr<ContactEditDialog> d(w.makeEditDialog(QStringLiteral("people/1")));
+        QVERIFY(d->isModal());
+        QCOMPARE(d->windowTitle(), QStringLiteral("Edit Contact"));
+        auto *name = d->findChild<QLineEdit *>(QStringLiteral("editName"));
+        auto *emails = d->findChild<QListWidget *>(QStringLiteral("editEmails"));
+        auto *cats = d->findChild<QListWidget *>(QStringLiteral("editCategories"));
+        auto *fields = d->findChild<QTableWidget *>(QStringLiteral("editFields"));
+        QCOMPARE(name->text(), QStringLiteral("ada.l"));
+        QCOMPARE(emails->count(), 1);
+        QVERIFY(d->findChild<QLabel *>(QStringLiteral("editSourceNote"))); // from Google: says where changes are kept
+        QVERIFY(d->findChild<QPushButton *>(QStringLiteral("editRevert"))->isHidden()); // nothing to revert yet
+
+        // Change everything.
+        name->setText(QStringLiteral("Ada Lovelace"));
+        d->findChild<QLineEdit *>(QStringLiteral("editNickname"))->setText(QStringLiteral("ada"));
+        d->addEmail(QStringLiteral("Countess@Example.com"));
+        d->makeCurrentEmailPrimary(); // the one just added
+        cats->item(0)->setCheckState(Qt::Checked);
+        d->addCategory(QStringLiteral("Family")); // a new one, ticked
+        d->addCategory(QStringLiteral("work"));   // exists: just ticked, not added twice
+        QCOMPARE(cats->count(), 2);
+        d->addField(QStringLiteral("Phone"));
+        fields->item(0, 1)->setText(QStringLiteral("555 0100"));
+        d->addField(QStringLiteral("Company"));
+        fields->item(1, 1)->setText(QStringLiteral("Analytical Engines"));
+        d->findChild<QPlainTextEdit *>(QStringLiteral("editComment"))->setPlainText(QStringLiteral("Met in 1833."));
+        // Nothing is saved yet.
+        QCOMPARE(s.contact(QStringLiteral("people/1")).displayName, QStringLiteral("ada.l"));
+
+        // An address that isn't one keeps the dialog open and says why.
+        d->addEmail(QStringLiteral("not an address"));
+        d->show();
+        d->accept();
+        QVERIFY(d->isVisible());
+        QVERIFY(d->findChild<QLabel *>(QStringLiteral("editProblem"))->text().contains(QStringLiteral("not an address")));
+        emails->setCurrentRow(emails->count() - 1); // select the bad one, Remove
+        d->removeCurrentEmail();
+        d->accept();
+        QVERIFY(!d->isVisible());
+        QCOMPARE(w.applyEdit(d.get()), QStringLiteral("people/1"));
+
+        Contact ada = s.contact(QStringLiteral("people/1"));
+        QCOMPARE(ada.displayName, QStringLiteral("Ada Lovelace"));
+        QCOMPARE(ada.emails.size(), 2);
+        QCOMPARE(ada.emails.first().email, QStringLiteral("countess@example.com")); // primary first, lower-cased
+        QVERIFY(ada.emails.first().primary && !ada.emails.last().primary);
+        QCOMPARE(ada.nickname, QStringLiteral("ada"));
+        QCOMPARE(ada.categories, (QStringList{QStringLiteral("Family"), QStringLiteral("Work")}));
+        QCOMPARE(ada.fields, (QList<ContactField>{{QStringLiteral("Phone"), QStringLiteral("555 0100")},
+                                                  {QStringLiteral("Company"), QStringLiteral("Analytical Engines")}}));
+        QCOMPARE(ada.comment, QStringLiteral("Met in 1833."));
+        QVERIFY(ada.edited);
+        // The edit is what the rest of zmail uses: nicknames, autocomplete, "is this a contact".
+        QCOMPARE(s.expandNickname(QStringLiteral("ada")), QStringList{QStringLiteral("Ada Lovelace <countess@example.com>")});
+        QVERIFY(s.hasEmail(QStringLiteral("countess@example.com")));
+        QCOMPARE(w.selectedIds(), QStringList{QStringLiteral("people/1")});
+        QVERIFY(w.findChild<QTextBrowser *>(QStringLiteral("contactSummary"))->toPlainText().contains(QStringLiteral("Analytical Engines")));
+
+        // A resync brings Google's version again; the edit stays, here and after a restart.
+        s.clearGoogleContacts();
+        google(s, QStringLiteral("people/1"), QStringLiteral("ada.l (work)"), QStringLiteral("ada@example.org"));
+        google(s, QStringLiteral("people/2"), QStringLiteral("Brook"), QStringLiteral("brook@example.org"));
+        QCOMPARE(s.contact(QStringLiteral("people/1")).displayName, QStringLiteral("Ada Lovelace"));
+        {
+            ContactStore again;
+            QVERIFY(again.open(path));
+            QCOMPARE(again.contact(QStringLiteral("people/1")).emails.first().email, QStringLiteral("countess@example.com"));
+        }
+
+        // Cancel changes nothing.
+        d.reset(w.makeEditDialog(QStringLiteral("people/1")));
+        d->findChild<QLineEdit *>(QStringLiteral("editName"))->setText(QStringLiteral("Someone Else"));
+        d->reject();
+        QCOMPARE(s.contact(QStringLiteral("people/1")).displayName, QStringLiteral("Ada Lovelace"));
+
+        // "Use Google's": the name and addresses go back to what Google has
+        // now; the nickname, categories, fields and comment are kept.
+        d.reset(w.makeEditDialog(QStringLiteral("people/1")));
+        auto *revert = d->findChild<QPushButton *>(QStringLiteral("editRevert"));
+        QVERIFY(!revert->isHidden());
+        revert->click();
+        QVERIFY(d->revertRequested());
+        w.applyEdit(d.get());
+        ada = s.contact(QStringLiteral("people/1"));
+        QCOMPARE(ada.displayName, QStringLiteral("ada.l (work)"));
+        QCOMPARE(ada.emails.size(), 1);
+        QCOMPARE(ada.emails.first().email, QStringLiteral("ada@example.org"));
+        QVERIFY(!ada.edited);
+        QCOMPARE(ada.nickname, QStringLiteral("ada"));
+        QCOMPARE(ada.fields.size(), 2);
+
+        // Changing only the comment doesn't count as editing Google's data.
+        d.reset(w.makeEditDialog(QStringLiteral("people/2")));
+        d->findChild<QPlainTextEdit *>(QStringLiteral("editComment"))->setPlainText(QStringLiteral("Plumber."));
+        d->findChild<QCheckBox *>(QStringLiteral("editHidden"))->setChecked(true);
+        d->accept();
+        w.applyEdit(d.get());
+        QVERIFY(!s.contact(QStringLiteral("people/2")).edited);
+        QVERIFY(s.contact(QStringLiteral("people/2")).hidden);
+
+        // New Contact: made here, in the category on show, and deletable.
+        w.showGroup(QStringLiteral("Work"));
+        d.reset(w.makeEditDialog(QString()));
+        QCOMPARE(d->windowTitle(), QStringLiteral("New Contact"));
+        QVERIFY(!d->findChild<QLabel *>(QStringLiteral("editSourceNote")));
+        d->accept(); // nothing filled in: refused
+        QVERIFY(!d->findChild<QLabel *>(QStringLiteral("editProblem"))->isHidden());
+        d->findChild<QLineEdit *>(QStringLiteral("editName"))->setText(QStringLiteral("Cy Vance"));
+        d->addEmail(QStringLiteral("cy@example.com"));
+        d->accept();
+        const QString cy = w.applyEdit(d.get());
+        QVERIFY(cy.startsWith(QStringLiteral("local-")));
+        QCOMPARE(s.contact(cy).source, QStringLiteral("local"));
+        QCOMPARE(s.contact(cy).categories, QStringList{QStringLiteral("Work")});
+        QCOMPARE(w.selectedIds(), QStringList{cy});
+        // A contact of your own: edits are just edits, with nothing to revert to.
+        d.reset(w.makeEditDialog(cy));
+        d->findChild<QLineEdit *>(QStringLiteral("editName"))->setText(QStringLiteral("Cyrus Vance"));
+        d->accept();
+        w.applyEdit(d.get());
+        QCOMPARE(s.contact(cy).displayName, QStringLiteral("Cyrus Vance"));
+        QVERIFY(!s.contact(cy).edited);
+        w.selectContacts({cy, QStringLiteral("people/1")});
+        w.deleteSelected(); // only the one made here goes
+        QVERIFY(s.contact(cy).id.isEmpty());
+        QVERIFY(!s.contact(QStringLiteral("people/1")).id.isEmpty());
     }
 
     // Export: the contacts on show, or all of them, as JSON with the user's
@@ -477,15 +601,17 @@ private slots:
         QCOMPARE(names(s.contacts(q)), QStringList{QStringLiteral("Brook Plumbing")});
         QVERIFY(s.exportJson(q).contains("\"nickname\": \"plumber\""));
 
-        // In the Contacts window: typed into the contact's Nickname field.
+        // In the Contacts window: set in the contact's edit dialog, shown in its summary.
         zmail::ui::ContactsWindow w(&s);
-        w.selectContacts({QStringLiteral("people/4")});
-        auto *nick = w.findChild<QLineEdit *>(QStringLiteral("contactNickname"));
+        std::unique_ptr<zmail::ui::ContactEditDialog> edit(w.makeEditDialog(QStringLiteral("people/4")));
+        auto *nick = edit->findChild<QLineEdit *>(QStringLiteral("editNickname"));
         QVERIFY(nick && nick->text().isEmpty());
-        QTest::keyClicks(nick, QStringLiteral("dana"));
+        nick->setText(QStringLiteral("dana"));
+        edit->accept();
+        w.applyEdit(edit.get());
         QCOMPARE(s.contact(QStringLiteral("people/4")).nickname, QStringLiteral("dana"));
         w.selectContacts({QStringLiteral("people/2")});
-        QCOMPARE(nick->text(), QStringLiteral("plumber"));
+        QVERIFY(w.findChild<QTextBrowser *>(QStringLiteral("contactSummary"))->toPlainText().contains(QStringLiteral("plumber")));
     }
 };
 

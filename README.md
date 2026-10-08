@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.7: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.8: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -65,7 +65,9 @@ in 0.6.4: Eudora's Mailbox and Transfer menus, and its shortcut keys. New
 in 0.6.5: stationery (New Message With, Reply With). New in 0.6.6: a
 mailbox can open in a window of its own. New in 0.6.7: one Settings
 window, Undo for moves and emptying, editable queued messages, new-mail
-notifications, a shortcut list, flag search, and a round of polish. See
+notifications, a shortcut list, flag search, and a round of polish. New in
+0.6.8: contacts are edited in a window of their own, name and addresses
+included. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -132,7 +134,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.7_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.8_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -216,10 +218,13 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   Gmail keeps those messages in its own Trash until it purges them.
 - Shift+click and Shift+arrows select a range from the current message, up
   or down.
-- **Settings → Contacts** organises the contacts synced from Google: put
-  them in categories (a contact can be in several), add your own fields
-  (Phone, Company, anything) and a comment, and hide the ones you don't
-  want. Hidden contacts leave the list and are not suggested when you write
+- **Settings → Contacts** organises the contacts synced from Google. Select
+  one to read it; **Edit** (or a double-click) opens it in a window of its
+  own to change its name, addresses, nickname, categories (a contact can be
+  in several), your own fields (Phone, Company, anything), comment, and
+  whether it is hidden. Edits to a Google contact's name or addresses are
+  kept across syncs, and **Use Google's** goes back to Google's version.
+  **New Contact** adds one of your own. Hidden contacts leave the list and are not suggested when you write
   a message. All of this stays on your computer; nothing is written to Google.
   **Export** saves the contacts shown, or all of them, as a JSON file with
   their categories, fields and comments.

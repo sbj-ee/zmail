@@ -35,6 +35,9 @@ struct Contact {
     QList<ContactField> fields;  // in the user's order
     QString comment;
     QString nickname;            // a short name to type instead of the address (Eudora's nicknames)
+    // The name or addresses were changed here and differ from Google's. A
+    // resync keeps the edited ones; revertToSource() goes back to Google's.
+    bool edited = false;
     bool hidden = false;         // left out of the Contacts list and of autocomplete
 };
 
@@ -108,6 +111,17 @@ public:
     void setComment(const QString &contactId, const QString &comment);
     void setNickname(const QString &contactId, const QString &nickname);
 
+    // Everything about a contact in one go, from the edit dialog: its name
+    // and addresses (kept across resyncs even for a Google contact, which
+    // Google's own copy never sees), nickname, categories, fields, comment
+    // and hidden. False if the contact doesn't exist.
+    bool updateContact(const Contact &c);
+    // A new contact of the user's own ("local"); its id. Unlike
+    // addLocalContact() it doesn't reuse a contact with the same address.
+    QString createContact(const QString &displayName, const QList<ContactEmail> &emails);
+    // Drop the edits to a Google contact's name and addresses.
+    bool revertToSource(const QString &contactId);
+
     // Nicknames, as in Eudora: a short name that stands for an address. A
     // contact's nickname stands for that contact (all of them, if several
     // share it); a category's name stands for everyone in it. Hidden
@@ -133,6 +147,7 @@ public:
 private:
     bool exec(const QString &sql);
     bool migrate();
+    void writeIdentity(const QString &id, const QString &name, const QList<ContactEmail> &emails); // rows only
     QString canonicalCategory(const QString &name) const; // the stored spelling, or empty
     QString m_conn;
     QString m_error;

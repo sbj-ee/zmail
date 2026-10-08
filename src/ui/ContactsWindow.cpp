@@ -1,4 +1,5 @@
 #include "ContactsWindow.h"
+#include "ContactEditDialog.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
 #include "Icons.h"
@@ -27,6 +28,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QTextBrowser>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
@@ -162,6 +164,10 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     m_categorize = new QPushButton(tr("Add to Category"), middle);
     m_categorize->setObjectName(QStringLiteral("categorizeButton"));
     m_categorize->setAutoDefault(false);
+    m_new = new QPushButton(tr("New Contact\u2026"), middle);
+    m_new->setObjectName(QStringLiteral("newContactButton"));
+    m_new->setAutoDefault(false);
+    listButtons->addWidget(m_new);
     listButtons->addWidget(m_hide);
     listButtons->addWidget(m_categorize);
     listButtons->addStretch(1);
@@ -170,91 +176,24 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     m_status->setObjectName(QStringLiteral("contactsStatus"));
     ml->addWidget(m_status);
 
-    // ---- right: the chosen contact ----
+    // ---- right: the chosen contact, to read; Edit opens it to change ----
     m_detail = new QWidget(split);
     m_detail->setObjectName(QStringLiteral("contactDetail"));
     auto *dl = new QVBoxLayout(m_detail);
     dl->setContentsMargins(6, 0, 0, 0);
-    m_name = new QLabel(m_detail);
-    m_name->setObjectName(QStringLiteral("contactName"));
-    m_name->setTextFormat(Qt::PlainText);
-    m_name->setWordWrap(true);
-    QFont nf = m_name->font();
-    nf.setBold(true);
-    nf.setPointSizeF(nf.pointSizeF() * 1.2);
-    m_name->setFont(nf);
-    dl->addWidget(m_name);
-    m_emails = new QLabel(m_detail);
-    m_emails->setObjectName(QStringLiteral("contactEmails"));
-    m_emails->setTextFormat(Qt::PlainText);
-    m_emails->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_emails->setWordWrap(true);
-    dl->addWidget(m_emails);
-    m_source = new QLabel(m_detail);
-    m_source->setObjectName(QStringLiteral("contactSource"));
-    m_source->setForegroundRole(QPalette::PlaceholderText);
-    m_source->setWordWrap(true);
-    dl->addWidget(m_source);
-    auto *nickRow = new QFormLayout;
-    m_nickname = new QLineEdit(m_detail);
-    m_nickname->setObjectName(QStringLiteral("contactNickname"));
-    m_nickname->setPlaceholderText(tr("A short name to type in To instead of the address"));
-    m_nickname->setToolTip(tr("Type the nickname in To, Cc or Bcc and zmail fills in the address. "
-                              "A category's name works the same way, for everyone in it."));
-    nickRow->addRow(tr("Nickname:"), m_nickname);
-    dl->addLayout(nickRow);
-    m_hidden = new QCheckBox(tr("Hide this contact"), m_detail);
-    m_hidden->setObjectName(QStringLiteral("contactHidden"));
-    m_hidden->setToolTip(tr("Hidden contacts are left out of this list and are not suggested when you write a message."));
-    dl->addWidget(m_hidden);
-
-    dl->addWidget(new QLabel(tr("Categories:"), m_detail));
-    m_categoryChecks = new QListWidget(m_detail);
-    m_categoryChecks->setObjectName(QStringLiteral("contactCategories"));
-    m_categoryChecks->setMaximumHeight(120);
-    dl->addWidget(m_categoryChecks);
-
-    auto *fieldsHead = new QHBoxLayout;
-    fieldsHead->addWidget(new QLabel(tr("Fields:"), m_detail));
-    fieldsHead->addStretch(1);
-    auto *addField = new QPushButton(tr("Add Field"), m_detail);
-    addField->setObjectName(QStringLiteral("addFieldButton"));
-    addField->setAutoDefault(false);
-    auto *fieldMenu = new QMenu(addField);
-    for (const QString &preset : {tr("Phone"), tr("Mobile"), tr("Company"), tr("Title"), tr("Address"),
-                                  tr("Birthday"), tr("Website")}) {
-        fieldMenu->addAction(preset, this, [this, preset]() { this->addField(preset); });
-    }
-    fieldMenu->addSeparator();
-    fieldMenu->addAction(tr("Other…"), this, [this]() {
-        bool ok = false;
-        const QString name = QInputDialog::getText(this, tr("Add Field"), tr("Field name:"), QLineEdit::Normal, {}, &ok);
-        if (ok) {
-            this->addField(name);
-        }
-    });
-    addField->setMenu(fieldMenu);
-    m_removeField = new QPushButton(tr("Remove"), m_detail);
-    m_removeField->setObjectName(QStringLiteral("removeFieldButton"));
-    m_removeField->setAutoDefault(false);
-    fieldsHead->addWidget(addField);
-    fieldsHead->addWidget(m_removeField);
-    dl->addLayout(fieldsHead);
-    m_fields = new QTableWidget(0, 2, m_detail);
-    m_fields->setObjectName(QStringLiteral("contactFields"));
-    m_fields->setHorizontalHeaderLabels({tr("Field"), tr("Value")});
-    m_fields->horizontalHeader()->setStretchLastSection(true);
-    m_fields->verticalHeader()->hide();
-    m_fields->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_fields->setSelectionMode(QAbstractItemView::SingleSelection);
-    dl->addWidget(m_fields, 1);
-
-    dl->addWidget(new QLabel(tr("Comment:"), m_detail));
-    m_comment = new QPlainTextEdit(m_detail);
-    m_comment->setObjectName(QStringLiteral("contactComment"));
-    m_comment->setPlaceholderText(tr("Notes about this contact, kept on this computer"));
-    m_comment->setTabChangesFocus(true);
-    dl->addWidget(m_comment, 1);
+    m_summary = new QTextBrowser(m_detail);
+    m_summary->setObjectName(QStringLiteral("contactSummary"));
+    m_summary->setOpenLinks(false);
+    m_summary->setFrameShape(QFrame::NoFrame);
+    dl->addWidget(m_summary, 1);
+    auto *detailButtons = new QHBoxLayout;
+    m_edit = new QPushButton(tr("Edit\u2026"), m_detail);
+    m_edit->setObjectName(QStringLiteral("editContactButton"));
+    m_edit->setAutoDefault(false);
+    m_edit->setToolTip(tr("Change this contact's name, addresses, categories, fields and comment (or double-click it)"));
+    detailButtons->addWidget(m_edit);
+    detailButtons->addStretch(1);
+    dl->addLayout(detailButtons);
 
     split->setStretchFactor(0, 0);
     split->setStretchFactor(1, 1);
@@ -337,35 +276,15 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
         menu->setAttribute(Qt::WA_DeleteOnClose);
         menu->popup(m_categorize->mapToGlobal(QPoint(0, m_categorize->height())));
     });
-    connect(m_hidden, &QCheckBox::toggled, this, [this](bool on) {
-        if (!m_loading && !m_detailId.isEmpty()) {
-            m_store->setHidden({m_detailId}, on);
-            refresh(); // it leaves (or joins) the list on show
+    connect(m_list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        editContact(item->data(Qt::UserRole).toString());
+    });
+    connect(m_edit, &QPushButton::clicked, this, [this]() {
+        if (!m_detailId.isEmpty()) {
+            editContact(m_detailId);
         }
     });
-    connect(m_categoryChecks, &QListWidget::itemChanged, this, [this]() {
-        if (!m_loading) {
-            saveCategories();
-        }
-    });
-    connect(m_fields, &QTableWidget::itemChanged, this, [this]() {
-        if (!m_loading) {
-            saveFields();
-        }
-    });
-    connect(m_fields, &QTableWidget::itemSelectionChanged, this,
-            [this]() { m_removeField->setEnabled(m_fields->currentRow() >= 0); });
-    connect(m_removeField, &QPushButton::clicked, this, &ContactsWindow::removeCurrentField);
-    connect(m_nickname, &QLineEdit::textEdited, this, [this](const QString &text) {
-        if (!m_loading && !m_detailId.isEmpty()) {
-            m_store->setNickname(m_detailId, text);
-        }
-    });
-    connect(m_comment, &QPlainTextEdit::textChanged, this, [this]() {
-        if (!m_loading && !m_detailId.isEmpty()) {
-            m_store->setComment(m_detailId, m_comment->toPlainText());
-        }
-    });
+    connect(m_new, &QPushButton::clicked, this, [this]() { editContact(QString()); });
     if (m_sync) {
         connect(m_sync, &ContactsSync::finished, this, [this](bool ok, const QString &msg) {
             if (ok) {
@@ -539,110 +458,113 @@ void ContactsWindow::showDetail()
     const QStringList ids = selectedIds();
     m_hide->setEnabled(!ids.isEmpty());
     m_categorize->setEnabled(!ids.isEmpty());
-    const bool was = std::exchange(m_loading, true);
     m_detailId = ids.size() == 1 ? ids.first() : QString();
-    const Contact c = m_detailId.isEmpty() ? Contact() : m_store->contact(m_detailId);
-    m_detail->setEnabled(!m_detailId.isEmpty());
+    m_edit->setEnabled(!m_detailId.isEmpty());
     if (m_detailId.isEmpty()) {
-        m_name->setText(ids.isEmpty() ? tr("No contact selected") : tr("%1 contacts selected").arg(ids.size()));
-        m_emails->setText(ids.isEmpty() ? QString() : tr("Use Hide or Add to Category for all of them."));
-        m_source->clear();
-    } else {
-        m_name->setText(c.displayName);
-        QStringList emails;
-        for (const ContactEmail &e : c.emails) {
-            emails << e.email;
+        m_summary->setHtml(QStringLiteral("<p style='color:gray'>%1</p>")
+                               .arg(ids.isEmpty() ? tr("No contact selected.")
+                                                  : tr("%1 contacts selected. Use Hide or Add to Category for all of them.").arg(ids.size())));
+        return;
+    }
+    const Contact c = m_store->contact(m_detailId);
+    const auto esc = [](const QString &s) { return s.toHtmlEscaped().replace(QLatin1Char('\n'), QStringLiteral("<br>")); };
+    QString html = QStringLiteral("<h3>%1</h3>").arg(esc(c.displayName));
+    for (const ContactEmail &e : c.emails) {
+        html += QStringLiteral("<div>%1%2</div>").arg(esc(e.email), c.emails.size() > 1 && e.primary ? tr(" &nbsp;(primary)") : QString());
+    }
+    html += QStringLiteral("<p style='color:gray'>%1%2</p>")
+                .arg(esc(sourceText(c)), c.edited ? tr(", edited here") : QString());
+    QString rows;
+    const auto row = [&rows, &esc](const QString &key, const QString &value) {
+        if (!value.trimmed().isEmpty()) {
+            rows += QStringLiteral("<tr><td align='right'><b>%1</b>&nbsp;&nbsp;</td><td>%2</td></tr>").arg(esc(key), esc(value));
         }
-        m_emails->setText(emails.join(QLatin1Char('\n')));
-        m_source->setText(sourceText(c));
-    }
-    m_hidden->setChecked(c.hidden);
-    if (m_nickname->text() != c.nickname) {
-        m_nickname->setText(c.nickname);
-    }
-    m_categoryChecks->clear();
-    for (const CategoryCount &cat : m_store->categories()) {
-        auto *it = new QListWidgetItem(cat.name, m_categoryChecks);
-        it->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
-        it->setCheckState(c.categories.contains(cat.name, Qt::CaseInsensitive) ? Qt::Checked : Qt::Unchecked);
-    }
-    m_fields->setRowCount(0);
+    };
+    row(tr("Nickname:"), c.nickname);
+    row(tr("Categories:"), c.categories.join(QStringLiteral(", ")));
     for (const ContactField &f : c.fields) {
-        const int r = m_fields->rowCount();
-        m_fields->insertRow(r);
-        m_fields->setItem(r, 0, new QTableWidgetItem(f.name));
-        m_fields->setItem(r, 1, new QTableWidgetItem(f.value));
+        row(f.name + QLatin1Char(':'), f.value);
     }
-    m_removeField->setEnabled(false);
-    if (m_comment->toPlainText() != c.comment) {
-        m_comment->setPlainText(c.comment);
+    if (c.hidden) {
+        row(tr("Hidden:"), tr("yes"));
     }
-    m_loading = was;
+    if (!rows.isEmpty()) {
+        html += QStringLiteral("<table cellspacing='2'>%1</table>").arg(rows);
+    }
+    if (!c.comment.trimmed().isEmpty()) {
+        html += QStringLiteral("<p><b>%1</b><br>%2</p>").arg(tr("Comment"), esc(c.comment));
+    }
+    m_summary->setHtml(html);
 }
 
-void ContactsWindow::saveCategories()
+// The edit dialog for a contact, filled in but not shown (editContact()
+// runs it; the tests drive it directly).
+ContactEditDialog *ContactsWindow::makeEditDialog(const QString &contactId)
 {
-    if (m_detailId.isEmpty()) {
-        return;
+    QStringList categories;
+    for (const CategoryCount &c : m_store->categories()) {
+        categories << c.name;
     }
-    QStringList names;
-    for (int r = 0; r < m_categoryChecks->count(); ++r) {
-        if (m_categoryChecks->item(r)->checkState() == Qt::Checked) {
-            names << m_categoryChecks->item(r)->text();
+    Contact c = contactId.isEmpty() ? Contact() : m_store->contact(contactId);
+    if (contactId.isEmpty()) {
+        c.source = QStringLiteral("local");
+        if (isCategory(m_group)) {
+            c.categories << m_group; // a new contact made while looking at a category starts in it
         }
     }
-    m_store->setCategories(m_detailId, names);
-    refresh(); // counts, and it may have left the category on show
+    return new ContactEditDialog(c, categories, this);
 }
 
-void ContactsWindow::saveFields()
+// What OK in the dialog does: save it (creating the contact if it is new),
+// or go back to Google's name and addresses. Returns the contact's id.
+QString ContactsWindow::applyEdit(const ContactEditDialog *dialog)
 {
-    if (m_detailId.isEmpty()) {
-        return;
+    Contact c = dialog->contact();
+    if (c.id.isEmpty()) {
+        c.id = m_store->createContact(c.displayName, c.emails);
+        if (c.id.isEmpty()) {
+            return {};
+        }
     }
-    QList<ContactField> fields;
-    for (int r = 0; r < m_fields->rowCount(); ++r) {
-        const QTableWidgetItem *name = m_fields->item(r, 0);
-        const QTableWidgetItem *value = m_fields->item(r, 1);
-        fields.append({name ? name->text() : QString(), value ? value->text() : QString()});
+    if (dialog->revertRequested()) {
+        m_store->revertToSource(c.id);
+        const Contact source = m_store->contact(c.id);
+        c.displayName = source.displayName; // the rest of what was edited is still kept
+        c.emails = source.emails;
     }
-    m_store->setFields(m_detailId, fields);
+    m_store->updateContact(c);
+    refresh();
+    selectContacts({c.id});
+    return c.id;
 }
 
-void ContactsWindow::addField(const QString &name)
+void ContactsWindow::editContact(const QString &contactId)
 {
-    if (m_detailId.isEmpty() || name.trimmed().isEmpty()) {
-        return;
+    ContactEditDialog *dialog = makeEditDialog(contactId);
+    if (dialog->exec() == QDialog::Accepted) {
+        applyEdit(dialog);
     }
-    int r = 0;
-    {
-        const bool was = std::exchange(m_loading, true);
-        r = m_fields->rowCount();
-        m_fields->insertRow(r);
-        m_fields->setItem(r, 0, new QTableWidgetItem(name.trimmed()));
-        m_fields->setItem(r, 1, new QTableWidgetItem);
-        m_loading = was;
+    dialog->deleteLater();
+}
+
+void ContactsWindow::deleteSelected()
+{
+    // Only contacts made here can be deleted: one from Google would come
+    // straight back with the next sync (hide those instead).
+    QStringList mine;
+    for (const QString &id : selectedIds()) {
+        if (m_store->contact(id).source == QLatin1String("local")) {
+            mine << id;
+        }
     }
-    saveFields();
-    m_fields->setCurrentCell(r, 1);
-    if (isVisible()) {
-        m_fields->editItem(m_fields->item(r, 1)); // straight to typing the value
+    for (const QString &id : std::as_const(mine)) {
+        m_store->removeContact(id);
+    }
+    if (!mine.isEmpty()) {
+        refresh();
     }
 }
 
-void ContactsWindow::removeCurrentField()
-{
-    const int r = m_fields->currentRow();
-    if (r < 0 || m_detailId.isEmpty()) {
-        return;
-    }
-    {
-        const bool was = std::exchange(m_loading, true);
-        m_fields->removeRow(r);
-        m_loading = was;
-    }
-    saveFields();
-}
 
 bool ContactsWindow::exportJson(const QString &path, bool everything)
 {
@@ -750,11 +672,26 @@ void ContactsWindow::showListMenu(const QPoint &pos)
     auto *menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     const bool inHidden = m_group == QLatin1String(kHidden);
+    const QStringList ids = selectedIds();
+    if (ids.size() == 1) {
+        const QString id = ids.first();
+        menu->addAction(tr("Edit\u2026"), this, [this, id]() { editContact(id); });
+        menu->addSeparator();
+    }
     menu->addAction(inHidden ? tr("Unhide") : tr("Hide"), this, [this, inHidden]() { setSelectedHidden(!inHidden); });
     menu->addMenu(categorizeMenu(menu));
     if (isCategory(m_group)) {
         const QString name = m_group;
         menu->addAction(tr("Remove from \"%1\"").arg(name), this, [this, name]() { removeSelectedFromCategory(name); });
+    }
+    bool anyLocal = false;
+    for (const QString &id : ids) {
+        anyLocal = anyLocal || m_store->contact(id).source == QLatin1String("local");
+    }
+    if (anyLocal) {
+        menu->addSeparator();
+        menu->addAction(tr("Delete"), this, &ContactsWindow::deleteSelected)
+            ->setToolTip(tr("Contacts made in zmail can be deleted; ones from Google can be hidden"));
     }
     menu->popup(m_list->viewport()->mapToGlobal(pos));
 }

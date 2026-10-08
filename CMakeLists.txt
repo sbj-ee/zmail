@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.6.7 LANGUAGES CXX)
+project(zmail VERSION 0.6.8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -122,6 +122,8 @@ add_library(zmail_app STATIC
   src/ui/ComposeWindow.cpp
   src/ui/ConnectDialog.cpp
   src/ui/ConnectDialog.h
+  src/ui/ContactEditDialog.cpp
+  src/ui/ContactEditDialog.h
   src/ui/ContactsWindow.cpp
   src/ui/ContactsWindow.h
   src/ui/ComposeWindow.h

@@ -129,7 +129,26 @@ bool ContactStore::migrate()
     if (!hasNickname && !exec(QStringLiteral("ALTER TABLE contact_notes ADD COLUMN nickname TEXT"))) {
         return false;
     }
-    setMeta(QStringLiteral("schema"), QStringLiteral("3"));
+    // Schema 4 (0.6.8): a contact's name and addresses can be edited here.
+    // The edit is kept (name_edit / emails_edit) and so is what the source
+    // last said (source_name / source_emails), so a resync can re-apply the
+    // one and "revert" can restore the other.
+    QStringList have;
+    {
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        if (q.exec(QStringLiteral("PRAGMA table_info(contact_notes)"))) {
+            while (q.next()) {
+                have << q.value(1).toString();
+            }
+        }
+    }
+    for (const char *col : {"name_edit", "emails_edit", "source_name", "source_emails"}) {
+        if (!have.contains(QLatin1String(col)) &&
+            !exec(QStringLiteral("ALTER TABLE contact_notes ADD COLUMN %1 TEXT").arg(QLatin1String(col)))) {
+            return false;
+        }
+    }
+    setMeta(QStringLiteral("schema"), QStringLiteral("4"));
     return true;
 }
 
@@ -154,6 +173,53 @@ void ContactStore::setMeta(const QString &key, const QString &value)
     q.exec();
 }
 
+namespace {
+QString emailsToJson(const QList<ContactEmail> &emails)
+{
+    QJsonArray arr;
+    for (const ContactEmail &e : emails) {
+        if (!e.email.trimmed().isEmpty()) {
+            arr.append(QJsonObject{{QStringLiteral("email"), e.email.trimmed().toLower()}, {QStringLiteral("primary"), e.primary}});
+        }
+    }
+    return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+QList<ContactEmail> emailsFromJson(const QString &json)
+{
+    QList<ContactEmail> out;
+    for (const auto &v : QJsonDocument::fromJson(json.toUtf8()).array()) {
+        out.append({v.toObject().value(QStringLiteral("email")).toString(), v.toObject().value(QStringLiteral("primary")).toBool()});
+    }
+    return out;
+}
+} // namespace
+
+// The contacts / contact_emails rows for one contact: its name and addresses.
+void ContactStore::writeIdentity(const QString &id, const QString &name, const QList<ContactEmail> &emails)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("UPDATE contacts SET display_name = ?, updated_ms = ? WHERE id = ?"));
+    q.addBindValue(name);
+    q.addBindValue(QDateTime::currentMSecsSinceEpoch());
+    q.addBindValue(id);
+    q.exec();
+    q.prepare(QStringLiteral("DELETE FROM contact_emails WHERE contact_id = ?"));
+    q.addBindValue(id);
+    q.exec();
+    q.prepare(QStringLiteral("INSERT OR IGNORE INTO contact_emails(contact_id, email, is_primary) VALUES (?,?,?)"));
+    for (const ContactEmail &e : emails) {
+        const QString email = e.email.trimmed().toLower();
+        if (email.isEmpty()) {
+            continue;
+        }
+        q.addBindValue(id);
+        q.addBindValue(email);
+        q.addBindValue(e.primary ? 1 : 0);
+        q.exec();
+    }
+}
+
 void ContactStore::upsertContact(const Contact &c)
 {
     QSqlDatabase db = QSqlDatabase::database(m_conn);
@@ -170,21 +236,135 @@ void ContactStore::upsertContact(const Contact &c)
     q.addBindValue(c.etag);
     q.addBindValue(QDateTime::currentMSecsSinceEpoch());
     q.exec();
-    q.prepare(QStringLiteral("DELETE FROM contact_emails WHERE contact_id = ?"));
+    // Edited here? Then what just arrived is remembered as the source's
+    // version (for "revert"), and the edit stays what is shown and used.
+    QString nameEdit, emailsEdit;
+    bool hasEdit = false;
+    q.prepare(QStringLiteral("SELECT name_edit, emails_edit FROM contact_notes WHERE contact_id = ?"));
     q.addBindValue(c.id);
-    q.exec();
-    q.prepare(QStringLiteral("INSERT OR IGNORE INTO contact_emails(contact_id, email, is_primary) VALUES (?,?,?)"));
-    for (const ContactEmail &e : c.emails) {
-        const QString email = e.email.trimmed().toLower();
-        if (email.isEmpty()) {
-            continue;
-        }
+    if (q.exec() && q.next()) {
+        nameEdit = q.value(0).toString();
+        emailsEdit = q.value(1).toString();
+        hasEdit = !q.value(0).isNull() || !q.value(1).isNull();
+    }
+    if (hasEdit) {
+        q.prepare(QStringLiteral("UPDATE contact_notes SET source_name = ?, source_emails = ? WHERE contact_id = ?"));
+        q.addBindValue(c.displayName);
+        q.addBindValue(emailsToJson(c.emails));
         q.addBindValue(c.id);
-        q.addBindValue(email);
-        q.addBindValue(e.primary ? 1 : 0);
         q.exec();
+        writeIdentity(c.id, nameEdit, emailsFromJson(emailsEdit));
+    } else {
+        writeIdentity(c.id, c.displayName, c.emails);
     }
     db.commit();
+}
+
+bool ContactStore::updateContact(const Contact &c)
+{
+    const Contact old = contact(c.id);
+    if (old.id.isEmpty()) {
+        return false;
+    }
+    QList<ContactEmail> emails;
+    QStringList seen;
+    for (const ContactEmail &e : c.emails) {
+        const QString email = e.email.trimmed().toLower();
+        if (!email.isEmpty() && !seen.contains(email)) {
+            seen << email;
+            emails.append({email, e.primary});
+        }
+    }
+    // Exactly one primary: the first marked, else the first.
+    bool primary = false;
+    for (ContactEmail &e : emails) {
+        e.primary = e.primary && !primary;
+        primary = primary || e.primary;
+    }
+    if (!primary && !emails.isEmpty()) {
+        emails.first().primary = true;
+    }
+    QString name = c.displayName.trimmed();
+    if (name.isEmpty() && !emails.isEmpty()) {
+        name = emails.first().email; // a contact is called something
+    }
+    QStringList oldAddrs, newAddrs;
+    for (const ContactEmail &e : old.emails) oldAddrs << (e.primary ? QLatin1Char('*') : QLatin1Char(' ')) + e.email;
+    for (const ContactEmail &e : std::as_const(emails)) newAddrs << (e.primary ? QLatin1Char('*') : QLatin1Char(' ')) + e.email;
+    oldAddrs.sort();
+    newAddrs.sort();
+    const bool identityChanged = name != old.displayName || oldAddrs != newAddrs;
+
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    if (identityChanged) {
+        db.transaction();
+        QSqlQuery q(db);
+        if (old.source != QLatin1String("local")) {
+            // Synced from Google: keep the edit, and (the first time) what
+            // Google had, so a resync re-applies one and revert restores the other.
+            q.prepare(QStringLiteral(
+                "INSERT INTO contact_notes(contact_id, name_edit, emails_edit, source_name, source_emails) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(contact_id) DO UPDATE SET name_edit = excluded.name_edit, emails_edit = excluded.emails_edit, "
+                "source_name = COALESCE(contact_notes.source_name, excluded.source_name), "
+                "source_emails = COALESCE(contact_notes.source_emails, excluded.source_emails)"));
+            q.addBindValue(c.id);
+            q.addBindValue(name);
+            q.addBindValue(emailsToJson(emails));
+            q.addBindValue(old.displayName);
+            q.addBindValue(emailsToJson(old.emails));
+            q.exec();
+        }
+        writeIdentity(c.id, name, emails);
+        db.commit();
+    }
+    setNickname(c.id, c.nickname);
+    setCategories(c.id, c.categories);
+    setFields(c.id, c.fields);
+    setComment(c.id, c.comment);
+    setHidden({c.id}, c.hidden);
+    return true;
+}
+
+QString ContactStore::createContact(const QString &displayName, const QList<ContactEmail> &emails)
+{
+    Contact c;
+    c.id = QStringLiteral("local-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    c.source = QStringLiteral("local");
+    c.displayName = displayName.trimmed();
+    c.emails = emails;
+    if (c.displayName.isEmpty()) {
+        for (const ContactEmail &e : emails) {
+            if (!e.email.trimmed().isEmpty()) {
+                c.displayName = e.email.trimmed().toLower();
+                break;
+            }
+        }
+    }
+    if (c.displayName.isEmpty()) {
+        return {};
+    }
+    upsertContact(c);
+    return c.id;
+}
+
+bool ContactStore::revertToSource(const QString &contactId)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT source_name, source_emails, name_edit, emails_edit FROM contact_notes WHERE contact_id = ?"));
+    q.addBindValue(contactId);
+    if (!(q.exec() && q.next()) || (q.value(2).isNull() && q.value(3).isNull())) {
+        return false;
+    }
+    const QString name = q.value(0).toString();
+    const QList<ContactEmail> emails = emailsFromJson(q.value(1).toString());
+    db.transaction();
+    writeIdentity(contactId, name, emails);
+    q.prepare(QStringLiteral("UPDATE contact_notes SET name_edit = NULL, emails_edit = NULL, source_name = NULL, "
+                             "source_emails = NULL WHERE contact_id = ?"));
+    q.addBindValue(contactId);
+    q.exec();
+    return db.commit();
 }
 
 void ContactStore::removeContact(const QString &id)
@@ -220,7 +400,7 @@ Contact ContactStore::contact(const QString &id) const
     c.source = q.value(2).toString();
     c.googleResource = q.value(3).toString();
     c.etag = q.value(4).toString();
-    q.prepare(QStringLiteral("SELECT email, is_primary FROM contact_emails WHERE contact_id = ?"));
+    q.prepare(QStringLiteral("SELECT email, is_primary FROM contact_emails WHERE contact_id = ? ORDER BY is_primary DESC, rowid"));
     q.addBindValue(id);
     if (q.exec()) {
         while (q.next()) {
@@ -245,12 +425,13 @@ Contact ContactStore::contact(const QString &id) const
             c.fields.append({q.value(0).toString(), q.value(1).toString()});
         }
     }
-    q.prepare(QStringLiteral("SELECT comment, hidden, nickname FROM contact_notes WHERE contact_id = ?"));
+    q.prepare(QStringLiteral("SELECT comment, hidden, nickname, name_edit, emails_edit FROM contact_notes WHERE contact_id = ?"));
     q.addBindValue(id);
     if (q.exec() && q.next()) {
         c.comment = q.value(0).toString();
         c.hidden = q.value(1).toBool();
         c.nickname = q.value(2).toString();
+        c.edited = !q.value(3).isNull() || !q.value(4).isNull();
     }
     return c;
 }
@@ -346,6 +527,7 @@ QByteArray ContactStore::exportJson(const ContactQuery &query) const
                       {QStringLiteral("fields"), fields},
                       {QStringLiteral("comment"), c.comment},
                       {QStringLiteral("nickname"), c.nickname},
+                      {QStringLiteral("edited"), c.edited},
                       {QStringLiteral("hidden"), c.hidden},
                       {QStringLiteral("trusted"), c.trusted}};
         if (!c.googleResource.isEmpty()) {

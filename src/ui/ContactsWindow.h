@@ -12,7 +12,7 @@ class QListWidget;
 class QMenu;
 class QPlainTextEdit;
 class QPushButton;
-class QTableWidget;
+class QTextBrowser;
 class QWidget;
 
 namespace zmail {
@@ -23,12 +23,15 @@ struct ContactQuery;
 
 namespace zmail::ui {
 
+class ContactEditDialog;
+
 // Settings > Contacts. Google's contacts arrive raw (every address Gmail ever
 // auto-saved); this is where they are put in order: categories down the left,
-// the contacts of the chosen one in the middle, and on the right the chosen
-// contact's categories, extra fields, comment and "hidden". All of that is
-// the user's own and stays on this machine: nothing here is written to
-// Google, and a resync leaves it alone. Edits are saved as they are made.
+// the contacts of the chosen one in the middle, and the chosen contact to
+// read on the right. A contact is changed in a window of its own (Edit, or
+// a double-click): its name, addresses, nickname, categories, extra fields,
+// comment and "hidden". All of that stays on this machine: nothing here is
+// written to Google, and a resync leaves it alone.
 class ContactsWindow : public QDialog
 {
     Q_OBJECT
@@ -56,8 +59,12 @@ public:
     void setSelectedHidden(bool hidden);
     void addSelectedToCategory(const QString &name);
     void removeSelectedFromCategory(const QString &name);
-    void addField(const QString &name);
-    void removeCurrentField();
+    // A contact is changed in a window of its own (ContactEditDialog):
+    // Edit, a double-click, or New Contact for one made here.
+    void editContact(const QString &contactId); // "" = a new contact; runs the dialog
+    ContactEditDialog *makeEditDialog(const QString &contactId);
+    QString applyEdit(const ContactEditDialog *dialog); // what its OK does; the contact's id
+    void deleteSelected(); // the selected contacts that were made in zmail
     // Write the contacts on show (this category and search), or with
     // everything=true all of them, hidden ones included, to a JSON file
     // only the user can read. False if the file couldn't be written.
@@ -72,8 +79,6 @@ private:
     void refreshGroups();
     void refreshList();
     void showDetail();
-    void saveFields();
-    void saveCategories();
     QMenu *categorizeMenu(QWidget *parent);
     void showListMenu(const QPoint &pos);
     QString askCategoryName(const QString &title, const QString &current = {});
@@ -95,15 +100,9 @@ private:
     QLabel *m_status = nullptr;
 
     QWidget *m_detail = nullptr;
-    QLabel *m_name = nullptr;
-    QLabel *m_emails = nullptr;
-    QLabel *m_source = nullptr;
-    QLineEdit *m_nickname = nullptr;
-    QCheckBox *m_hidden = nullptr;
-    QListWidget *m_categoryChecks = nullptr;
-    QTableWidget *m_fields = nullptr;
-    QPushButton *m_removeField = nullptr;
-    QPlainTextEdit *m_comment = nullptr;
+    QTextBrowser *m_summary = nullptr; // the selected contact, to read
+    QPushButton *m_edit = nullptr;
+    QPushButton *m_new = nullptr;
 };
 
 } // namespace zmail::ui

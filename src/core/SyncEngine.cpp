@@ -1034,22 +1034,26 @@ void SyncEngine::prunePurged()
     });
 }
 
-void SyncEngine::emptyLabel(const QString &id, int round)
+void SyncEngine::emptyLabel(const QString &id, int round, std::shared_ptr<QStringList> moved)
 {
     if (!m_running || id.isEmpty()) {
         return;
     }
+    if (!moved) {
+        moved = std::make_shared<QStringList>();
+    }
     const int gen = m_generation;
-    const auto done = [this]() {
+    const auto done = [this, id, moved]() {
         refreshLabels();
         emit messagesChanged();
+        emit labelEmptied(id, *moved);
     };
     if (round >= kEmptyFolderRounds) {
         done(); // 10,000 messages: the rest on the next Empty Folder
         return;
     }
     // Trashed mail isn't listed, so each round asks for the first page again.
-    m_api->listMessages(id, 500, {}, [this, gen, id, round, done](const QJsonObject &json, const ApiError &err) {
+    m_api->listMessages(id, 500, {}, [this, gen, id, round, done, moved](const QJsonObject &json, const ApiError &err) {
         if (gen != m_generation) {
             return;
         }
@@ -1068,7 +1072,7 @@ void SyncEngine::emptyLabel(const QString &id, int round)
         }
         const QStringList remove{id, kInbox};
         m_api->batchModifyLabels(ids, {QStringLiteral("TRASH")}, remove,
-                                 [this, gen, id, round, ids, remove, done](const QJsonObject &, const ApiError &err2) {
+                                 [this, gen, id, round, ids, remove, done, moved](const QJsonObject &, const ApiError &err2) {
             if (gen != m_generation) {
                 return;
             }
@@ -1085,9 +1089,80 @@ void SyncEngine::emptyLabel(const QString &id, int round)
                     }
                 }
             }
+            moved->append(ids);
             emit messagesChanged();
-            emptyLabel(id, round + 1);
+            emptyLabel(id, round + 1, moved);
         });
+    });
+}
+
+void SyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
+{
+    if (!m_running || id.isEmpty() || messageIds.isEmpty()) {
+        return;
+    }
+    const int gen = m_generation;
+    auto pending = std::make_shared<int>(0);
+    for (qsizetype at = 0; at < messageIds.size(); at += 1000) { // batchModify's limit
+        const QStringList chunk = messageIds.mid(at, 1000);
+        ++*pending;
+        m_api->batchModifyLabels(chunk, {id}, {QStringLiteral("TRASH")},
+                                 [this, gen, id, chunk, pending](const QJsonObject &, const ApiError &err) {
+            if (gen != m_generation) {
+                return;
+            }
+            if (err.isError) {
+                reportError(err, tr("Undoing Empty Folder"));
+            } else {
+                const MailCache::Batch batch(*m_cache);
+                for (const QString &messageId : chunk) {
+                    if (m_cache->contains(messageId)) {
+                        m_cache->modifyLabels(messageId, {id}, {QStringLiteral("TRASH")});
+                    }
+                }
+            }
+            if (--*pending == 0) {
+                refreshLabels();
+                emit messagesChanged();
+            }
+        });
+    }
+}
+
+void SyncEngine::restoreFolders(const QString &messageId, const QStringList &before)
+{
+    if (!m_running || messageId.isEmpty()) {
+        return;
+    }
+    const CachedMessage now = m_cache->summary(messageId);
+    if (now.id.isEmpty()) {
+        return;
+    }
+    // Only where it is filed: the folders and the Inbox. Read state, stars
+    // and the rest stay as they are now.
+    QStringList folders{kInbox};
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user")) {
+            folders.append(l.id);
+        }
+    }
+    QStringList add, remove;
+    for (const QString &l : std::as_const(folders)) {
+        const bool was = before.contains(l);
+        const bool is = now.labels.contains(l);
+        if (was && !is) {
+            add.append(l);
+        } else if (!was && is) {
+            remove.append(l);
+        }
+    }
+    if (add.isEmpty() && remove.isEmpty()) {
+        return;
+    }
+    modifyOptimistic(messageId, add, remove, tr("Undoing the move"), [this](const ApiError &err) {
+        if (!err.isError) {
+            m_labelsRefreshSoon->start();
+        }
     });
 }
 

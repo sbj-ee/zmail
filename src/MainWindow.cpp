@@ -87,6 +87,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCall>
+#include <QStackedWidget>
+#include <QListWidget>
+#include <QAbstractButton>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -430,7 +436,7 @@ void MainWindow::buildMenus()
     };
 
     QMenu *file = addMenu("menuFile", tr("&File"));
-    QAction *nm = file->addAction(tr("&New Message"), this, [this]() { openCompose(); });
+    QAction *nm = file->addAction(icon(QStringLiteral("square-pen")), tr("&New Message"), this, [this]() { openCompose(); });
     nm->setShortcut(QKeySequence::New);
     // Filled when opened, from the stationery saved at that moment.
     const auto stationeryMenu = [this](QMenu *menu, bool reply) {
@@ -450,7 +456,7 @@ void MainWindow::buildMenus()
     QMenu *newWith = file->addMenu(tr("New Message &With"));
     newWith->setObjectName(QStringLiteral("menuNewMessageWith"));
     stationeryMenu(newWith, false);
-    QAction *cm = file->addAction(tr("&Check Mail"), this, &MainWindow::checkMail);
+    QAction *cm = file->addAction(icon(QStringLiteral("refresh-cw")), tr("&Check Mail"), this, &MainWindow::checkMail);
     cm->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
     QAction *sq = file->addAction(icon(QStringLiteral("send")), tr("Send &Queued Messages"), this, [this]() { sendQueued(); });
     sq->setObjectName(QStringLiteral("actionSendQueued"));
@@ -487,7 +493,21 @@ void MainWindow::buildMenus()
     QAction *copy = edit->addAction(icon(QStringLiteral("copy")), tr("&Copy"), this, &MainWindow::copySelection);
     copy->setObjectName(QStringLiteral("actionCopy"));
     copy->setShortcut(QKeySequence::Copy);
-    QAction *find = edit->addAction(tr("&Find\u2026"), this, [this]() { m_search->setFocus(); });
+    QAction *selectAll = edit->addAction(tr("Select &All"), this, [this]() {
+        // In a text field or the message, its text; otherwise every message in the list.
+        QWidget *focus = QApplication::focusWidget();
+        if (auto *line = qobject_cast<QLineEdit *>(focus)) {
+            line->selectAll();
+        } else if (focus && m_view->isAncestorOf(focus)) {
+            m_view->body()->selectAll();
+        } else {
+            m_list->selectAll();
+            m_list->setFocus();
+        }
+    });
+    selectAll->setObjectName(QStringLiteral("actionSelectAll"));
+    selectAll->setShortcut(QKeySequence::SelectAll);
+    QAction *find = edit->addAction(icon(QStringLiteral("search")), tr("&Find\u2026"), this, [this]() { m_search->setFocus(); });
     find->setShortcut(QKeySequence::Find);
     edit->addSeparator();
     m_undoDeleteAction = edit->addAction(tr("&Undo Delete"), this, &MainWindow::undoDelete);
@@ -527,6 +547,13 @@ void MainWindow::buildMenus()
     dark->setCheckable(true);
     connect(dark, &QAction::toggled, this, [this](bool on) { m_view->setDarkMail(on); });
     view->addAction(soundAction()); // Play Sound for New Mail (also on the toolbar)
+    m_notify = QSettings().value(QStringLiteral("notify/desktop"), true).toBool();
+    QAction *notify = view->addAction(tr("&Notify for New Mail"));
+    notify->setObjectName(QStringLiteral("actionNotify"));
+    notify->setCheckable(true);
+    notify->setChecked(m_notify);
+    notify->setToolTip(tr("Show a desktop notification when mail arrives and zmail isn't in front"));
+    connect(notify, &QAction::toggled, this, &MainWindow::setNotifyOn);
     view->addSeparator();
     m_hideSpamAction = view->addAction(tr("&Hide Spam from Folders"));
     m_hideSpamAction->setObjectName(QStringLiteral("actionHideSpam"));
@@ -601,7 +628,10 @@ void MainWindow::buildMenus()
     message->addMenu(buildFlagMenu(message));
     QAction *filterNow = message->addAction(tr("Fi&lter Messages"), this, [this]() { filterSelected(); });
     filterNow->setObjectName(QStringLiteral("actionFilterMessages"));
-    filterNow->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_J)); // as in Eudora
+    // Eudora's key is Ctrl+J, but that was already Mark as Junk here (with
+    // Ctrl+Shift+J for Not Junk). Sharing it made Qt treat the key as
+    // ambiguous and run neither (0.6.0-0.6.6).
+    filterNow->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_J));
     QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
                                       [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
@@ -633,16 +663,20 @@ void MainWindow::buildMenus()
     m_transferMenu = addMenu("menuTransfer", tr("&Transfer"));
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
     later(settings, tr("&Account\u2026"));
-    QAction *filters = settings->addAction(tr("&Filters\u2026"), this, [this]() { showRulesDialog(); });
+    QAction *all = settings->addAction(tr("&Settings\u2026"), this, [this]() { showSettings(); });
+    all->setObjectName(QStringLiteral("actionSettings"));
+    all->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
+    settings->addSeparator();
+    QAction *filters = settings->addAction(tr("&Filters\u2026"), this, [this]() { showSettings(QStringLiteral("filters")); });
     filters->setObjectName(QStringLiteral("actionFilters"));
     m_rules.load();
-    QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
+    QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, [this]() { showSettings(QStringLiteral("signatures")); });
     sigs->setObjectName(QStringLiteral("actionSignatures"));
-    QAction *stat = settings->addAction(tr("S&tationery\u2026"), this, [this]() { showStationeryDialog(); });
+    QAction *stat = settings->addAction(tr("S&tationery\u2026"), this, [this]() { showSettings(QStringLiteral("stationery")); });
     stat->setObjectName(QStringLiteral("actionStationery"));
-    QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showPrivacyDialog()->open(); });
+    QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showSettings(QStringLiteral("privacy")); });
     privacy->setObjectName(QStringLiteral("actionPrivacy"));
-    QAction *sounds = settings->addAction(tr("S&ounds\u2026"), this, [this]() { showSoundDialog()->open(); });
+    QAction *sounds = settings->addAction(tr("S&ounds\u2026"), this, [this]() { showSettings(QStringLiteral("sounds")); });
     sounds->setObjectName(QStringLiteral("actionSounds"));
     QAction *contacts = settings->addAction(tr("&Contacts…"), this, &MainWindow::showContacts);
     contacts->setObjectName(QStringLiteral("actionContacts"));
@@ -657,12 +691,16 @@ void MainWindow::buildMenus()
     syncContacts->setObjectName(QStringLiteral("actionSyncContacts"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
-    QAction *stripes = settings->addAction(tr("Row S&tripes\u2026"), this, [this]() { showStripesDialog(); });
-    QAction *listLook = settings->addAction(tr("Message &List\u2026"), this, [this]() { showListDialog(); });
+    QAction *stripes = settings->addAction(tr("Row Stri&pes\u2026"), this, [this]() { showSettings(QStringLiteral("stripes")); });
+    QAction *listLook = settings->addAction(tr("Message &List\u2026"), this, [this]() { showSettings(QStringLiteral("list")); });
     listLook->setObjectName(QStringLiteral("actionMessageList"));
     stripes->setObjectName(QStringLiteral("actionRowStripes"));
 
     QMenu *help = addMenu("menuHelp", tr("&Help"));
+    QAction *keys = help->addAction(tr("&Keyboard Shortcuts"), this, [this]() { showShortcuts(); });
+    keys->setObjectName(QStringLiteral("actionShortcuts"));
+    keys->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Slash));
+    help->addSeparator();
     QAction *about = help->addAction(tr("&About zmail"), this, &MainWindow::showAbout);
     about->setObjectName(QStringLiteral("actionAbout"));
     QAction *upd = help->addAction(tr("Check for &Updates\u2026"), this, &MainWindow::checkForUpdates);
@@ -810,6 +848,16 @@ void MainWindow::buildPanes()
     h->resizeSection(MessageListModel::Size,
                      std::max(68, m_list->fontMetrics().horizontalAdvance(QStringLiteral("888.8 MB")) + 18));
     m_list->setItemDelegate(new MessageRowDelegate(m_list));
+    // An empty list says so, instead of being a blank rectangle.
+    m_emptyHint = new QLabel(m_list->viewport());
+    m_emptyHint->setObjectName(QStringLiteral("emptyListHint"));
+    m_emptyHint->setAlignment(Qt::AlignCenter);
+    m_emptyHint->setWordWrap(true);
+    m_emptyHint->setForegroundRole(QPalette::PlaceholderText);
+    m_emptyHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto *hintLayout = new QVBoxLayout(m_list->viewport());
+    hintLayout->addWidget(m_emptyHint);
+    m_emptyHint->hide();
     m_listFontSize = QSettings().value(QStringLiteral("ui/listFontSize"), kListFontDefault).toInt();
     m_listRowSpacing = QSettings().value(QStringLiteral("ui/listRowSpacing"), kListSpacingDefault).toInt();
     applyListAppearance();
@@ -1032,8 +1080,11 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
         c->setSession(m_session);
         c->setAttribute(Qt::WA_DeleteOnClose, true);
         connect(c, &QObject::destroyed, this, [this, c]() { m_composers.removeAll(c); });
-        connect(c, &ComposeWindow::sent, this,
-                [this]() { statusBar()->showMessage(tr("Message sent"), 6000); });
+        connect(c, &ComposeWindow::sent, this, [this]() {
+            statusBar()->showMessage(tr("Message sent"), 6000);
+            reloadFromCache(); // it may have been in the queue
+            populateMailboxes();
+        });
         connect(c, &ComposeWindow::queued, this, [this]() {
             reloadFromCache();
             populateMailboxes();
@@ -1133,6 +1184,142 @@ void MainWindow::showSignatures()
     dlg.exec();
 }
 
+// ---- Settings: one window ------------------------------------------------------
+
+namespace {
+// A settings dialog living inside the Settings window is a page, not a
+// dialog: Escape and Enter belong to the window around it. (Left to the
+// page, Escape would reject and hide just that page.)
+class PageKeys : public QObject
+{
+public:
+    PageKeys(QDialog *window, QObject *parent) : QObject(parent), m_window(window) {}
+
+protected:
+    bool eventFilter(QObject *, QEvent *ev) override
+    {
+        if (ev->type() == QEvent::KeyPress) {
+            const int key = static_cast<QKeyEvent *>(ev)->key();
+            if (key == Qt::Key_Escape) {
+                m_window->reject();
+                return true;
+            }
+            if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                return true; // never an accidental OK from inside a page
+            }
+        }
+        return false;
+    }
+
+private:
+    QDialog *m_window;
+};
+} // namespace
+
+// Filters, Signatures, Stationery, Message List, Row Stripes, Sounds and
+// Privacy were seven dialogs under seven menu entries. Here they are the
+// sections of one window: the same dialogs, as pages, with one OK and one
+// Cancel for all of them.
+QDialog *MainWindow::showSettings(const QString &section)
+{
+    auto *win = new QDialog(this);
+    win->setObjectName(QStringLiteral("settingsWindow"));
+    win->setAttribute(Qt::WA_DeleteOnClose);
+    win->setWindowTitle(tr("Settings"));
+    win->resize(1040, 660);
+    auto *lay = new QVBoxLayout(win);
+    auto *body = new QHBoxLayout;
+    auto *sections = new QListWidget(win);
+    sections->setObjectName(QStringLiteral("settingsSections"));
+    sections->setFixedWidth(170);
+    auto *stack = new QStackedWidget(win);
+    stack->setObjectName(QStringLiteral("settingsPages"));
+    body->addWidget(sections);
+    body->addWidget(stack, 1);
+    lay->addLayout(body, 1);
+
+    struct Page { QString id; QString title; QDialog *dialog; };
+    QList<Page> pages;
+    {
+        const QScopedValueRollback<bool> embedding(m_embedding, true); // built, not shown as windows of their own
+        pages.append({QStringLiteral("filters"), tr("Filters"), showRulesDialog()});
+        auto *store = new zmail::SignatureStore;
+        auto *sigs = new SignaturesDialog(store, this);
+        connect(sigs, &QObject::destroyed, this, [store]() { delete store; });
+        pages.append({QStringLiteral("signatures"), tr("Signatures"), sigs});
+        pages.append({QStringLiteral("stationery"), tr("Stationery"), showStationeryDialog()});
+        pages.append({QStringLiteral("list"), tr("Message List"), showListDialog()});
+        pages.append({QStringLiteral("stripes"), tr("Row Stripes"), showStripesDialog()});
+        pages.append({QStringLiteral("sounds"), tr("Sounds"), showSoundDialog()});
+        pages.append({QStringLiteral("privacy"), tr("Privacy"), showPrivacyDialog()});
+    }
+    QList<QDialogButtonBox *> boxes;
+    for (const Page &p : std::as_const(pages)) {
+        p.dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+        // A short page (two fields and three buttons) sits at the top of its
+        // section, not stretched over the whole height.
+        const bool small = p.dialog->sizeHint().height() < 320;
+        auto *holder = new QWidget(stack);
+        auto *hl = new QVBoxLayout(holder);
+        hl->setContentsMargins(0, 0, 0, 0);
+        p.dialog->setParent(holder); // a child widget now, not a window
+        hl->addWidget(p.dialog, small ? 0 : 1);
+        if (small) {
+            p.dialog->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+            hl->addStretch(1);
+        }
+        p.dialog->setProperty("settingsSection", p.id);
+        p.dialog->installEventFilter(new PageKeys(win, p.dialog));
+        // Its own OK / Cancel are hidden; the window's stand in for them.
+        const QList<QDialogButtonBox *> own = p.dialog->findChildren<QDialogButtonBox *>(QString(), Qt::FindDirectChildrenOnly);
+        QDialogButtonBox *box = own.isEmpty() ? nullptr : own.last();
+        if (box) {
+            box->hide();
+        }
+        boxes.append(box);
+        // Flush with the window: the page's own margins would double them.
+        if (p.dialog->layout()) {
+            p.dialog->layout()->setContentsMargins(6, 0, 0, 0);
+        }
+        stack->addWidget(holder);
+        auto *item = new QListWidgetItem(p.title, sections);
+        item->setData(Qt::UserRole, p.id);
+    }
+    connect(sections, &QListWidget::currentRowChanged, stack, &QStackedWidget::setCurrentIndex);
+    int start = 0;
+    for (int i = 0; i < pages.size(); ++i) {
+        if (pages.at(i).id == section) {
+            start = i;
+        }
+    }
+    sections->setCurrentRow(start);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, win);
+    buttons->setObjectName(QStringLiteral("settingsButtons"));
+    lay->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, win, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, win, &QDialog::reject);
+    // Every page is told, whichever one is on show: OK keeps them all,
+    // Cancel (or closing the window) puts every preview back.
+    connect(win, &QDialog::finished, this, [pages, boxes](int result) {
+        for (int i = 0; i < pages.size(); ++i) {
+            QDialog *page = pages.at(i).dialog;
+            QAbstractButton *press = boxes.at(i)
+                                         ? boxes.at(i)->button(result == QDialog::Accepted ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                                         : nullptr;
+            if (press) {
+                press->click(); // exactly what its own button did when it was a dialog
+            } else if (result == QDialog::Accepted) {
+                page->accept();
+            } else {
+                page->reject();
+            }
+        }
+    });
+    win->show();
+    return win;
+}
+
 void MainWindow::showAbout()
 {
     AboutDialog dlg(this);
@@ -1220,6 +1407,10 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex, int 
         return nullptr;
     }
     const int row = sourceRow >= 0 ? sourceRow : m_proxy->mapToSource(proxyIndex).row();
+    if (m_model->item(row).id.startsWith(QLatin1String("queued:"))) {
+        editQueued(m_model->item(row).id); // not mail yet: it opens to be changed, not read
+        return nullptr;
+    }
     auto *w = new MessageWindow(this);
     m_messageWindows.removeAll(nullptr);
     m_messageWindows.append(w);
@@ -1423,7 +1614,9 @@ ListDialog *MainWindow::showListDialog()
         applyListAppearance();
     });
     connect(dlg, &ListDialog::finishedWith, this, &MainWindow::setListAppearance);
-    dlg->show();
+    if (!m_embedding) {
+        dlg->show();
+    }
     return dlg;
 }
 
@@ -1644,6 +1837,94 @@ StationeryDialog *MainWindow::showStationeryDialog()
             statusBar()->showMessage(tr("Couldn't save the stationery to %1.").arg(zmail::StationeryStore::defaultPath()), 8000);
         }
     });
+    if (!m_embedding) {
+        dlg->show();
+    }
+    return dlg;
+}
+
+// ---- Help > Keyboard Shortcuts ---------------------------------------------------
+
+// Every key the menus have, read from the menus themselves so the list
+// can't fall out of date, plus the compose window's.
+QDialog *MainWindow::showShortcuts()
+{
+    auto *dlg = new QDialog(this);
+    dlg->setObjectName(QStringLiteral("shortcutsDialog"));
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setWindowTitle(tr("Keyboard Shortcuts"));
+    dlg->resize(520, 620);
+    auto *lay = new QVBoxLayout(dlg);
+    auto *tree = new QTreeWidget(dlg);
+    tree->setObjectName(QStringLiteral("shortcutsList"));
+    tree->setHeaderLabels({tr("Command"), tr("Key")});
+    tree->setRootIsDecorated(false);
+    tree->setAlternatingRowColors(true);
+    tree->setSelectionMode(QAbstractItemView::NoSelection);
+    tree->header()->setStretchLastSection(false);
+    tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    lay->addWidget(tree);
+    const auto heading = [tree](const QString &text) {
+        auto *item = new QTreeWidgetItem(tree, {text});
+        QFont f = item->font(0);
+        f.setBold(true);
+        item->setFont(0, f);
+        item->setFirstColumnSpanned(true);
+    };
+    const auto row = [tree](const QString &command, const QString &key) {
+        new QTreeWidgetItem(tree, {QStringLiteral("    ") + command, key});
+    };
+    const auto keysOf = [](const QAction *a) {
+        QStringList keys;
+        for (const QKeySequence &k : a->shortcuts()) {
+            if (!k.isEmpty()) {
+                keys << k.toString(QKeySequence::NativeText);
+            }
+        }
+        return keys.join(QStringLiteral(", "));
+    };
+    std::function<void(QMenu *, const QString &)> walk = [&](QMenu *menu, const QString &path) {
+        for (QAction *a : menu->actions()) {
+            if (a->isSeparator() || a->property("placeholder").toBool()) {
+                continue;
+            }
+            QString text = a->text();
+            text.remove(QLatin1Char('&'));
+            text.remove(QStringLiteral("\u2026"));
+            if (a->menu()) {
+                walk(a->menu(), path + text + QStringLiteral(" \u203a "));
+            } else if (!keysOf(a).isEmpty()) {
+                row(path + text, keysOf(a));
+            }
+        }
+    };
+    for (QAction *top : menuBar()->actions()) {
+        if (!top->menu()) {
+            continue;
+        }
+        const int before = tree->topLevelItemCount();
+        QString title = top->text();
+        title.remove(QLatin1Char('&'));
+        heading(title);
+        walk(top->menu(), QString());
+        if (tree->topLevelItemCount() == before + 1) {
+            delete tree->takeTopLevelItem(before); // a menu with no keys: no heading either
+        }
+    }
+    heading(tr("Message list"));
+    row(tr("Select a range"), tr("Shift+Click, Shift+Up / Down"));
+    row(tr("Add or remove one message"), tr("Ctrl+Click"));
+    row(tr("Zoom the message"), tr("Ctrl+Wheel"));
+    heading(tr("Writing a message"));
+    row(tr("Send"), tr("Ctrl+Enter, Ctrl+E"));
+    row(tr("Send Later (queue in Out)"), tr("Ctrl+Shift+Enter"));
+    row(tr("Save Draft"), QKeySequence(QKeySequence::Save).toString(QKeySequence::NativeText));
+    row(tr("Attach"), tr("Ctrl+H"));
+    row(tr("Insert link"), tr("Ctrl+K"));
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dlg);
+    connect(buttons, &QDialogButtonBox::rejected, dlg, &QDialog::close);
+    lay->addWidget(buttons);
     dlg->show();
     return dlg;
 }
@@ -1673,6 +1954,93 @@ void MainWindow::styleMailboxWindow(MailboxWindow *w)
     list->setPalette(m_list->palette()); // the stripe colour
     list->setAlternatingRowColors(m_stripes > 0);
     list->doItemsLayout();
+}
+
+void MainWindow::showMessageIn(MessageView *view, const QString &id)
+{
+    const int row = m_model->rowForId(id);
+    if (!view || row < 0) {
+        return;
+    }
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    zmail::MailCache *cache = m_live && m_session ? m_session->cache() : nullptr;
+    if (!sync || !cache) {
+        view->setMessage(sampleViewMessage(row));
+        return;
+    }
+    if (id.startsWith(QLatin1String("queued:"))) {
+        const zmail::MailCache::QueuedMessage q = cache->queuedMessage(id.mid(7).toLongLong());
+        ViewMessage v;
+        v.id = id;
+        v.from = m_session->fromHeader();
+        v.to = q.to;
+        v.cc = q.cc;
+        v.subject = q.subject;
+        v.date = QDateTime::fromMSecsSinceEpoch(q.createdMs);
+        v.bodyText = q.text;
+        v.warning = tr("<b>Queued.</b> Double-click to change it.");
+        view->setMessage(v);
+        return;
+    }
+    const zmail::CachedMessage c = cache->message(id);
+    view->setMessage(detail::liveViewMessage(c, !c.hasBody, {}));
+    if (!c.hasBody) {
+        QPointer<MessageView> guard(view);
+        sync->fetchBody(id, [guard, id](const zmail::CachedMessage &full, const QString &err) {
+            if (guard && guard->message().id == id) { // still the one on show
+                guard->setMessage(detail::liveViewMessage(full, false, err));
+            }
+        });
+    }
+    if (c.unread()) {
+        sync->markRead(id);
+        m_model->setStatus(row, MailStatus::Read);
+        updateCounts();
+    }
+}
+
+QMenu *MainWindow::buildMenuFor(const QStringList &ids, QWidget *parent)
+{
+    auto *menu = new QMenu(parent);
+    menu->setObjectName(QStringLiteral("mailboxWindowMenu"));
+    // While this menu is up, "the selected messages" are these: the Flag and
+    // Transfer submenus and Mark as Read are the main window's own commands.
+    m_actOnIds = ids;
+    connect(menu, &QMenu::aboutToHide, this, [this]() {
+        QTimer::singleShot(0, this, [this]() { m_actOnIds.clear(); }); // after the chosen command has run
+    });
+    const QString first = ids.value(0);
+    const bool one = ids.size() == 1;
+    const bool queued = first.startsWith(QLatin1String("queued:"));
+    QAction *open = menu->addAction(queued ? tr("&Edit") : tr("&Open"), this, [this, first]() { openMessageWindowFor(first); });
+    open->setObjectName(QStringLiteral("mwOpen"));
+    open->setEnabled(one);
+    if (!queued) {
+        menu->addSeparator();
+        struct R { const char *obj; const char *iconName; QString text; zmail::ReplyBuilder::Kind kind; };
+        for (const R &r : {R{"mwReply", "reply", tr("&Reply"), zmail::ReplyBuilder::Kind::Reply},
+                           R{"mwReplyAll", "reply-all", tr("Reply &All"), zmail::ReplyBuilder::Kind::ReplyAll},
+                           R{"mwForward", "forward", tr("&Forward"), zmail::ReplyBuilder::Kind::Forward}}) {
+            const int kind = int(r.kind);
+            QAction *a = menu->addAction(icon(QString::fromLatin1(r.iconName)), r.text, this,
+                                         [this, kind, first]() { composeReply(kind, first); });
+            a->setObjectName(QString::fromLatin1(r.obj));
+            a->setEnabled(one);
+        }
+        menu->addSeparator();
+        menu->addAction(icon(QStringLiteral("mail-open")), tr("Mark as R&ead"), this, [this]() { setCurrentRead(true); })
+            ->setObjectName(QStringLiteral("mwMarkRead"));
+        menu->addAction(icon(QStringLiteral("mail")), tr("Mark as &Unread"), this, [this]() { setCurrentRead(false); })
+            ->setObjectName(QStringLiteral("mwMarkUnread"));
+        menu->addMenu(buildFlagMenu(menu));
+        if (m_transferMenu && !m_transferMenu->isEmpty()) {
+            menu->addMenu(m_transferMenu);
+        }
+    }
+    menu->addSeparator();
+    menu->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this, [this, ids]() { trashMessages(ids); })
+        ->setObjectName(QStringLiteral("mwDelete"));
+    return menu;
 }
 
 MailboxWindow *MainWindow::openMailboxWindow(const QString &keyIn)
@@ -1707,6 +2075,13 @@ MailboxWindow *MainWindow::openMailboxWindow(const QString &keyIn)
     m_mailboxWindows.append(w);
     connect(w, &MailboxWindow::openRequested, this, [this](const QString &id) { openMessageWindowFor(id); });
     connect(w, &MailboxWindow::deleteRequested, this, [this](const QStringList &ids) { trashMessages(ids); });
+    connect(w, &MailboxWindow::showRequested, this, [this, w](const QString &id) { showMessageIn(w->preview(), id); });
+    connect(w, &MailboxWindow::menuRequested, this, [this, w](const QStringList &ids, const QPoint &at) {
+        QMenu *menu = buildMenuFor(ids, w);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        menu->popup(at);
+    });
+    connect(w->preview(), &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
     const QString label = labelForMailbox(key);
     if (m_live && m_session && m_session->sync() && !label.isEmpty()) {
         m_session->sync()->ensureLabel(label); // its first page, if it was never opened
@@ -1829,7 +2204,17 @@ void MainWindow::rebuildMailboxMenus()
         }
     };
     for (int i = 0; i < m_mailboxes->topLevelItemCount(); ++i) {
-        add(m_mailboxes->topLevelItem(i), m_mailboxMenu, m_transferMenu);
+        QTreeWidgetItem *top = m_mailboxes->topLevelItem(i);
+        if (top->data(0, Qt::UserRole + 1).toString() == QLatin1String("labels-root")) {
+            // The folders themselves, not a "Folders" submenu to open first.
+            m_mailboxMenu->addSeparator();
+            m_transferMenu->addSeparator();
+            for (int c = 0; c < top->childCount(); ++c) {
+                add(top->child(c), m_mailboxMenu, m_transferMenu);
+            }
+            continue;
+        }
+        add(top, m_mailboxMenu, m_transferMenu);
     }
 }
 
@@ -1838,6 +2223,37 @@ void MainWindow::rebuildMailboxMenus()
 int MainWindow::queuedCount() const
 {
     return m_live && m_session && m_session->cache() ? int(m_session->cache()->queued().size()) : 0;
+}
+
+ComposeWindow *MainWindow::editQueued(const QString &queuedRowId)
+{
+    if (!(m_live && m_session && m_session->cache()) || !queuedRowId.startsWith(QLatin1String("queued:"))) {
+        return nullptr;
+    }
+    const qint64 id = queuedRowId.mid(7).toLongLong();
+    for (ComposeWindow *open : std::as_const(m_composers)) {
+        if (open && open->queuedId() == id) { // already being edited
+            open->raise();
+            open->activateWindow();
+            return open;
+        }
+    }
+    const zmail::MailCache::QueuedMessage q = m_session->cache()->queuedMessage(id);
+    if (q.id == 0) {
+        return nullptr;
+    }
+    if (q.state.isEmpty()) {
+        statusBar()->showMessage(tr("This message was queued by an older zmail and can't be reopened. Delete it and write it again."), 8000);
+        return nullptr;
+    }
+    ComposeWindow *c = openCompose();
+    if (!c->restoreState(q.state)) {
+        statusBar()->showMessage(tr("Couldn't reopen the queued message."), 8000);
+        c->close();
+        return nullptr;
+    }
+    c->setQueuedId(id);
+    return c;
 }
 
 void MainWindow::sendQueued()
@@ -1941,7 +2357,9 @@ RulesDialog *MainWindow::showRulesDialog(const zmail::Rule *add)
         sound.isEmpty() ? m_sound->playPreview() : m_sound->playFile(sound, /*preview=*/true);
     });
     connect(dlg, &QDialog::accepted, this, [this, dlg]() { setRules(dlg->rules()); });
-    dlg->show();
+    if (!m_embedding) {
+        dlg->show();
+    }
     return dlg;
 }
 
@@ -1996,9 +2414,72 @@ void MainWindow::applyRulesToNewMail(const QStringList &ids)
         }
     }
     if (sound == QLatin1String(zmail::kRuleSoundNone)) {
-        return;
+        return; // a filter asked for quiet: no sound, no notification
     }
     sound.isEmpty() ? m_sound->play() : m_sound->playFile(sound);
+    notifyNewMail(ids);
+}
+
+void MainWindow::setNotifyOn(bool on)
+{
+    m_notify = on;
+    QSettings().setValue(QStringLiteral("notify/desktop"), on);
+    if (QAction *a = findChild<QAction *>(QStringLiteral("actionNotify")); a && a->isChecked() != on) {
+        const QSignalBlocker block(a);
+        a->setChecked(on);
+    }
+}
+
+void MainWindow::notifyNewMail(const QStringList &ids)
+{
+    // Not when you are looking at zmail already.
+    if (!m_notify || ids.isEmpty() || QApplication::activeWindow()) {
+        return;
+    }
+    QStringList lines;
+    if (m_live && m_session && m_session->cache()) {
+        for (const QString &id : ids.mid(0, 3)) {
+            const zmail::CachedMessage c = m_session->cache()->summary(id);
+            if (!c.id.isEmpty()) {
+                lines << QStringLiteral("%1: %2").arg(c.fromName.isEmpty() ? c.fromAddr : c.fromName,
+                                                      c.subject.isEmpty() ? tr("(no subject)") : c.subject);
+            }
+        }
+    }
+    if (ids.size() > 3) {
+        lines << tr("and %1 more").arg(ids.size() - 3);
+    }
+    const QString summary = ids.size() == 1 ? tr("1 new message") : tr("%1 new messages").arg(ids.size());
+    if (m_notifySink) {
+        m_notifySink(summary, lines.join(QLatin1Char('\n')));
+        return;
+    }
+    // Never from a test run or a headless one: this is the user's real desktop.
+    if (QStandardPaths::isTestModeEnabled() || QGuiApplication::platformName() == QLatin1String("offscreen")) {
+        return;
+    }
+    // org.freedesktop.Notifications.Notify, sent without waiting for an answer.
+    QDBusMessage call = QDBusMessage::createMethodCall(QStringLiteral("org.freedesktop.Notifications"),
+                                                       QStringLiteral("/org/freedesktop/Notifications"),
+                                                       QStringLiteral("org.freedesktop.Notifications"), QStringLiteral("Notify"));
+    call << QStringLiteral("zmail") << uint(0) << QStringLiteral("zmail") << summary << lines.join(QLatin1Char('\n'))
+         << QStringList() << QVariantMap{{QStringLiteral("desktop-entry"), QStringLiteral("zmail")}} << int(-1);
+    QDBusConnection::sessionBus().asyncCall(call);
+}
+
+void MainWindow::updateTitle()
+{
+    int unread = 0;
+    if (m_live) {
+        for (const MailItem &m : m_model->items()) {
+            unread += m.status == MailStatus::Unread && m.mailboxes.contains(QStringLiteral("In")) &&
+                      !m.mailboxes.contains(QStringLiteral("Trash")) && !m.mailboxes.contains(QStringLiteral("Junk"));
+        }
+    }
+    const QString title = unread > 0 ? QStringLiteral("(%1) %2").arg(unread).arg(baseTitle()) : baseTitle();
+    if (windowTitle() != title) {
+        setWindowTitle(title);
+    }
 }
 
 void MainWindow::filterSelected()
@@ -2029,7 +2510,9 @@ StripesDialog *MainWindow::showStripesDialog()
         applyStripes();
     });
     connect(dlg, &StripesDialog::finishedWith, this, &MainWindow::setStripeStrength);
-    dlg->show();
+    if (!m_embedding) {
+        dlg->show();
+    }
     return dlg;
 }
 

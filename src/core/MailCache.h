@@ -168,6 +168,7 @@ public:
         qint64 createdMs = 0;
         qint64 size = 0;
         QString error;     // why the last attempt to send it failed
+        QByteArray state;  // the compose window as it was (ComposeWindow::saveState), to edit it again
     };
     qint64 addQueued(const QueuedMessage &m);
     QList<QueuedMessage> queued(bool withMime = false) const; // oldest first

@@ -1,12 +1,14 @@
 #include "MailboxWindow.h"
 
 #include "MessageListModel.h"
+#include "MessageView.h"
 
 #include <QAction>
 #include <QHeaderView>
 #include <QLabel>
-#include <QMenu>
 #include <QScrollBar>
+#include <QSplitter>
+#include <QItemSelectionModel>
 #include <QShortcut>
 #include <QStatusBar>
 #include <QTreeView>
@@ -43,7 +45,16 @@ MailboxWindow::MailboxWindow(MessageListModel *model, const QString &mailboxKey,
     m_list->header()->setStretchLastSection(true);
     m_list->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_list->setContextMenuPolicy(Qt::CustomContextMenu);
-    setCentralWidget(m_list);
+    auto *split = new QSplitter(Qt::Vertical, this);
+    split->setObjectName(QStringLiteral("mailboxWindowSplitter"));
+    split->setChildrenCollapsible(false);
+    split->addWidget(m_list);
+    m_preview = new MessageView(split);
+    m_preview->setObjectName(QStringLiteral("mailboxWindowPreview"));
+    split->setStretchFactor(0, 1);
+    split->setStretchFactor(1, 2);
+    setCentralWidget(split);
+    resize(900, 700);
 
     m_count = new QLabel(this);
     m_count->setObjectName(QStringLiteral("mailboxWindowCount"));
@@ -74,16 +85,18 @@ MailboxWindow::MailboxWindow(MessageListModel *model, const QString &mailboxKey,
         connect(new QShortcut(k, m_list, nullptr, nullptr, Qt::WidgetShortcut), &QShortcut::activated, this, deleteSelected);
     }
     connect(new QShortcut(QKeySequence::Close, this), &QShortcut::activated, this, &QWidget::close);
-    connect(m_list, &QWidget::customContextMenuRequested, this, [this, openCurrent, deleteSelected](const QPoint &pos) {
-        if (!m_list->indexAt(pos).isValid()) {
-            return;
+    connect(m_list, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        if (m_list->indexAt(pos).isValid() && !selectedIds().isEmpty()) {
+            emit menuRequested(selectedIds(), m_list->viewport()->mapToGlobal(pos));
         }
-        auto *menu = new QMenu(this);
-        menu->setObjectName(QStringLiteral("mailboxWindowMenu"));
-        menu->setAttribute(Qt::WA_DeleteOnClose);
-        menu->addAction(tr("&Open"), this, openCurrent);
-        menu->addAction(tr("&Delete"), this, deleteSelected);
-        menu->popup(m_list->viewport()->mapToGlobal(pos));
+    });
+    connect(m_list->selectionModel(), &QItemSelectionModel::selectionChanged, this, [this]() {
+        const QStringList ids = selectedIds();
+        if (ids.size() == 1) {
+            emit showRequested(ids.first());
+        } else {
+            m_preview->clear(); // none, or several
+        }
     });
     connect(m_list->verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int v) {
         QScrollBar *sb = m_list->verticalScrollBar();

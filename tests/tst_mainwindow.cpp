@@ -3,6 +3,8 @@
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
 #include "ui/ListDialog.h"
+#include "core/Rules.h"
+#include "ui/RulesDialog.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "version.hpp"
@@ -10,7 +12,15 @@
 #include <QAction>
 #include <QApplication>
 #include <QColor>
+#include <QHash>
+#include <QDialogButtonBox>
+#include <QFile>
+#include <QListWidget>
+#include <QPointer>
+#include <QStackedWidget>
+#include <QDialog>
 #include <QHeaderView>
+#include <QSet>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -40,7 +50,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.6"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.7"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -156,6 +166,126 @@ private slots:
                 list->fontMetrics().horizontalAdvance(QStringLiteral("12/31/2026  12:59 PM")) + 8);
     }
 
+    // No key does two things: Qt treats a shortcut shared by two actions in
+    // one window as ambiguous and runs neither.
+    void noTwoActionsShareAShortcut()
+    {
+        MainWindow w;
+        QHash<QString, QStringList> byKey;
+        for (QAction *a : w.findChildren<QAction *>()) {
+            if (!a->isVisible() && !a->property("placeholder").toBool()) {
+                continue; // hidden twins (Mark Read / Unread swap places)
+            }
+            for (const QKeySequence &k : a->shortcuts()) {
+                if (!k.isEmpty()) {
+                    byKey[k.toString()] << (a->objectName().isEmpty() ? a->text() : a->objectName());
+                }
+            }
+        }
+        QStringList clashes;
+        for (auto it = byKey.constBegin(); it != byKey.constEnd(); ++it) {
+            QStringList who = it.value();
+            who.removeDuplicates();
+            // The toolbar button and the menu item for one command are two actions on purpose.
+            QSet<QString> commands;
+            for (QString name : who) {
+                name.remove(QStringLiteral("menuAction"));
+                name.remove(QStringLiteral("action"));
+                commands.insert(name.toLower());
+            }
+            if (commands.size() > 1) {
+                clashes << it.key() + QStringLiteral(": ") + who.join(QStringLiteral(" / "));
+            }
+        }
+        QVERIFY2(clashes.isEmpty(), qPrintable(clashes.join(QStringLiteral("; "))));
+    }
+
+    // Settings is one window: the settings dialogs are its sections, with one
+    // OK and one Cancel for all of them.
+    void settingsAreOneWindow()
+    {
+        QSettings().remove(QStringLiteral("ui/rowStripes"));
+        QSettings().remove(QStringLiteral("ui/listRowSpacing"));
+        QFile::remove(zmail::Rules::defaultPath());
+        MainWindow w;
+        w.show();
+        QAction *open = w.findChild<QAction *>(QStringLiteral("actionSettings"));
+        QVERIFY(open);
+        QCOMPARE(open->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_Comma));
+
+        QDialog *win = w.showSettings(QStringLiteral("stripes"));
+        auto *sections = win->findChild<QListWidget *>(QStringLiteral("settingsSections"));
+        auto *pages = win->findChild<QStackedWidget *>(QStringLiteral("settingsPages"));
+        QStringList titles;
+        for (int i = 0; i < sections->count(); ++i) {
+            titles << sections->item(i)->text();
+        }
+        QCOMPARE(titles, (QStringList{"Filters", "Signatures", "Stationery", "Message List", "Row Stripes", "Sounds", "Privacy"}));
+        QCOMPARE(pages->count(), 7);
+        QCOMPARE(sections->currentItem()->text(), QStringLiteral("Row Stripes")); // opened at the section asked for
+        auto *stripes = win->findChild<StripesDialog *>();
+        QVERIFY(pages->currentWidget()->isAncestorOf(stripes));
+        QVERIFY(!stripes->isWindow()); // a page of this window, not a window of its own
+        // Each page's own OK / Cancel are gone; the window has the only pair.
+        for (int i = 0; i < pages->count(); ++i) {
+            QDialog *page = pages->widget(i)->findChild<QDialog *>(QString(), Qt::FindDirectChildrenOnly);
+            QVERIFY2(page, qPrintable(titles.at(i)));
+            for (QDialogButtonBox *box : page->findChildren<QDialogButtonBox *>(QString(), Qt::FindDirectChildrenOnly)) {
+                QVERIFY2(box->isHidden(), qPrintable(titles.at(i)));
+            }
+        }
+        QVERIFY(win->findChild<QDialogButtonBox *>(QStringLiteral("settingsButtons"))->isVisibleTo(win));
+
+        // A change previews at once; Escape inside a page cancels the whole
+        // window (not just the page), and everything goes back.
+        stripes->slider()->setValue(90);
+        QCOMPARE(w.stripeStrength(), 90);
+        sections->setCurrentRow(3);
+        auto *listPage = win->findChild<ListDialog *>();
+        QVERIFY(pages->currentWidget()->isAncestorOf(listPage));
+        listPage->spacingSpin()->setValue(20);
+        QCOMPARE(w.listRowSpacing(), 20);
+        QPointer<QDialog> guard(win);
+        QTest::keyClick(listPage, Qt::Key_Escape);
+        QTRY_VERIFY(!guard);
+        QCOMPARE(w.stripeStrength(), kStripeDefault);
+        QCOMPARE(w.listRowSpacing(), kListSpacingDefault);
+
+        // OK keeps what every section was set to, not only the one on show.
+        win = w.showSettings();
+        QCOMPARE(win->findChild<QListWidget *>(QStringLiteral("settingsSections"))->currentRow(), 0); // Filters first
+        zmail::Rule rule;
+        rule.name = QStringLiteral("From the settings window");
+        rule.conditions.append({QStringLiteral("from"), QStringLiteral("contains"), QStringLiteral("x@example.com")});
+        win->findChild<RulesDialog *>()->addRule(rule);
+        win->findChild<StripesDialog *>()->slider()->setValue(70);
+        win->findChild<ListDialog *>()->spacingSpin()->setValue(12);
+        guard = win;
+        win->findChild<QDialogButtonBox *>(QStringLiteral("settingsButtons"))->button(QDialogButtonBox::Ok)->click();
+        QTRY_VERIFY(!guard);
+        QCOMPARE(w.rules().rules.size(), 1);
+        QCOMPARE(w.rules().rules.first().name, QStringLiteral("From the settings window"));
+        QCOMPARE(w.stripeStrength(), 70);
+        QCOMPARE(w.listRowSpacing(), 12);
+        QCOMPARE(QSettings().value(QStringLiteral("ui/rowStripes")).toInt(), 70);
+        MainWindow again;
+        QCOMPARE(again.rules().rules.size(), 1);
+        QCOMPARE(again.listRowSpacing(), 12);
+
+        // The menu's old entries open the window at their section.
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            QVERIFY2(top->objectName() != QLatin1String("settingsWindow") || !top->isVisible(), "left open");
+        }
+        w.findChild<QAction *>(QStringLiteral("actionPrivacy"))->trigger();
+        QDialog *viaMenu = w.findChild<QDialog *>(QStringLiteral("settingsWindow"));
+        QVERIFY(viaMenu);
+        QCOMPARE(viaMenu->findChild<QListWidget *>(QStringLiteral("settingsSections"))->currentItem()->text(), QStringLiteral("Privacy"));
+        viaMenu->reject();
+        QFile::remove(zmail::Rules::defaultPath());
+        QSettings().remove(QStringLiteral("ui/rowStripes"));
+        QSettings().remove(QStringLiteral("ui/listRowSpacing"));
+    }
+
     void rowStripesSliderIsRemembered()
     {
         QSettings().remove(QStringLiteral("ui/rowStripes"));
@@ -235,7 +365,7 @@ private slots:
             top << tree->topLevelItem(i)->text(0);
         }
         // Hide Spam (default) omits Junk; labels are still under Gmail Labels.
-        QCOMPARE(top, (QStringList{"In", "Out", "Snoozed", "Trash", "Gmail Labels"}));
+        QCOMPARE(top, (QStringList{"In", "Out", "Snoozed", "Trash", "Folders"}));
         QVERIFY(tree->topLevelItem(4)->childCount() >= 4);
     }
 

@@ -34,8 +34,10 @@
 #include <QFileInfo>
 #include <QTextCursor>
 #include <QTextEdit>
+#include <QDialog>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QHash>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
@@ -612,7 +614,7 @@ private slots:
         // Eudora's keys.
         QVERIFY(named("menuActionDelete")->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_D)));
         QCOMPARE(named("actionSendQueued")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_T));
-        QCOMPARE(named("actionFilterMessages")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_J));
+        QCOMPARE(named("actionFilterMessages")->shortcut(), QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_J));
         QCOMPARE(named("actionContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_L));
         QCOMPARE(named("actionAddSenderToContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_K));
         ComposeWindow c;
@@ -700,6 +702,49 @@ private slots:
         QCOMPARE(f.w->messageWindows().first()->messageId(), f.a);
         f.w->messageWindows().first()->close();
 
+        // Its preview pane shows the message selected in it.
+        QTRY_VERIFY(mw->preview()->headerText().contains(QStringLiteral("Alpha zebra")));
+        QTRY_VERIFY(mw->preview()->body()->toPlainText().contains(QStringLiteral("Fake test mail.")));
+
+        // Right-click: the full set of commands, for this window's selection
+        // (not for whatever is selected in the main window).
+        const auto popMenu = [&]() -> QMenu * {
+            emit mw->menuRequested(mw->selectedIds(), QPoint(10, 10));
+            QMenu *menu = nullptr;
+            (void)QTest::qWaitFor([&] {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible() && m->objectName() == QLatin1String("mailboxWindowMenu")) {
+                        menu = m;
+                    }
+                }
+                return menu != nullptr;
+            }, 3000);
+            return menu;
+        };
+        QMenu *menu = popMenu();
+        QVERIFY(menu);
+        for (const char *name : {"mwOpen", "mwReply", "mwReplyAll", "mwForward", "mwMarkRead", "mwMarkUnread", "mwDelete"}) {
+            QVERIFY2(menu->findChild<QAction *>(QString::fromLatin1(name)), name);
+        }
+        QAction *red = menu->findChild<QAction *>(QStringLiteral("actionFlag_red"));
+        QVERIFY(red);
+        red->trigger();
+        menu->close();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.a).labels.contains(QStringLiteral("STARRED")), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("STARRED")));
+        QTRY_COMPARE(f.model->item(f.model->rowForId(f.a)).flag, QStringLiteral("red"));
+        menu = popMenu();
+        QVERIFY(menu);
+        menu->findChild<QAction *>(QStringLiteral("mwMarkUnread"))->trigger();
+        menu->close();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.a).labels.contains(QStringLiteral("UNREAD")), 10000);
+        // Once the menu is gone, the main window's commands are its own again:
+        // flagging there (nothing is selected in its Trash) touches nothing here.
+        QTest::qWait(50);
+        f.w->setFlagOnSelected(QStringLiteral("blue"));
+        QTest::qWait(100);
+        QCOMPARE(f.model->item(f.model->rowForId(f.a)).flag, QStringLiteral("red"));
+
         // Delete from it: Gmail trashes the message, and it leaves the
         // window's list and turns up in the main window's Trash.
         emit mw->deleteRequested(mw->selectedIds());
@@ -723,6 +768,260 @@ private slots:
         QCOMPARE(f.w->mailboxWindows().size(), 2);
         trash->close();
         QTRY_COMPARE(f.w->mailboxWindows().size(), 1);
+    }
+
+    // Everyday polish (0.6.7): right-clicking the sidebar keeps your place,
+    // folders are listed directly in the menus, empty views say so, Select
+    // All, a shortcut list, and flags can be searched for.
+    void everydayPolish()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto item = [tree](const QString &key) -> QTreeWidgetItem * {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == key) {
+                    return *it;
+                }
+            }
+            return nullptr;
+        };
+        const auto menuFor = [&](QTreeWidgetItem *row) {
+            emit tree->customContextMenuRequested(tree->visualItemRect(row).center());
+            QMenu *menu = nullptr;
+            (void)QTest::qWaitFor([&] {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible() && m->objectName() == QLatin1String("mailboxMenu")) {
+                        menu = m;
+                    }
+                }
+                return menu != nullptr;
+            }, 3000);
+            QStringList names;
+            if (menu) {
+                for (QAction *a : menu->actions()) {
+                    names << a->objectName();
+                }
+                menu->close();
+            }
+            return names;
+        };
+        const QString folder = QLatin1String("gmail:") + kLabel;
+        QTRY_VERIFY(item(folder));
+
+        // Right-click Trash from In: the menu is Trash's, and you are still in In.
+        QStringList names = menuFor(item(QStringLiteral("Trash")));
+        QVERIFY(names.contains(QStringLiteral("actionEmptyTrash")));
+        QVERIFY(!names.contains(QStringLiteral("actionNewFolder"))); // Trash isn't where folders go
+        QCOMPARE(tree->currentItem()->data(0, Qt::UserRole).toString(), QStringLiteral("In"));
+        QCOMPARE(f.proxy->rowCount(), 3);
+        QCOMPARE(f.currentId(), f.b);
+        names = menuFor(item(folder));
+        QVERIFY(names.contains(QStringLiteral("actionNewFolder")) && names.contains(QStringLiteral("actionEmptyFolder")));
+        QCOMPARE(f.proxy->rowCount(), 3);
+
+        // Folders sit directly in Mailbox and Transfer, under a "Folders" heading in the sidebar.
+        auto *mailbox = f.w->findChild<QMenu *>(QStringLiteral("menuMailbox"));
+        auto *transfer = f.w->findChild<QMenu *>(QStringLiteral("menuTransfer"));
+        QVERIFY(mailbox->actions().contains(f.w->findChild<QAction *>(QStringLiteral("mailbox_") + folder)));
+        QVERIFY(transfer->actions().contains(f.w->findChild<QAction *>(QStringLiteral("transfer_") + kLabel)));
+        QCOMPARE(item(folder)->parent()->text(0), QStringLiteral("Folders"));
+        QVERIFY(item(QStringLiteral("gmail:STARRED")));
+        QCOMPARE(item(QStringLiteral("gmail:STARRED"))->text(0), QStringLiteral("Flagged"));
+
+        // Select All: every message in the list.
+        f.list->setFocus();
+        f.w->findChild<QAction *>(QStringLiteral("actionSelectAll"))->trigger();
+        QCOMPARE(f.list->selectionModel()->selectedRows().size(), 3);
+        QCOMPARE(f.w->findChild<QAction *>(QStringLiteral("actionSelectAll"))->shortcut(), QKeySequence(QKeySequence::SelectAll));
+
+        // An empty mailbox and an empty preview say what they are.
+        auto *hint = f.w->findChild<QLabel *>(QStringLiteral("emptyListHint"));
+        QVERIFY(hint && hint->isHidden());
+        f.selectView(QStringLiteral("Trash"));
+        QTRY_VERIFY(!hint->isHidden());
+        QCOMPARE(hint->text(), QStringLiteral("Trash is empty."));
+        auto *view = f.w->findChild<MessageView *>(QStringLiteral("messageView"));
+        QTRY_COMPARE(view->body()->placeholderText(), QStringLiteral("Select a message to read it."));
+        f.selectView(folder);
+        QTRY_COMPARE(hint->text(), QStringLiteral("No messages in Projects."));
+        f.selectView(QStringLiteral("In"));
+        QTRY_VERIFY(hint->isHidden());
+        f.list->setCurrentIndex(f.proxy->index(0, 0));
+        QTRY_VERIFY(view->body()->placeholderText().isEmpty());
+
+        // Help > Keyboard Shortcuts lists the keys the menus really have.
+        QDialog *keys = f.w->showShortcuts();
+        auto *list = keys->findChild<QTreeWidget *>(QStringLiteral("shortcutsList"));
+        QHash<QString, QString> byCommand;
+        for (int i = 0; i < list->topLevelItemCount(); ++i) {
+            byCommand.insert(list->topLevelItem(i)->text(0).trimmed(), list->topLevelItem(i)->text(1));
+        }
+        QCOMPARE(byCommand.value(QStringLiteral("Filter Messages")), QStringLiteral("Ctrl+Alt+J"));
+        QCOMPARE(byCommand.value(QStringLiteral("Mark as Junk")), QStringLiteral("Ctrl+J"));
+        QCOMPARE(byCommand.value(QStringLiteral("Send Queued Messages")), QStringLiteral("Ctrl+T"));
+        QVERIFY(byCommand.value(QStringLiteral("Delete")).contains(QStringLiteral("Ctrl+D")));
+        QVERIFY(byCommand.contains(QStringLiteral("In")) && byCommand.contains(QStringLiteral("Send Later (queue in Out)")));
+        QVERIFY(!byCommand.contains(QStringLiteral("Account"))); // not built: not listed
+        keys->close();
+
+        // Flags can be searched for, by any colour or one.
+        f.w->setFlagOnSelected(QStringLiteral("red"));
+        QTRY_COMPARE(f.model->item(f.model->rowForId(f.currentId())).flag, QStringLiteral("red"));
+        MailItem red = f.model->item(f.model->rowForId(f.currentId()));
+        MailItem plain = red;
+        plain.flag.clear();
+        const auto match = [](const char *query, const MailItem &m) {
+            return MessageFilterProxy::matches(MessageFilterProxy::parseSearch(QString::fromLatin1(query)), m);
+        };
+        QVERIFY(match("is:flagged", red) && !match("is:flagged", plain));
+        QVERIFY(match("flag:red", red) && match("flag:RED", red) && !match("flag:blue", red));
+        QVERIFY(match("-flag:blue", red) && !match("-is:flagged", red) && match("-is:flagged", plain));
+        QVERIFY(match("flag:any zebra", red) && !match("flag:red nosuchword", red));
+        auto *search = f.w->findChild<QLineEdit *>(QStringLiteral("searchBox"));
+        search->setText(QStringLiteral("is:flagged"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 5000);
+        search->setText(QStringLiteral("flag:green"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 5000);
+        QTRY_COMPARE(hint->text(), QStringLiteral("No messages match your search."));
+        search->clear();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 5000);
+    }
+
+    // Undo (the status-bar bar, Edit > Undo, Ctrl+Z) covers a move, Empty
+    // Folder and Empty Trash as well as Delete.
+    void undoCoversMovesAndEmptying()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), QStringLiteral("STARRED")}));
+        QAction *undo = f.w->findChild<QAction *>(QStringLiteral("actionUndoDelete"));
+        QVERIFY(undo && !undo->isEnabled());
+        const auto labels = [&](const QString &id) { return f.g.messages().value(id).labels; };
+
+        // A transfer: back to the Inbox, out of the folder, its star untouched.
+        QTRY_VERIFY_WITH_TIMEOUT(f.w->findChild<QAction *>(QStringLiteral("transfer_Label_7")), 10000);
+        f.w->findChild<QAction *>(QStringLiteral("transfer_Label_7"))->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.b).contains(kLabel) && !labels(f.b).contains(QStringLiteral("INBOX")), 10000);
+        QVERIFY(undo->isEnabled());
+        QCOMPARE(undo->text().remove(QLatin1Char('&')), QStringLiteral("Undo Move"));
+        QVERIFY(!f.undoBar()->isHidden());
+        QCOMPARE(f.undoBar()->findChild<QLabel *>(QStringLiteral("undoDeleteLabel"))->text(), QStringLiteral("Moved to Projects."));
+        undo->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.b).contains(QStringLiteral("INBOX")) && !labels(f.b).contains(kLabel), 10000);
+        QVERIFY(labels(f.b).contains(QStringLiteral("STARRED")));
+        QVERIFY(!undo->isEnabled());
+        QVERIFY(f.undoBar()->isHidden());
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 10000);
+
+        // Delete still has its own Undo.
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(f.a), 0)));
+        QTRY_COMPARE(f.w->shownMessageId(), f.a);
+        f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.a).contains(QStringLiteral("TRASH")), 10000);
+        QCOMPARE(undo->text().remove(QLatin1Char('&')), QStringLiteral("Undo Delete"));
+        undo->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!labels(f.a).contains(QStringLiteral("TRASH")), 10000);
+
+        // Empty Folder: everything in it to Trash, and back.
+        f.session->sync()->moveToLabel(f.a, kLabel);
+        f.session->sync()->moveToLabel(f.c, kLabel);
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.a).contains(kLabel) && labels(f.c).contains(kLabel), 10000);
+        f.session->sync()->emptyLabel(kLabel);
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.a).contains(QStringLiteral("TRASH")) && labels(f.c).contains(QStringLiteral("TRASH")), 10000);
+        QTRY_COMPARE(undo->text().remove(QLatin1Char('&')), QStringLiteral("Undo Empty Folder"));
+        QVERIFY(!labels(f.a).contains(kLabel));
+        undo->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.a).contains(kLabel) && labels(f.c).contains(kLabel), 10000);
+        QVERIFY(!labels(f.a).contains(QStringLiteral("TRASH")) && !labels(f.c).contains(QStringLiteral("TRASH")));
+        QVERIFY(labels(f.b).contains(QStringLiteral("INBOX"))); // the one that wasn't in the folder
+
+        // Empty Trash: hidden, and shown again.
+        f.session->sync()->trash(f.b);
+        QTRY_VERIFY_WITH_TIMEOUT(labels(f.b).contains(QStringLiteral("TRASH")), 10000);
+        f.selectView(QStringLiteral("Trash"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        f.w->emptyTrash(false);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 10000);
+        QTRY_COMPARE(undo->text().remove(QLatin1Char('&')), QStringLiteral("Undo Empty Trash"));
+        undo->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        QVERIFY(f.session->cache()->purged().isEmpty());
+        QCOMPARE(undo->text().remove(QLatin1Char('&')), QStringLiteral("Undo Delete"));
+    }
+
+    // A queued message opens in the compose window again, to be changed:
+    // sending or queueing it replaces the queued one; closing leaves it.
+    void queuedMessageCanBeEdited()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        ComposeWindow *c = f.w->openCompose();
+        c->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(QStringLiteral("Dana Whitfield <dana@example.org>"));
+        c->findChild<QLineEdit *>(QStringLiteral("fieldCc"))->setText(QStringLiteral("eli@example.com"));
+        c->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(QStringLiteral("Draft plan"));
+        c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("First version of the plan."));
+        c->addAttachment({QStringLiteral("plan.txt"), 4, {}, QByteArray("PLAN"), QStringLiteral("text/plain")});
+        QPointer<ComposeWindow> guard(c);
+        c->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!guard);
+        QCOMPARE(f.w->queuedCount(), 1);
+        const QString row1 = QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id);
+
+        // Open it (double-click, Ctrl+O, a mailbox window: all come here).
+        QTRY_VERIFY(f.model->rowForId(row1) >= 0);
+        QVERIFY(!f.w->openMessageWindowFor(row1)); // no reading window for it...
+        QCOMPARE(f.w->composers().size(), 1);     // ...a compose window instead
+        ComposeWindow *edit = f.w->composers().first();
+        QCOMPARE(edit->queuedId(), f.session->cache()->queued().first().id);
+        QCOMPARE(edit->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->text(), QStringLiteral("Dana Whitfield <dana@example.org>"));
+        QCOMPARE(edit->findChild<QLineEdit *>(QStringLiteral("fieldCc"))->text(), QStringLiteral("eli@example.com"));
+        QCOMPARE(edit->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->text(), QStringLiteral("Draft plan"));
+        QVERIFY(edit->findChild<QTextEdit *>(QStringLiteral("composeBody"))->toPlainText().contains(QStringLiteral("First version of the plan.")));
+        QCOMPARE(edit->attachments().size(), 1);
+        QCOMPARE(edit->attachments().first().name, QStringLiteral("plan.txt"));
+        QCOMPARE(edit->attachments().first().data, QByteArray("PLAN"));
+        QCOMPARE(f.w->editQueued(row1), edit); // asked again: the same window
+
+        // Closed without sending: still queued, unchanged.
+        delete edit;
+        QCOMPARE(f.w->queuedCount(), 1);
+        QCOMPARE(f.session->cache()->queued().first().subject, QStringLiteral("Draft plan"));
+
+        // Changed and queued again: one entry, the new one.
+        edit = f.w->editQueued(row1);
+        QVERIFY(edit);
+        edit->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(QStringLiteral("Final plan"));
+        guard = edit;
+        edit->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!guard);
+        QCOMPARE(f.w->queuedCount(), 1);
+        QCOMPARE(f.session->cache()->queued().first().subject, QStringLiteral("Final plan"));
+        const QString row2 = QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id);
+        QVERIFY(row2 != row1);
+        QTRY_VERIFY(f.model->rowForId(row2) >= 0 && f.model->rowForId(row1) < 0);
+
+        // Opened once more and sent from there: it leaves the queue.
+        edit = f.w->editQueued(row2);
+        QVERIFY(edit);
+        guard = edit;
+        edit->findChild<QAction *>(QStringLiteral("actionSend"))->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(!guard, 10000);
+        QCOMPARE(f.w->queuedCount(), 0);
+        bool delivered = false;
+        for (const MockGoogle::Message &m : f.g.messages()) {
+            delivered = delivered || m.subject == QLatin1String("Final plan");
+        }
+        QVERIFY(delivered);
+        QTRY_VERIFY(f.model->rowForId(row2) < 0);
+
+        // One queued by an older zmail has nothing to reopen from.
+        MailCache::QueuedMessage old;
+        old.mime = "Subject: old\r\n\r\nold";
+        old.to = QStringLiteral("eli@example.com");
+        old.subject = QStringLiteral("old");
+        const qint64 oldId = f.session->cache()->addQueued(old);
+        QVERIFY(!f.w->editQueued(QStringLiteral("queued:%1").arg(oldId)));
+        QCOMPARE(f.w->queuedCount(), 1);
     }
 
     // Drag a message from the list onto a folder in the sidebar.

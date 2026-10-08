@@ -246,6 +246,7 @@ void MessageView::clear()
     m_layoutBar->hide();
     m_simplified = false;
     m_fullLayout = false;
+    m_body->setPlaceholderText(tr("Select a message to read it."));
 }
 
 void MessageView::setMessage(const ViewMessage &m)
@@ -261,6 +262,7 @@ void MessageView::setMessage(const ViewMessage &m)
     }
     m_msg = m;
     m_empty = false;
+    m_body->setPlaceholderText(QString()); // a message with nothing in it is just empty
     renderHeader();
     render();
     if (!same) {

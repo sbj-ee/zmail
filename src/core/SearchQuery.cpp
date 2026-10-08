@@ -8,7 +8,7 @@ namespace {
 bool isOperatorToken(const QString &tok)
 {
     static const QRegularExpression re(
-        QStringLiteral("^-?(from|to|subject|label|has|is):"),
+        QStringLiteral("^-?(from|to|subject|label|has|is|flag):"),
         QRegularExpression::CaseInsensitiveOption);
     return re.match(tok).hasMatch();
 }

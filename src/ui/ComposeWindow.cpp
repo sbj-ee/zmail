@@ -38,6 +38,9 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QCompleter>
 #include <QStringListModel>
 #include <QMenu>
@@ -219,7 +222,7 @@ void ComposeWindow::buildToolbar()
     m_send->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_E)}); // Ctrl+E as in Eudora
     m_send->setToolTip(tr("Send now (Ctrl+Enter or Ctrl+E)"));
     connect(m_send, &QAction::triggered, this, &ComposeWindow::send);
-    QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later\u2026"));
+    QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later"));
     later->setObjectName(QStringLiteral("actionSendLater"));
     later->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
     later->setToolTip(tr("Queue it in Out, to go with File \u203a Send Queued Messages (Ctrl+Shift+Enter)"));
@@ -1181,6 +1184,79 @@ void ComposeWindow::setDraft(const ComposeDraft &d)
     }
 }
 
+QByteArray ComposeWindow::saveState() const
+{
+    QJsonArray files;
+    QString err;
+    for (const OutgoingAttachment &a : toOutgoing(m_attachments, &err)) { // files read now: they may move before it is sent
+        files.append(QJsonObject{{QStringLiteral("name"), a.fileName},
+                                 {QStringLiteral("mime"), a.mimeType},
+                                 {QStringLiteral("data"), QString::fromLatin1(a.data.toBase64())}});
+    }
+    const QJsonObject o{{QStringLiteral("to"), m_to->text()},
+                        {QStringLiteral("cc"), m_cc->text()},
+                        {QStringLiteral("bcc"), m_bcc->text()},
+                        {QStringLiteral("subject"), m_subject->text()},
+                        {QStringLiteral("format"), int(m_currentFormat)},
+                        {QStringLiteral("body"), m_currentFormat == Format::Html ? m_body->toHtml() : m_body->toPlainText()},
+                        {QStringLiteral("priority"), m_priority->currentIndex()},
+                        {QStringLiteral("inReplyTo"), m_inReplyTo},
+                        {QStringLiteral("references"), QJsonArray::fromStringList(m_references)},
+                        {QStringLiteral("threadId"), m_threadId},
+                        {QStringLiteral("draftId"), m_draftId},
+                        {QStringLiteral("attachments"), files}};
+    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+}
+
+bool ComposeWindow::restoreState(const QByteArray &state)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(state);
+    if (!doc.isObject()) {
+        return false;
+    }
+    const QJsonObject o = doc.object();
+    m_stationery = {};
+    m_quotedText.clear();
+    m_quotedHtml.clear();
+    m_to->setText(o.value(QStringLiteral("to")).toString());
+    m_cc->setText(o.value(QStringLiteral("cc")).toString());
+    m_bcc->setText(o.value(QStringLiteral("bcc")).toString());
+    m_subject->setText(o.value(QStringLiteral("subject")).toString());
+    m_inReplyTo = o.value(QStringLiteral("inReplyTo")).toString();
+    m_references.clear();
+    for (const auto &v : o.value(QStringLiteral("references")).toArray()) {
+        m_references << v.toString();
+    }
+    m_threadId = o.value(QStringLiteral("threadId")).toString();
+    m_draftId = o.value(QStringLiteral("draftId")).toString();
+    m_priority->setCurrentIndex(std::clamp(o.value(QStringLiteral("priority")).toInt(), 0, m_priority->count() - 1));
+    const Format format = Format(std::clamp(o.value(QStringLiteral("format")).toInt(), 0, 2));
+    // The body as it was, signature and quote included: nothing is added again.
+    if (m_signature) {
+        const QSignalBlocker block(m_signature);
+        m_signature->setCurrentIndex(0); // "None": the saved text already has whatever was signed
+    }
+    m_body->clear();
+    setFormat(format);
+    m_body->clear();
+    const QString body = o.value(QStringLiteral("body")).toString();
+    if (format == Format::Html) {
+        m_body->setHtml(body);
+    } else {
+        m_body->setPlainText(body);
+    }
+    m_attachments.clear();
+    for (const auto &v : o.value(QStringLiteral("attachments")).toArray()) {
+        const QJsonObject f = v.toObject();
+        const QByteArray data = QByteArray::fromBase64(f.value(QStringLiteral("data")).toString().toLatin1());
+        addAttachment({f.value(QStringLiteral("name")).toString(), data.size(), {}, data, f.value(QStringLiteral("mime")).toString()});
+    }
+    m_body->document()->setModified(false);
+    m_to->setModified(false);
+    m_subject->setModified(false);
+    return true;
+}
+
 bool ComposeWindow::saveAsStationery(const QString &name)
 {
     const Stationery s = asStationery(name);
@@ -1458,6 +1534,10 @@ void ComposeWindow::send()
             return;
         }
         self->m_sent = true;
+        if (self->m_queuedId > 0 && self->m_session && self->m_session->cache()) {
+            self->m_session->cache()->removeQueued(self->m_queuedId); // sent from here instead of from the queue
+            self->m_queuedId = 0;
+        }
         if (!self->m_draftId.isEmpty()) {
             sender->deleteDraft(self->m_draftId, [](const Sender::Result &) {});
         }
@@ -1514,9 +1594,14 @@ void ComposeWindow::queue()
     q.cc = m.cc;
     q.subject = m.subject;
     q.text = m.text;
+    q.state = saveState();
     if (cache->addQueued(q) <= 0) {
         fail(tr("Couldn't put the message in the queue."));
         return;
+    }
+    if (m_queuedId > 0) {
+        cache->removeQueued(m_queuedId); // the version this window was opened from
+        m_queuedId = 0;
     }
     m_sent = true; // nothing left to save or ask about on close
     emit queued();

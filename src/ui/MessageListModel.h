@@ -95,7 +95,8 @@ private:
 // Unknown "word:" tokens (8:30, http://...) are searched as plain text.
 struct SearchTerm
 {
-    enum Field { Any, From, To, Subject, Label, HasAttachment, IsUnread, IsRead };
+    // Flag: text is a colour ("red"), or empty for any flag (is:flagged).
+    enum Field { Any, From, To, Subject, Label, HasAttachment, IsUnread, IsRead, Flag };
     Field field = Any;
     QString text;
     bool negate = false;

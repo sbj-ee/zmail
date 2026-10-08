@@ -16,6 +16,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
+#include "ui/MailboxWindow.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
@@ -337,6 +338,9 @@ void MainWindow::setHideSpam(bool hide)
     QSettings().setValue(QStringLiteral("mail/hideSpam"), hide);
     if (m_proxy) {
         m_proxy->setHideSpam(hide);
+    }
+    for (MailboxWindow *w : mailboxWindows()) {
+        w->proxy()->setHideSpam(hide);
     }
     if (m_hideSpamAction && m_hideSpamAction->isChecked() != hide) {
         const QSignalBlocker block(m_hideSpamAction);

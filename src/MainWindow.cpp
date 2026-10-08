@@ -32,6 +32,7 @@
 #include "ui/SelectionAfterRemoval.h"
 #include "ui/ListDialog.h"
 #include "ui/RulesDialog.h"
+#include "ui/MailboxWindow.h"
 #include "core/Stationery.h"
 #include "ui/StationeryDialog.h"
 #include "ui/StripesDialog.h"
@@ -1205,12 +1206,20 @@ QList<MessageWindow *> MainWindow::messageWindows() const
     return out;
 }
 
-MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex)
+MessageWindow *MainWindow::openMessageWindowFor(const QString &messageId)
 {
-    if (!proxyIndex.isValid()) {
+    const int row = m_model->rowForId(messageId);
+    return row < 0 ? nullptr : openMessageWindow(m_proxy->mapFromSource(m_model->index(row, 0)), row);
+}
+
+MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex, int sourceRow)
+{
+    // By source row when given (a mailbox window: the message may not be in
+    // the main list's current mailbox, so it has no proxy index here).
+    if (!proxyIndex.isValid() && sourceRow < 0) {
         return nullptr;
     }
-    const int row = m_proxy->mapToSource(proxyIndex).row();
+    const int row = sourceRow >= 0 ? sourceRow : m_proxy->mapToSource(proxyIndex).row();
     auto *w = new MessageWindow(this);
     m_messageWindows.removeAll(nullptr);
     m_messageWindows.append(w);
@@ -1398,6 +1407,9 @@ void MainWindow::applyListAppearance()
         h->resizeSection(MessageListModel::Date, date);
     }
     m_list->doItemsLayout(); // uniform row heights are measured once
+    for (MailboxWindow *w : mailboxWindows()) {
+        styleMailboxWindow(w);
+    }
 }
 
 ListDialog *MainWindow::showListDialog()
@@ -1636,6 +1648,78 @@ StationeryDialog *MainWindow::showStationeryDialog()
     return dlg;
 }
 
+// ---- mailbox windows -----------------------------------------------------------
+
+QList<MailboxWindow *> MainWindow::mailboxWindows() const
+{
+    QList<MailboxWindow *> out;
+    for (const QPointer<MailboxWindow> &w : m_mailboxWindows) {
+        if (w) {
+            out << w.data();
+        }
+    }
+    return out;
+}
+
+void MainWindow::styleMailboxWindow(MailboxWindow *w)
+{
+    QTreeView *list = w->list();
+    QFont f;
+    if (m_listFontSize != kListFontDefault) {
+        f.setPointSize(m_listFontSize);
+    }
+    list->setFont(f);
+    list->setProperty("rowSpacing", m_listRowSpacing);
+    list->setPalette(m_list->palette()); // the stripe colour
+    list->setAlternatingRowColors(m_stripes > 0);
+    list->doItemsLayout();
+}
+
+MailboxWindow *MainWindow::openMailboxWindow(const QString &keyIn)
+{
+    const QString key = keyIn.isEmpty() ? m_proxy->mailbox() : keyIn;
+    if (key.isEmpty() || key == QLatin1String("Search")) {
+        statusBar()->showMessage(tr("Choose a mailbox to open in its own window."), 5000);
+        return nullptr;
+    }
+    // One window per mailbox: asking again brings it forward.
+    for (MailboxWindow *open : mailboxWindows()) {
+        if (open->mailbox() == key) {
+            open->raise();
+            open->activateWindow();
+            return open;
+        }
+    }
+    QString title = key;
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == key) {
+            const QString full = (*it)->data(0, Qt::UserRole + 2).toString(); // "Alerts/Monitoring"
+            title = full.isEmpty() ? (*it)->text(0) : full;
+        }
+    }
+    auto *w = new MailboxWindow(m_model, key, title, this);
+    w->setWindowFlag(Qt::Window, true);
+    w->proxy()->setHideSpam(hideSpam());
+    w->list()->setItemDelegate(new MessageRowDelegate(w->list()));
+    w->list()->header()->restoreState(m_list->header()->saveState()); // the main list's columns
+    styleMailboxWindow(w);
+    m_mailboxWindows.removeAll(nullptr);
+    m_mailboxWindows.append(w);
+    connect(w, &MailboxWindow::openRequested, this, [this](const QString &id) { openMessageWindowFor(id); });
+    connect(w, &MailboxWindow::deleteRequested, this, [this](const QStringList &ids) { trashMessages(ids); });
+    const QString label = labelForMailbox(key);
+    if (m_live && m_session && m_session->sync() && !label.isEmpty()) {
+        m_session->sync()->ensureLabel(label); // its first page, if it was never opened
+        connect(w, &MailboxWindow::moreRequested, this, [this, label]() {
+            if (m_live && m_session && m_session->sync()) {
+                m_session->sync()->fetchMore(label);
+            }
+        });
+    }
+    w->show();
+    return w;
+}
+
 // ---- Mailbox and Transfer menus -----------------------------------------------
 
 void MainWindow::openMailbox(const QString &key)
@@ -1682,6 +1766,11 @@ void MainWindow::rebuildMailboxMenus()
     }
     m_mailboxMenu->clear();
     m_transferMenu->clear();
+    QAction *own = m_mailboxMenu->addAction(tr("Open in &New Window"), this, [this]() { openMailboxWindow(); });
+    own->setObjectName(QStringLiteral("actionMailboxWindow"));
+    own->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N));
+    own->setToolTip(tr("Open the current mailbox in a window of its own"));
+    m_mailboxMenu->addSeparator();
     const auto target = [](const QString &key) -> QString {
         if (key == QLatin1String("In")) {
             return QStringLiteral("INBOX");
@@ -2026,6 +2115,9 @@ void MainWindow::applyStripes()
     m_list->header()->setPalette(QApplication::palette(m_list->header()));
     m_list->setAlternatingRowColors(m_stripes > 0);
     m_list->viewport()->update();
+    for (MailboxWindow *w : mailboxWindows()) {
+        styleMailboxWindow(w);
+    }
 }
 
 // ---- list / mailbox actions, Undo Delete ------------------------------------

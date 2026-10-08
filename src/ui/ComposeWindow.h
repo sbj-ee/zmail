@@ -70,6 +70,14 @@ public:
     // user wrote (not the signature, not the quoted original).
     zmail::Stationery asStationery(const QString &name) const;
     bool saveAsStationery(const QString &name); // replaces one of the same name
+    // Everything needed to put this message back in a compose window later
+    // (a queued message opened again): fields, body, format, attachments.
+    QByteArray saveState() const;
+    bool restoreState(const QByteArray &state);
+    // This window is editing queue entry `id`: sending or queueing it again
+    // replaces that entry; closing the window leaves it queued as it was.
+    void setQueuedId(qint64 id) { m_queuedId = id; }
+    qint64 queuedId() const { return m_queuedId; }
     // Reply / Reply All / Forward: headers, threading and the quoted text.
     void setDraft(const zmail::ComposeDraft &draft);
     // A clicked mailto: link: recipients, subject and a plain-text body.
@@ -187,6 +195,7 @@ private:
     QString recipients(const QLineEdit *field) const;
     void applyStationery();
     zmail::Stationery m_stationery;
+    qint64 m_queuedId = 0;
     QPointer<zmail::MailSession> m_session;
     zmail::SignatureStore *m_sigStore = nullptr;
     zmail::SignatureStore *m_ownSigStore = nullptr;

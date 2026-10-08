@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.6: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.7: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -63,7 +63,9 @@ message" rather than "1 message(s)". New in 0.6.3: the queue (Send Later
 puts a message in Out; Send Queued Messages delivers what is waiting). New
 in 0.6.4: Eudora's Mailbox and Transfer menus, and its shortcut keys. New
 in 0.6.5: stationery (New Message With, Reply With). New in 0.6.6: a
-mailbox can open in a window of its own. See
+mailbox can open in a window of its own. New in 0.6.7: one Settings
+window, Undo for moves and emptying, editable queued messages, new-mail
+notifications, a shortcut list, flag search, and a round of polish. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -130,7 +132,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.6_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.7_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -174,20 +176,21 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   all or any of its conditions) and can colour the message's row, flag it,
   move it to a folder, mark it read, and play its own sound or none when it
   arrives. Colours show on every matching message; the rest happens when
-  mail arrives, or on **Message → Filter Messages** (Ctrl+J) for the
+  mail arrives, or on **Message → Filter Messages** (Ctrl+Alt+J) for the
   selection. Right-click a message → **Make Filter** starts one from its
   sender. Rules are kept in `rules.json` in zmail's config folder.
 - Eudora's **Mailbox** and **Transfer** menus list your mailboxes and
   folders: Mailbox goes to one (Ctrl+1 for In, Ctrl+2 for Out), Transfer
   moves the selected messages to one, also from the right-click menu.
   Eudora's keys work: Ctrl+D delete, Ctrl+E send, Ctrl+T send queued,
-  Ctrl+J filter, Ctrl+K add the sender to Contacts, Ctrl+L Contacts,
+  Ctrl+Alt+J filter, Ctrl+K add the sender to Contacts, Ctrl+L Contacts,
   Ctrl+H attach, Ctrl+M check mail.
 - A mailbox can open in **a window of its own**, as in Eudora (right-click
   it → Open in New Window, or Mailbox → Open in New Window, Ctrl+Shift+N):
-  the same live list, so two mailboxes can be seen side by side. Double-click
-  opens a message, Delete deletes, and messages can be dragged from it onto
-  a folder in the main window.
+  the same live list with its own preview pane, so two mailboxes can be seen
+  side by side. Double-click opens a message, Delete deletes, right-click has
+  the full set of commands, and messages can be dragged from it onto a folder
+  in the main window.
 - **Stationery**, as in Eudora: messages kept as templates (Settings →
   Stationery, or **Save This Message as Stationery** from the compose
   window's Stationery button). **File → New Message With** starts a message
@@ -224,6 +227,20 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   Contacts) and type it in To, Cc or Bcc instead of the address. A
   category's name is a nickname for everyone in it. zmail suggests them as
   you type and writes the addresses out when you leave the field.
+- **Settings → Settings…** (Ctrl+,) is one window with a section each for
+  Filters, Signatures, Stationery, Message List, Row Stripes, Sounds and
+  Privacy, and one OK and Cancel for all of them.
+- **Undo** (Ctrl+Z, or the bar in the status bar) takes back a Delete, a
+  move to a folder, Empty Folder and Empty Trash for a few seconds.
+- A queued message opens in the compose window again when you double-click
+  it, to change it before it goes.
+- When mail arrives and zmail isn't in front you get a desktop notification
+  (**View → Notify for New Mail**), and the window title shows the Inbox's
+  unread count.
+- Right-clicking a mailbox in the sidebar acts on that mailbox without
+  leaving the one you are in. Empty mailboxes and an empty preview say so.
+- **Help → Keyboard Shortcuts** (Ctrl+/) lists every key.
+- Search understands `is:flagged` and `flag:red` (or any flag colour).
 - Dates in the message list read `01/01/2026  9:05 AM`.
 - **File → Save Attachments** saves the open message's attachments into a
   folder you choose (safe file names, never over an existing file), and

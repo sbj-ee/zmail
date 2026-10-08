@@ -187,6 +187,15 @@ QString MainWindow::currentListId() const
 QList<int> MainWindow::selectedSourceRows() const
 {
     QList<int> rows;
+    if (!m_actOnIds.isEmpty()) { // a mailbox window's menu: its messages
+        for (const QString &id : m_actOnIds) {
+            if (const int row = m_model ? m_model->rowForId(id) : -1; row >= 0) {
+                rows.append(row);
+            }
+        }
+        std::sort(rows.begin(), rows.end());
+        return rows;
+    }
     if (!m_list || !m_list->selectionModel() || !m_proxy || !m_model) {
         return rows;
     }
@@ -546,9 +555,13 @@ void MainWindow::offerUndoDelete(const QStringList &ids)
             m_undoBar->hide();
             m_undoDeleteAction->setEnabled(false);
             m_lastTrashed.clear();
+            m_undoOther = nullptr;
+            m_undoDeleteAction->setText(tr("&Undo Delete"));
         });
     }
     m_lastTrashed = ids;
+    m_undoOther = nullptr;
+    m_undoDeleteAction->setText(tr("&Undo Delete"));
     m_undoLabel->setText(ids.size() <= 1 ? tr("Moved to Trash.")
                                          : tr("Moved %1 messages to Trash.").arg(ids.size()));
     m_undoBar->show();
@@ -556,10 +569,21 @@ void MainWindow::offerUndoDelete(const QStringList &ids)
     m_undoTimer->start(kUndoDeleteMs);
 }
 
+// The same bar and the same Ctrl+Z for the other things that move mail in
+// bulk: a transfer, Empty Folder, Empty Trash.
+void MainWindow::offerUndo(const QString &what, const QString &menuText, std::function<void()> undo)
+{
+    offerUndoDelete({}); // builds the bar; no ids
+    m_undoOther = std::move(undo);
+    m_undoDeleteAction->setText(menuText);
+    m_undoLabel->setText(what);
+}
+
 void MainWindow::undoDelete()
 {
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
     const QStringList ids = m_lastTrashed;
+    const std::function<void()> other = std::exchange(m_undoOther, nullptr);
     m_lastTrashed.clear();
     if (m_undoTimer) {
         m_undoTimer->stop();
@@ -568,6 +592,11 @@ void MainWindow::undoDelete()
         m_undoBar->hide();
     }
     m_undoDeleteAction->setEnabled(false);
+    m_undoDeleteAction->setText(tr("&Undo Delete"));
+    if (other) {
+        other();
+        return;
+    }
     if (!sync || ids.isEmpty()) {
         return;
     }

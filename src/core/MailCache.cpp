@@ -144,6 +144,19 @@ bool MailCache::open(const QString &path)
     if (!ok) {
         return false;
     }
+    // 0.6.7: a queued message keeps the composer's state, so it can be reopened.
+    {
+        bool hasState = false;
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        if (q.exec(QStringLiteral("PRAGMA table_info(outbox)"))) {
+            while (q.next()) {
+                hasState = hasState || q.value(1).toString() == QLatin1String("state");
+            }
+        }
+        if (!hasState && !exec(QStringLiteral("ALTER TABLE outbox ADD COLUMN state BLOB"))) {
+            return false;
+        }
+    }
     // FTS5 external-content index kept in sync by triggers.
     m_fts5 = exec(QStringLiteral(
         "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(subject, from_name, from_addr, to_addr, "
@@ -721,8 +734,8 @@ QSet<QString> MailCache::purged() const
 qint64 MailCache::addQueued(const QueuedMessage &m)
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
-    q.prepare(QStringLiteral("INSERT INTO outbox(mime, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms) "
-                             "VALUES (?,?,?,?,?,?,?,?)"));
+    q.prepare(QStringLiteral("INSERT INTO outbox(mime, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, state) "
+                             "VALUES (?,?,?,?,?,?,?,?,?)"));
     q.addBindValue(m.mime);
     q.addBindValue(m.threadId);
     q.addBindValue(m.draftId);
@@ -731,6 +744,7 @@ qint64 MailCache::addQueued(const QueuedMessage &m)
     q.addBindValue(m.subject);
     q.addBindValue(m.text);
     q.addBindValue(m.createdMs > 0 ? m.createdMs : QDateTime::currentMSecsSinceEpoch());
+    q.addBindValue(m.state);
     return q.exec() ? q.lastInsertId().toLongLong() : 0;
 }
 
@@ -750,6 +764,7 @@ MailCache::QueuedMessage queuedFromRow(const QSqlQuery &q, bool withMime)
     m.size = q.value(9).toLongLong();
     if (withMime) {
         m.mime = q.value(10).toByteArray();
+        m.state = q.value(11).toByteArray();
     }
     return m;
 }
@@ -761,7 +776,7 @@ QList<MailCache::QueuedMessage> MailCache::queued(bool withMime) const
     QList<QueuedMessage> out;
     QSqlQuery q(QSqlDatabase::database(m_conn));
     if (q.exec(QStringLiteral("SELECT %1%2 FROM outbox ORDER BY id")
-                   .arg(QLatin1String(kQueuedColumns), withMime ? QStringLiteral(", mime") : QString()))) {
+                   .arg(QLatin1String(kQueuedColumns), withMime ? QStringLiteral(", mime, state") : QString()))) {
         while (q.next()) {
             out.append(queuedFromRow(q, withMime));
         }
@@ -772,7 +787,7 @@ QList<MailCache::QueuedMessage> MailCache::queued(bool withMime) const
 MailCache::QueuedMessage MailCache::queuedMessage(qint64 id) const
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
-    q.prepare(QStringLiteral("SELECT %1, mime FROM outbox WHERE id = ?").arg(QLatin1String(kQueuedColumns)));
+    q.prepare(QStringLiteral("SELECT %1, mime, state FROM outbox WHERE id = ?").arg(QLatin1String(kQueuedColumns)));
     q.addBindValue(id);
     return q.exec() && q.next() ? queuedFromRow(q, true) : QueuedMessage();
 }

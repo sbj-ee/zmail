@@ -136,7 +136,7 @@ private slots:
             top << tree->topLevelItem(i)->text(0);
         }
         QVERIFY(!top.contains(QStringLiteral("Junk / Suspicious")));
-        QCOMPARE(top, (QStringList{"In", "Out", "Snoozed", "Trash", "Gmail Labels"}));
+        QCOMPARE(top, (QStringList{"In", "Out", "Snoozed", "Trash", "Folders"}));
 
         auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
         // Sample Contoso phish has In+Junk; Hide Spam drops it from In (12 -> 11).

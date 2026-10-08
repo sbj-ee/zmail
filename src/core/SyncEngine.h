@@ -89,7 +89,13 @@ public:
     void deleteLabel(const QString &id);
     // Empty a folder: every message with the label goes to Trash and out of
     // the folder (and the Inbox), cached or not, 500 at a time.
-    void emptyLabel(const QString &id, int round = 0);
+    void emptyLabel(const QString &id, int round = 0, std::shared_ptr<QStringList> moved = {});
+    // Undo of emptyLabel: the messages come out of Trash and back into the
+    // folder. (Those that were also in the Inbox return to the folder only.)
+    void unemptyLabel(const QString &id, const QStringList &messageIds);
+    // Undo of a move: put a message's folders (user labels) and INBOX back as
+    // they were in `before`, leaving its other labels as they are now.
+    void restoreFolders(const QString &messageId, const QStringList &before);
     // A message lives in one folder. Moving it onto a user label adds that
     // label and removes INBOX and every other user label it had; moving it
     // onto INBOX puts it back in the Inbox and removes its user labels.
@@ -101,6 +107,7 @@ public:
 signals:
     void labelsChanged();
     void trashEmptied(int messages);
+    void labelEmptied(const QString &labelId, const QStringList &messageIds); // emptyLabel finished
     void messagesChanged();
     void newMail(const QStringList &ids);
     void snoozesWoke(const QStringList &ids);

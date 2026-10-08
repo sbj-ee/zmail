@@ -2,12 +2,15 @@
 
 #include "core/Rules.h"
 
+#include <QSet>
+#include <functional>
 #include <QMainWindow>
 #include <QPointer>
 #include <QList>
 #include <QStringList>
 
 class QActionGroup;
+class QDialog;
 class QLabel;
 class QPrinter;
 class QLineEdit;
@@ -116,6 +119,12 @@ public:
     // dialog was cancelled.
     bool printMessage(QPrinter *printer = nullptr);
     void copySelection(); // Edit > Copy
+    QDialog *showShortcuts(); // Help > Keyboard Shortcuts (non-modal; returned for tests)
+    // Settings > Settings (Ctrl+,): Filters, Signatures, Stationery, Message
+    // List, Row Stripes, Sounds and Privacy as the sections of one window,
+    // opened at `section` ("filters", "signatures", "stationery", "list",
+    // "stripes", "sounds", "privacy"). Non-modal; returned for tests.
+    QDialog *showSettings(const QString &section = {});
     // Stationery (Settings > Stationery): a new message, or a reply to the
     // shown one, started from a saved template.
     ComposeWindow *newMessageWith(const QString &stationeryName);
@@ -129,11 +138,19 @@ public:
     zmail::ui::MailboxWindow *openMailboxWindow(const QString &key = {});
     QList<zmail::ui::MailboxWindow *> mailboxWindows() const;
     zmail::ui::MessageWindow *openMessageWindowFor(const QString &messageId);
+    // Show a message in a view that isn't the main preview (a mailbox
+    // window's), fetching its body and marking it read as the main one does.
+    void showMessageIn(zmail::ui::MessageView *view, const QString &messageId);
+    // The message commands, for these messages rather than the main list's
+    // selection (a mailbox window's right-click).
+    QMenu *buildMenuFor(const QStringList &messageIds, QWidget *parent);
     void transferSelected(const QString &target);
     // File > Send Queued Messages: everything waiting in Out, oldest first.
     // One that Gmail refuses stays queued, with the reason.
     void sendQueued();
     int queuedCount() const;
+    // Open a queued message ("queued:N") in a compose window to change it.
+    ComposeWindow *editQueued(const QString &queuedRowId);
     void setViewAsPlainText(bool on); // View > View as Plain Text, remembered
     // Filters (Settings > Filters): the rules in force, the editor, and
     // Message > Filter Messages for the selection. A rule passed to the
@@ -145,6 +162,14 @@ public:
     // What a batch of newly arrived messages gets: each one's matching rule
     // applied, and one sound for the lot.
     void applyRulesToNewMail(const QStringList &ids);
+    // View > Notify for New Mail: a desktop notification when mail arrives
+    // and no zmail window has the focus. Remembered (default on).
+    bool notifyOn() const { return m_notify; }
+    void setNotifyOn(bool on);
+    // Where notifications go (the desktop's notification service by default;
+    // the tests look at them instead).
+    using NotifySink = std::function<void(const QString &summary, const QString &body)>;
+    void setNotifySink(NotifySink sink) { m_notifySink = std::move(sink); }
     zmail::ui::PrivacyDialog *showPrivacyDialog(); // Settings > Privacy; caller shows it (tests)
     zmail::ui::SoundDialog *showSoundDialog(); // Settings > Sounds; caller shows it (tests)
     // Any theme id, built-in or custom ("custom:<stem>", "zterminal:<stem>");
@@ -290,7 +315,14 @@ private:
     int m_autoLoadRows = -1;   // ...and how many rows it showed then
     QStringList m_savedAttachments;
     QList<QPointer<zmail::ui::MailboxWindow>> m_mailboxWindows;
+    bool m_notify = true;
+    NotifySink m_notifySink;
+    void notifyNewMail(const QStringList &ids);
+    void updateTitle(); // "(3) zmail 0.6.7": unread in the Inbox, when signed in
+    bool m_embedding = false; // building the Settings window: its dialogs don't show themselves
+    QStringList m_actOnIds; // set while buildMenuFor()'s menu is up: what "the selection" means
     void styleMailboxWindow(zmail::ui::MailboxWindow *w); // the list's text size, row spacing and stripes
+    QLabel *m_emptyHint = nullptr; // "No messages in ..." over an empty list
     QMenu *m_mailboxMenu = nullptr;
     QMenu *m_transferMenu = nullptr;
     void rebuildMailboxMenus();
@@ -318,6 +350,9 @@ private:
     QLabel *m_undoLabel = nullptr;
     QTimer *m_undoTimer = nullptr;
     QStringList m_lastTrashed;        // ids the Undo puts back
+    std::function<void()> m_undoOther; // or: what Undo does for a move / Empty Folder / Empty Trash
+    void offerUndo(const QString &what, const QString &menuText, std::function<void()> undo);
+    QSet<QString> m_purgedBeforeEmpty; // Trash as it was hidden before the last Empty Trash
     QTimer *m_reloadTimer = nullptr;
     QAction *m_hideSpamAction = nullptr;
     QTimer *m_snoozeTimer = nullptr;

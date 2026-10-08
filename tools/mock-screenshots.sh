@@ -19,7 +19,7 @@ shot() { # <mode> <out.png>
     w="$(xdotool search --onlyvisible --name ' — zmail [0-9.]+$' | head -1)"
     xdotool windowactivate --sync "$w" 2>/dev/null || true; sleep 1
   elif [[ $1 == synced ]]; then
-    w="$(xdotool search --onlyvisible --name '^zmail [0-9.]+$' | head -1)"
+    w="$(xdotool search --onlyvisible --name '^(\([0-9]+\) )?zmail [0-9.]+$' | head -1)"
     xdotool windowmove "$w" 0 0; sleep 1
   else
     w="$(xdotool search --onlyvisible --name '^Connect your Gmail$' | head -1)"

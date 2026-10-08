@@ -346,6 +346,34 @@ private slots:
         QVERIFY(f.labels(hello).contains(QStringLiteral("INBOX")));
         QVERIFY(f.labels(hello).contains(QStringLiteral("UNREAD")));
 
+        // A desktop notification for mail that arrives while zmail isn't in
+        // front (never for mail a filter said to keep quiet about), and the
+        // Inbox's unread count in the window title.
+        QStringList notes;
+        f.w->setNotifySink([&notes](const QString &summary, const QString &body) { notes << summary + QStringLiteral(" | ") + body; });
+        QVERIFY(f.w->notifyOn());
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionNotify"))->isChecked());
+        f.w->hide(); // not the active window (offscreen windows are active while shown)
+        QTRY_VERIFY(!QApplication::activeWindow());
+        f.seed(QStringLiteral("Ruth <ruth@example.net>"), QStringLiteral("Third"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        f.session->sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(notes.size(), 1, 10000);
+        QCOMPARE(notes.first(), QStringLiteral("1 new message | Ruth: Third"));
+        QTRY_VERIFY2(f.w->windowTitle().startsWith(QStringLiteral("(2) zmail ")), qPrintable(f.w->windowTitle()));
+        f.seed(QStringLiteral("Billing <billing@isp.example.com>"), QStringLiteral("Quiet invoice"),
+               {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        f.session->sync()->pollNow(true);
+        QTest::qWait(600);
+        QCOMPARE(notes.size(), 1); // the filter's "No sound" covers the notification too
+        f.w->setNotifyOn(false);
+        QVERIFY(!QSettings().value(QStringLiteral("notify/desktop")).toBool());
+        f.seed(QStringLiteral("Ruth <ruth@example.net>"), QStringLiteral("Fourth"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        f.session->sync()->pollNow(true);
+        QTest::qWait(600);
+        QCOMPARE(notes.size(), 1); // switched off
+        f.w->setNotifyOn(true);
+        f.w->show();
+
         // Message > Filter Messages does it for mail that was already here.
         auto *list = f.w->findChild<QTreeView *>(QStringLiteral("messageList"));
         QTRY_VERIFY(f.model->rowForId(old) >= 0);

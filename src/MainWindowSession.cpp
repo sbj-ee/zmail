@@ -177,9 +177,36 @@ void MainWindow::attachSync()
     connect(sync, &zmail::SyncEngine::trashFailed, this, [this](const QString &id) { onTrashFailed(id); });
     connect(sync, &zmail::SyncEngine::trashSucceeded, this, [this](const QString &id) { m_pendingTrash.remove(id); });
     connect(sync, &zmail::SyncEngine::trashEmptied, this, [this](int n) {
-        statusBar()->showMessage(n < 0 ? tr("Couldn't empty the Trash: Gmail didn't answer.")
-                                       : (n == 1 ? tr("Trash emptied: 1 message.") : tr("Trash emptied: %1 messages.").arg(n)),
-                                 6000);
+        const QString what = n < 0 ? tr("Couldn't empty the Trash: Gmail didn't answer.")
+                                   : (n == 1 ? tr("Trash emptied: 1 message.") : tr("Trash emptied: %1 messages.").arg(n));
+        statusBar()->showMessage(what, 6000);
+        if (n <= 0) {
+            return;
+        }
+        const QSet<QString> before = m_purgedBeforeEmpty;
+        offerUndo(what, tr("&Undo Empty Trash"), [this, before]() {
+            if (!(m_live && m_session && m_session->cache())) {
+                return;
+            }
+            m_session->cache()->setPurged(QStringList(before.begin(), before.end())); // hidden as it was before
+            reloadFromCache();
+            populateMailboxes();
+            statusBar()->showMessage(tr("The Trash is back as it was."), 4000);
+        });
+    });
+    connect(sync, &zmail::SyncEngine::labelEmptied, this, [this](const QString &labelId, const QStringList &ids) {
+        if (ids.isEmpty()) {
+            return;
+        }
+        const QString what = ids.size() == 1 ? tr("Folder emptied: 1 message to Trash.")
+                                             : tr("Folder emptied: %1 messages to Trash.").arg(ids.size());
+        statusBar()->showMessage(what, 6000);
+        offerUndo(what, tr("&Undo Empty Folder"), [this, labelId, ids]() {
+            if (m_live && m_session && m_session->sync()) {
+                m_session->sync()->unemptyLabel(labelId, ids);
+                statusBar()->showMessage(tr("Putting the folder's mail back\u2026"), 4000);
+            }
+        });
     });
     connect(sync, &zmail::SyncEngine::snoozesWoke, this, [this](const QStringList &ids) {
         statusBar()->showMessage((ids.size() == 1 ? tr("1 snoozed message returned to the Inbox.")
@@ -336,7 +363,7 @@ void MainWindow::showLiveMessage(int row)
         if (!q.error.isEmpty()) {
             v.warning = tr("<b>This message is still queued.</b> The last attempt to send it failed: %1").arg(q.error.toHtmlEscaped());
         } else {
-            v.warning = tr("<b>Queued.</b> File \u203a Send Queued Messages sends it; Delete takes it out of the queue.");
+            v.warning = tr("<b>Queued.</b> File \u203a Send Queued Messages sends it. Double-click to change it; Delete takes it out of the queue.");
         }
         m_view->setMessage(v);
         return;

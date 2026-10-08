@@ -130,7 +130,7 @@ void MainWindow::populateMailboxes()
     const QPalette pal = QApplication::palette();
     if (m_live && m_session->cache()) {
         // Real Gmail labels: system ones map onto Eudora's mailboxes, user
-        // labels (nested on "/") go under "Gmail Labels" like folders.
+        // labels (nested on "/") go under "Folders".
         // messagesTotal comes from labels.get (list omits counts on real Gmail).
         QHash<QString, zmail::CachedLabel> byId;
         for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
@@ -164,11 +164,11 @@ void MainWindow::populateMailboxes()
         add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"),
             std::max(0, total(QStringLiteral("TRASH")) - int(m_session->cache()->purged().size())));
 
-        auto *root = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
+        auto *root = add(nullptr, tr("Folders"), icon(QStringLiteral("folder-open")), QString());
         root->setFlags(root->flags() & ~Qt::ItemIsSelectable);
         root->setData(0, Qt::UserRole + 1, QStringLiteral("labels-root"));
         struct S { const char *id; QString name; const char *icon; };
-        for (const S &sys : {S{"STARRED", tr("Starred"), "star"}, S{"IMPORTANT", tr("Important"), "flag"},
+        for (const S &sys : {S{"STARRED", tr("Flagged"), "flag"}, S{"IMPORTANT", tr("Important"), "star"},
                              S{"DRAFT", tr("Drafts"), "square-pen"}}) {
             const QString id = QString::fromLatin1(sys.id);
             if (byId.contains(id)) {
@@ -228,7 +228,7 @@ void MainWindow::populateMailboxes()
     }
     add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"));
 
-    auto *labels = add(nullptr, tr("Gmail Labels"), icon(QStringLiteral("folder-open")), QString());
+    auto *labels = add(nullptr, tr("Folders"), icon(QStringLiteral("folder-open")), QString());
     labels->setFlags(labels->flags() & ~Qt::ItemIsSelectable);
     labels->setData(0, Qt::UserRole + 1, QStringLiteral("labels-root"));
     struct L { QString name; QColor color; };
@@ -261,6 +261,18 @@ void MainWindow::updateCounts()
         box = box.mid(6);
     } else if (box.startsWith(QLatin1String("gmail:")) && m_mailboxes->currentItem()) {
         box = m_mailboxes->currentItem()->text(0);
+    }
+    updateTitle();
+    if (m_emptyHint) {
+        const QString key = m_proxy->mailbox();
+        const bool searching = key == QLatin1String("Search") || (m_search && !m_search->text().trimmed().isEmpty());
+        m_emptyHint->setText(searching                          ? tr("No messages match your search.")
+                             : key == QLatin1String("Trash")    ? tr("Trash is empty.")
+                             : key == QLatin1String("Out")      ? tr("Nothing sent or queued.")
+                             : key == QLatin1String("Snoozed")  ? tr("Nothing is snoozed.")
+                             : key == QLatin1String("Junk")     ? tr("No junk mail.")
+                                                                : tr("No messages in %1.").arg(box));
+        m_emptyHint->setVisible(total == 0);
     }
     // "queued" only when something is.
     QString text = tr("%1: %2, %3 unread, %4")
@@ -324,7 +336,7 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
     const bool labelsRoot = meta == QLatin1String("labels-root");
     const bool folderPrefix = meta.startsWith(QLatin1String("folder-prefix:"));
 
-    if (live) {
+    if (live && (userLabel || labelsRoot || folderPrefix)) {
         QString prefix;
         if (folderPrefix) {
             prefix = meta.mid(QStringLiteral("folder-prefix:").size()) + QLatin1Char('/');
@@ -385,24 +397,11 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
 
 void MainWindow::showMailboxMenu(const QPoint &pos)
 {
+    // The menu is about the row that was clicked. It doesn't go there: you
+    // keep your place, and can empty the Trash or mark a folder read from
+    // wherever you are. (It used to select the row first, which changed the
+    // mailbox on show and could rebuild the tree under the menu.)
     QTreeWidgetItem *item = m_mailboxes->itemAt(pos);
-    if (item && (item->flags() & Qt::ItemIsSelectable) && item != m_mailboxes->currentItem()) {
-        // Selecting it can rebuild the whole tree (leaving Junk or Search
-        // results does), which deletes `item`: find the row again afterwards
-        // by what it is. Using the old pointer built a menu for a row that
-        // was gone, so right-clicking Trash from Junk showed no Empty Trash,
-        // or crashed (0.6.3).
-        const QString key = item->data(0, Qt::UserRole).toString();
-        const QString meta = item->data(0, Qt::UserRole + 1).toString();
-        m_mailboxes->setCurrentItem(item);
-        item = nullptr;
-        for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
-            if ((*it)->data(0, Qt::UserRole).toString() == key && (*it)->data(0, Qt::UserRole + 1).toString() == meta) {
-                item = *it;
-                break;
-            }
-        }
-    }
     QMenu *menu = buildMailboxMenu(item);
     menu->setAttribute(Qt::WA_DeleteOnClose);
     menu->popup(m_mailboxes->viewport()->mapToGlobal(pos));
@@ -521,8 +520,8 @@ void MainWindow::emptyLabelFolder(const QString &labelId, const QString &display
     const auto choice = QMessageBox::question(
         this, tr("Empty Folder"),
         tr("Move every message in \"%1\" to Trash?\n\n"
-           "%2 The folder itself stays. Gmail keeps the messages in Trash for "
-           "30 days; Undo Delete does not bring them back.")
+           "%2 The folder itself stays. Undo puts them back for a few seconds; "
+           "after that they are in Trash, where Gmail keeps them for 30 days.")
             .arg(displayName, total == 1 ? tr("It holds 1 message.") : tr("It holds %1 messages.").arg(total)),
         QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
     if (choice != QMessageBox::Yes) {
@@ -544,8 +543,8 @@ void MainWindow::emptyTrash(bool confirm)
         const auto choice = QMessageBox::question(
             this, tr("Empty Trash"),
             tr("Remove every message in Trash?\n\n"
-               "They disappear from zmail and can't be brought back here. Gmail doesn't let zmail erase mail "
-               "outright, so Gmail itself keeps them in its Trash until it purges them (up to 30 days)."),
+               "They disappear from zmail (Undo brings them back for a few seconds). Gmail doesn't let zmail "
+               "erase mail outright, so Gmail itself keeps them in its Trash until it purges them (up to 30 days)."),
             QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
         if (choice != QMessageBox::Yes) {
             return;
@@ -554,6 +553,7 @@ void MainWindow::emptyTrash(bool confirm)
     if (m_proxy->mailbox() == QLatin1String("Trash")) {
         m_view->clear();
     }
+    m_purgedBeforeEmpty = m_session->cache()->purged(); // for Undo
     m_session->sync()->emptyTrash();
     statusBar()->showMessage(tr("Emptying the Trash\u2026"), 4000);
 }
@@ -599,17 +599,36 @@ void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QStrin
         return;
     }
     zmail::SyncEngine *sync = m_session->sync();
+    // Where each one was, for Undo.
+    QList<QPair<QString, QStringList>> before;
     for (const QString &id : messageIds) {
+        const zmail::CachedMessage c = m_session->cache()->summary(id);
+        if (!c.id.isEmpty()) {
+            before.append({id, c.labels});
+        }
         sync->moveToLabel(id, targetLabelId);
     }
-    if (targetLabelId == QLatin1String("INBOX")) {
-        statusBar()->showMessage(messageIds.size() == 1 ? tr("Moved 1 message to In.")
-                                                        : tr("Moved %1 messages to In.").arg(messageIds.size()),
-                                 5000);
+    QString where = tr("In");
+    for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+        if (l.id == targetLabelId && targetLabelId != QLatin1String("INBOX")) {
+            where = l.name;
+        }
+    }
+    const int n = int(messageIds.size());
+    const QString what = n == 1 ? tr("Moved to %1.").arg(where) : tr("Moved %1 messages to %2.").arg(n).arg(where);
+    statusBar()->showMessage(what, 5000);
+    if (before.isEmpty()) {
         return;
     }
-    statusBar()->showMessage(
-        messageIds.size() == 1 ? tr("Moved 1 message to folder.")
-                               : tr("Moved %1 messages to folder.").arg(messageIds.size()),
-        5000);
+    offerUndo(what, tr("&Undo Move"), [this, before]() {
+        if (!(m_live && m_session && m_session->sync())) {
+            return;
+        }
+        for (const auto &b : before) {
+            m_session->sync()->restoreFolders(b.first, b.second);
+        }
+        statusBar()->showMessage(before.size() == 1 ? tr("Message moved back.")
+                                                    : tr("%1 messages moved back.").arg(before.size()),
+                                 4000);
+    });
 }

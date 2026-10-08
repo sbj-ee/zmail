@@ -429,13 +429,26 @@ QList<SearchTerm> MessageFilterProxy::parseSearch(const QString &text)
             t.field = SearchTerm::IsRead;
             known = true;
         }
+        if (!known && op == QLatin1String("is") &&
+            (val.compare(QLatin1String("flagged"), Qt::CaseInsensitive) == 0 ||
+             val.compare(QLatin1String("starred"), Qt::CaseInsensitive) == 0)) {
+            t.field = SearchTerm::Flag; // any colour
+            known = true;
+        } else if (!known && op == QLatin1String("flag") && !val.isEmpty()) {
+            t.field = SearchTerm::Flag;
+            t.text = val.toLower() == QLatin1String("grey") ? QStringLiteral("gray") : val.toLower();
+            if (t.text == QLatin1String("any") || t.text == QLatin1String("yes")) {
+                t.text.clear();
+            }
+            known = true;
+        }
         if (!known) {
             t.field = SearchTerm::Any;
             t.text = unquote(tok);
         }
         // "from:" with nothing after it yet (still typing): no filter.
         const bool needsText = t.field != SearchTerm::HasAttachment && t.field != SearchTerm::IsUnread &&
-                               t.field != SearchTerm::IsRead;
+                               t.field != SearchTerm::IsRead && t.field != SearchTerm::Flag;
         if (needsText && t.text.isEmpty()) {
             continue;
         }
@@ -467,6 +480,7 @@ bool MessageFilterProxy::matches(const QList<SearchTerm> &terms, const MailItem 
         case SearchTerm::HasAttachment: hit = m.hasAttachment; break;
         case SearchTerm::IsUnread: hit = m.status == MailStatus::Unread; break;
         case SearchTerm::IsRead: hit = m.status != MailStatus::Unread; break;
+        case SearchTerm::Flag: hit = !m.flag.isEmpty() && (t.text.isEmpty() || m.flag == t.text); break;
         }
         if (hit == t.negate) {
             return false;
@@ -480,6 +494,7 @@ QString MessageFilterProxy::searchHelp()
     return tr("Search all synced mail (subject, from, to, body).\n"
               "from:name   to:name   subject:word   label:name\n"
               "has:attachment   is:unread   is:read\n"
+              "is:flagged   flag:red (orange, yellow, green, blue, purple, gray)\n"
               "\"exact phrase\"   -word (exclude)");
 }
 

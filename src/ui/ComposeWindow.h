@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/Stationery.h"
 #include "core/Limits.h"
 #include "core/Mailto.h"
 #include "core/MimeBuilder.h"
@@ -61,6 +62,14 @@ public:
 
     // Live mode.
     void setSession(zmail::MailSession *session);
+    // Stationery: fill this message from a template. Its text goes at the
+    // top; its recipients and subject are used where the message has none.
+    // Set before a reply's draft arrives, it is applied when the draft is.
+    void setStationery(const zmail::Stationery &s);
+    // This message as stationery: its recipients, subject, and the text the
+    // user wrote (not the signature, not the quoted original).
+    zmail::Stationery asStationery(const QString &name) const;
+    bool saveAsStationery(const QString &name); // replaces one of the same name
     // Reply / Reply All / Forward: headers, threading and the quoted text.
     void setDraft(const zmail::ComposeDraft &draft);
     // A clicked mailto: link: recipients, subject and a plain-text body.
@@ -119,6 +128,7 @@ public slots:
 signals:
     void sent(const QString &gmailMessageId, const QString &threadId);
     void queued(); // Send Later: it is in Out's queue now
+    void stationerySaved(const QString &name);
     void sendFailed(const QString &error);
     void draftSaved(const QString &draftId);
 
@@ -175,6 +185,8 @@ private:
     Format m_currentFormat = Format::Html;
 
     QString recipients(const QLineEdit *field) const;
+    void applyStationery();
+    zmail::Stationery m_stationery;
     QPointer<zmail::MailSession> m_session;
     zmail::SignatureStore *m_sigStore = nullptr;
     zmail::SignatureStore *m_ownSigStore = nullptr;

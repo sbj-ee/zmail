@@ -32,6 +32,8 @@
 #include "ui/SelectionAfterRemoval.h"
 #include "ui/ListDialog.h"
 #include "ui/RulesDialog.h"
+#include "core/Stationery.h"
+#include "ui/StationeryDialog.h"
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
@@ -429,6 +431,24 @@ void MainWindow::buildMenus()
     QMenu *file = addMenu("menuFile", tr("&File"));
     QAction *nm = file->addAction(tr("&New Message"), this, [this]() { openCompose(); });
     nm->setShortcut(QKeySequence::New);
+    // Filled when opened, from the stationery saved at that moment.
+    const auto stationeryMenu = [this](QMenu *menu, bool reply) {
+        connect(menu, &QMenu::aboutToShow, this, [this, menu, reply]() {
+            menu->clear();
+            for (const zmail::Stationery &s : zmail::StationeryStore().all()) {
+                const QString name = s.name;
+                menu->addAction(name, this, [this, name, reply]() { reply ? replyWith(name) : newMessageWith(name); });
+            }
+            if (menu->isEmpty()) {
+                menu->addAction(tr("(no stationery yet)"))->setEnabled(false);
+            }
+            menu->addSeparator();
+            menu->addAction(tr("Edit Stationery\u2026"), this, [this]() { showStationeryDialog(); });
+        });
+    };
+    QMenu *newWith = file->addMenu(tr("New Message &With"));
+    newWith->setObjectName(QStringLiteral("menuNewMessageWith"));
+    stationeryMenu(newWith, false);
     QAction *cm = file->addAction(tr("&Check Mail"), this, &MainWindow::checkMail);
     cm->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
     QAction *sq = file->addAction(icon(QStringLiteral("send")), tr("Send &Queued Messages"), this, [this]() { sendQueued(); });
@@ -565,6 +585,9 @@ void MainWindow::buildMenus()
     QAction *mf = message->addAction(tr("&Forward"), this, [this]() { composeReply(int(Kind::Forward)); });
     mf->setObjectName(QStringLiteral("menuActionForward"));
     mf->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F));
+    QMenu *replyWithMenu = message->addMenu(tr("Reply Wit&h"));
+    replyWithMenu->setObjectName(QStringLiteral("menuReplyWith"));
+    stationeryMenu(replyWithMenu, true);
     message->addSeparator();
     QAction *markRead = message->addAction(icon(QStringLiteral("mail-open")), tr("Mark as R&ead"), this,
                                            [this]() { setCurrentRead(true); });
@@ -614,6 +637,8 @@ void MainWindow::buildMenus()
     m_rules.load();
     QAction *sigs = settings->addAction(tr("Si&gnatures\u2026"), this, &MainWindow::showSignatures);
     sigs->setObjectName(QStringLiteral("actionSignatures"));
+    QAction *stat = settings->addAction(tr("S&tationery\u2026"), this, [this]() { showStationeryDialog(); });
+    stat->setObjectName(QStringLiteral("actionStationery"));
     QAction *privacy = settings->addAction(tr("&Privacy\u2026"), this, [this]() { showPrivacyDialog()->open(); });
     privacy->setObjectName(QStringLiteral("actionPrivacy"));
     QAction *sounds = settings->addAction(tr("S&ounds\u2026"), this, [this]() { showSoundDialog()->open(); });
@@ -1570,6 +1595,45 @@ void MainWindow::setViewAsPlainText(bool on)
         const QSignalBlocker block(a);
         a->setChecked(on);
     }
+}
+
+// ---- stationery ----------------------------------------------------------------
+
+ComposeWindow *MainWindow::newMessageWith(const QString &stationeryName)
+{
+    ComposeWindow *c = openCompose();
+    const zmail::Stationery s = zmail::StationeryStore().find(stationeryName);
+    if (c && !s.name.isEmpty()) {
+        c->setStationery(s);
+    }
+    return c;
+}
+
+ComposeWindow *MainWindow::replyWith(const QString &stationeryName)
+{
+    ComposeWindow *c = composeReply(int(zmail::ReplyBuilder::Kind::Reply));
+    if (!c) {
+        statusBar()->showMessage(tr("Select a message to reply to."), 5000);
+        return nullptr;
+    }
+    const zmail::Stationery s = zmail::StationeryStore().find(stationeryName);
+    if (!s.name.isEmpty()) {
+        c->setStationery(s); // applied again once the original has been fetched and quoted
+    }
+    return c;
+}
+
+StationeryDialog *MainWindow::showStationeryDialog()
+{
+    auto *dlg = new StationeryDialog(zmail::StationeryStore().all(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &QDialog::accepted, this, [this, dlg]() {
+        if (!zmail::StationeryStore().setAll(dlg->items())) {
+            statusBar()->showMessage(tr("Couldn't save the stationery to %1.").arg(zmail::StationeryStore::defaultPath()), 8000);
+        }
+    });
+    dlg->show();
+    return dlg;
 }
 
 // ---- Mailbox and Transfer menus -----------------------------------------------

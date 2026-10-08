@@ -239,6 +239,34 @@ void ComposeWindow::buildToolbar()
             addFiles(files);
         }
     });
+    // Stationery: use one in this message, or keep this message as one.
+    auto *stationery = new QToolButton(tb);
+    stationery->setObjectName(QStringLiteral("stationeryButton"));
+    stationery->setText(tr("Stationery"));
+    stationery->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    stationery->setPopupMode(QToolButton::InstantPopup);
+    auto *stationeryMenu = new QMenu(stationery);
+    stationeryMenu->setObjectName(QStringLiteral("composeStationeryMenu"));
+    connect(stationeryMenu, &QMenu::aboutToShow, this, [this, stationeryMenu]() {
+        stationeryMenu->clear();
+        for (const Stationery &s : StationeryStore().all()) {
+            stationeryMenu->addAction(s.name, this, [this, s]() { setStationery(s); });
+        }
+        if (!stationeryMenu->isEmpty()) {
+            stationeryMenu->addSeparator();
+        }
+        QAction *save = stationeryMenu->addAction(tr("Save This Message as Stationery\u2026"), this, [this]() {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, tr("Save as Stationery"), tr("Name:"), QLineEdit::Normal,
+                                                       m_subject->text().trimmed(), &ok);
+            if (ok && !name.trimmed().isEmpty()) {
+                saveAsStationery(name);
+            }
+        });
+        save->setObjectName(QStringLiteral("actionSaveAsStationery"));
+    });
+    stationery->setMenu(stationeryMenu);
+    tb->addWidget(stationery);
     m_spellAction = tb->addAction(icon(QStringLiteral("spell-check")), tr("Spelling"));
     m_spellAction->setObjectName(QStringLiteral("actionSpelling"));
     m_spellAction->setCheckable(true);
@@ -1146,10 +1174,80 @@ void ComposeWindow::setDraft(const ComposeDraft &d)
     m_body->clear();
     applySignature();
     insertQuote();
+    applyStationery(); // chosen before the draft arrived (Reply With)
     m_body->setFocus();
-    if (d.to.isEmpty()) {
+    if (m_to->text().isEmpty()) {
         m_to->setFocus();
     }
+}
+
+bool ComposeWindow::saveAsStationery(const QString &name)
+{
+    const Stationery s = asStationery(name);
+    if (s.name.isEmpty() || !StationeryStore().save(s)) {
+        fail(tr("Couldn't save the stationery."));
+        return false;
+    }
+    statusBar()->showMessage(tr("Saved as stationery \u201c%1\u201d.").arg(s.name), 5000);
+    emit stationerySaved(s.name);
+    return true;
+}
+
+void ComposeWindow::setStationery(const Stationery &s)
+{
+    m_stationery = s;
+    applyStationery();
+}
+
+void ComposeWindow::applyStationery()
+{
+    if (m_stationery.name.isEmpty()) {
+        return;
+    }
+    // A reply already knows who it is to and what it is about.
+    if (m_to->text().trimmed().isEmpty()) {
+        m_to->setText(m_stationery.to);
+    }
+    if (m_cc->text().trimmed().isEmpty()) {
+        m_cc->setText(m_stationery.cc);
+    }
+    if (m_subject->text().trimmed().isEmpty()) {
+        m_subject->setText(m_stationery.subject);
+    }
+    if (!m_stationery.body.isEmpty()) {
+        QTextCursor c(m_body->document());
+        c.movePosition(QTextCursor::Start);
+        // Its own untagged block(s), above the signature and the quote. The
+        // block that was first keeps its format (it may be the signature's).
+        c.insertBlock(c.blockFormat(), c.blockCharFormat());
+        c.movePosition(QTextCursor::Start);
+        c.setBlockFormat(QTextBlockFormat());
+        c.setBlockCharFormat(QTextCharFormat());
+        c.insertText(m_stationery.body, QTextCharFormat()); // plain text, never parsed as HTML
+        m_body->setTextCursor(c);
+    }
+    m_body->document()->setModified(true);
+}
+
+Stationery ComposeWindow::asStationery(const QString &name) const
+{
+    Stationery s;
+    s.name = name.trimmed();
+    s.to = m_to->text().trimmed();
+    s.cc = m_cc->text().trimmed();
+    s.subject = m_subject->text();
+    QStringList lines;
+    for (QTextBlock b = m_body->document()->begin(); b.isValid(); b = b.next()) {
+        if (b.blockFormat().hasProperty(kSigProp) || b.blockFormat().hasProperty(kQuoteProp)) {
+            continue;
+        }
+        lines << b.text();
+    }
+    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) {
+        lines.removeLast();
+    }
+    s.body = lines.join(QLatin1Char('\n'));
+    return s;
 }
 
 void ComposeWindow::setMailto(const MailtoFields &f)

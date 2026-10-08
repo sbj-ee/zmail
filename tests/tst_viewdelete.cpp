@@ -6,6 +6,8 @@
 // All mail here is fake (MockGoogle, example.com addresses).
 #include "MainWindow.hpp"
 #include "core/ContactStore.h"
+#include "ui/StationeryDialog.h"
+#include "core/Stationery.h"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/SyncEngine.h"
@@ -25,6 +27,7 @@
 #include <QTemporaryDir>
 #include <QTextDocument>
 #include <QTextFrame>
+#include <QFile>
 #include <QFileInfo>
 #include <QTextCursor>
 #include <QTextEdit>
@@ -611,6 +614,53 @@ private slots:
         ComposeWindow c;
         QVERIFY(c.findChild<QAction *>(QStringLiteral("actionSend"))->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_E)));
         QCOMPARE(c.findChild<QAction *>(QStringLiteral("actionComposeAttach"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_H));
+    }
+
+    // File > New Message With and Message > Reply With start from stationery.
+    void newMessageWithAndReplyWithStationery()
+    {
+        QFile::remove(StationeryStore::defaultPath());
+        QVERIFY(StationeryStore().save({QStringLiteral("Thanks"), {}, {}, QStringLiteral("Thank you"), QStringLiteral("Thanks very much!")}));
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        // The menus list what is saved now.
+        for (const char *name : {"menuNewMessageWith", "menuReplyWith"}) {
+            auto *menu = f.w->findChild<QMenu *>(QString::fromLatin1(name));
+            QVERIFY2(menu, name);
+            emit menu->aboutToShow();
+            QCOMPARE(menu->actions().first()->text(), QStringLiteral("Thanks"));
+        }
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionStationery")));
+
+        ComposeWindow *fresh = f.w->newMessageWith(QStringLiteral("Thanks"));
+        QVERIFY(fresh);
+        QCOMPARE(fresh->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->text(), QStringLiteral("Thank you"));
+        QVERIFY(fresh->findChild<QTextEdit *>(QStringLiteral("composeBody"))->toPlainText().startsWith(QStringLiteral("Thanks very much!")));
+        delete fresh;
+
+        // A reply: to the sender, about their subject, the stationery above
+        // their quoted message, and only once.
+        ComposeWindow *reply = f.w->replyWith(QStringLiteral("Thanks"));
+        QVERIFY(reply);
+        auto *body = reply->findChild<QTextEdit *>(QStringLiteral("composeBody"));
+        QTRY_VERIFY_WITH_TIMEOUT(body->toPlainText().contains(QStringLiteral("Fake test mail.")), 10000); // the quote arrived
+        QCOMPARE(reply->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->text(), QStringLiteral("Priya Raman <priya.raman@example.com>"));
+        QCOMPARE(reply->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->text(), QStringLiteral("Re: Bravo zebra"));
+        const QString text = body->toPlainText();
+        QVERIFY(text.startsWith(QStringLiteral("Thanks very much!")));
+        QCOMPARE(text.count(QStringLiteral("Thanks very much!")), 1);
+        QVERIFY(text.indexOf(QStringLiteral("Thanks very much!")) < text.indexOf(QStringLiteral("Fake test mail.")));
+        // Saved from here, it keeps what was written, not what was quoted.
+        QCOMPARE(reply->asStationery(QStringLiteral("x")).body, QStringLiteral("Thanks very much!"));
+        delete reply;
+
+        // Edited in Settings > Stationery.
+        StationeryDialog *dlg = f.w->showStationeryDialog();
+        QCOMPARE(dlg->items().size(), 1);
+        dlg->add({QStringLiteral("Away"), {}, {}, {}, QStringLiteral("Back Monday.")});
+        dlg->accept();
+        QCOMPARE(StationeryStore().all().size(), 2);
+        QFile::remove(StationeryStore::defaultPath());
     }
 
     // Drag a message from the list onto a folder in the sidebar.

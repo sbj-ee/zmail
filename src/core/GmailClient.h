@@ -83,7 +83,9 @@ public:
     void createLabel(const QString &name, const QString &backgroundColor, JsonCb cb);
     void updateLabel(const QString &id, const QString &name, const QString &backgroundColor, JsonCb cb);
     void deleteLabel(const QString &id, JsonCb cb);
-    void listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb);
+    // Background by default (paging, sync); Interactive when the user is waiting on it.
+    void listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb,
+                      Priority priority = Priority::Background);
     // users.messages.batchModify: up to 1000 ids, up to 100 labels each way.
     void batchModifyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove, JsonCb cb);
     void getMessageMetadata(const QString &id, JsonCb cb);

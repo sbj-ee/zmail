@@ -1404,6 +1404,15 @@ void MainWindow::loadMoreIfListIsShort()
         if (label.isEmpty() || m_list->verticalScrollBar()->maximum() > 0 || !m_session->sync()->hasMore(label)) {
             return;
         }
+        // If the last page asked for on this mailbox's behalf added nothing
+        // to the list, another won't either (an emptied Trash, a folder of
+        // hidden spam): stop there instead of paging through all of it.
+        const int rows = m_proxy->rowCount();
+        if (m_autoLoadMailbox == m_proxy->mailbox() && rows <= m_autoLoadRows) {
+            return;
+        }
+        m_autoLoadMailbox = m_proxy->mailbox();
+        m_autoLoadRows = rows;
         m_session->sync()->fetchMore(label);
     });
 }

@@ -275,6 +275,10 @@ void MainWindow::updateCounts()
 void MainWindow::selectMailbox(const QString &key)
 {
     const QString prev = m_proxy->mailbox();
+    if (prev != key) {
+        m_autoLoadMailbox.clear(); // a fresh look at this mailbox may load more
+        m_autoLoadRows = -1;
+    }
     m_proxy->setMailbox(key);
     // Hide Spam omits Junk from the tree unless it is the current mailbox.
     if (hideSpam() && (prev == QLatin1String("Junk")) != (key == QLatin1String("Junk"))) {
@@ -343,9 +347,7 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
                                              [this, id, shownName]() { emptyLabelFolder(id, shownName); });
             empty->setObjectName(QStringLiteral("actionEmptyFolder"));
             QAction *del = menu->addAction(icon(QStringLiteral("trash")), tr("&Delete Folder…"), menu,
-                                           [this, id, fullName, item]() {
-                                               deleteLabelFolder(id, fullName.isEmpty() ? item->text(0) : fullName);
-                                           });
+                                           [this, id, shownName]() { deleteLabelFolder(id, shownName); }); // not `item`: the tree may be rebuilt before the click
             del->setObjectName(QStringLiteral("actionDeleteFolder"));
         } else if (labelsRoot || folderPrefix) {
             // New Folder is enough on the group headers.
@@ -379,7 +381,21 @@ void MainWindow::showMailboxMenu(const QPoint &pos)
 {
     QTreeWidgetItem *item = m_mailboxes->itemAt(pos);
     if (item && (item->flags() & Qt::ItemIsSelectable) && item != m_mailboxes->currentItem()) {
+        // Selecting it can rebuild the whole tree (leaving Junk or Search
+        // results does), which deletes `item`: find the row again afterwards
+        // by what it is. Using the old pointer built a menu for a row that
+        // was gone, so right-clicking Trash from Junk showed no Empty Trash,
+        // or crashed (0.6.3).
+        const QString key = item->data(0, Qt::UserRole).toString();
+        const QString meta = item->data(0, Qt::UserRole + 1).toString();
         m_mailboxes->setCurrentItem(item);
+        item = nullptr;
+        for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+            if ((*it)->data(0, Qt::UserRole).toString() == key && (*it)->data(0, Qt::UserRole + 1).toString() == meta) {
+                item = *it;
+                break;
+            }
+        }
     }
     QMenu *menu = buildMailboxMenu(item);
     menu->setAttribute(Qt::WA_DeleteOnClose);

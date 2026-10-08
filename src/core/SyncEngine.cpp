@@ -326,9 +326,15 @@ void SyncEngine::listPage(const QString &labelId, const QString &pageToken, int 
             done(false);
             return;
         }
+        // What Empty Trash removed is never shown: don't download it. (With
+        // thousands in Gmail's Trash, paging through them all took minutes.)
+        const QSet<QString> purged = labelId == QLatin1String("TRASH") ? m_cache->purged() : QSet<QString>();
         QStringList ids;
         for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
-            ids.append(v.toObject().value(QStringLiteral("id")).toString());
+            const QString id = v.toObject().value(QStringLiteral("id")).toString();
+            if (!purged.contains(id)) {
+                ids.append(id);
+            }
         }
         const QString next = json.value(QStringLiteral("nextPageToken")).toString();
         m_cache->setMeta(QStringLiteral("pageToken:") + labelId, next.isEmpty() ? QStringLiteral("-") : next);
@@ -982,7 +988,7 @@ void SyncEngine::listTrash(std::function<void(bool, const QStringList &)> done, 
         } else {
             listTrash(done, next, sofar);
         }
-    });
+    }, GmailClient::Priority::Interactive); // Empty Trash: someone is waiting, don't queue behind background paging
 }
 
 void SyncEngine::emptyTrash()

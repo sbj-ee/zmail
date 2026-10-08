@@ -275,6 +275,8 @@ private:
     int m_listRowSpacing = 6;
     void applyListAppearance();
     void loadMoreIfListIsShort();
+    QString m_autoLoadMailbox; // the mailbox the last automatic "load more" was for...
+    int m_autoLoadRows = -1;   // ...and how many rows it showed then
     QStringList m_savedAttachments;
     QMenu *m_mailboxMenu = nullptr;
     QMenu *m_transferMenu = nullptr;

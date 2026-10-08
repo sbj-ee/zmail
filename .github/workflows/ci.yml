@@ -25,9 +25,13 @@ jobs:
         run: ./tools/check-action-pins.sh
 
       - name: Install Qt 6 + build tools
+        # This step has hung for 20+ minutes on the hosted runner (a stalled
+        # mirror, or the man-db trigger): fail fast and retry downloads.
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq \
             qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
             libmd4c-dev libmd4c-html0-dev libzip-dev libhunspell-dev hunspell-en-us fonts-noto-color-emoji \
             libgl1-mesa-dev cmake ninja-build g++ dpkg-dev
@@ -86,9 +90,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Qt 6 + build tools
+        # This step has hung for 20+ minutes on the hosted runner (a stalled
+        # mirror, or the man-db trigger): fail fast and retry downloads.
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq \
             qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
             libmd4c-dev libmd4c-html0-dev libzip-dev libhunspell-dev hunspell-en-us fonts-noto-color-emoji \
             libgl1-mesa-dev cmake ninja-build g++

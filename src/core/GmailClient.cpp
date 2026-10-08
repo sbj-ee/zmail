@@ -110,7 +110,8 @@ void GmailClient::deleteLabel(const QString &id, JsonCb cb)
     call("DELETE", QStringLiteral("/labels/") + enc, {}, {}, 5, std::move(cb));
 }
 
-void GmailClient::listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb)
+void GmailClient::listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb,
+                               Priority priority)
 {
     QUrlQuery q;
     q.addQueryItem(QStringLiteral("labelIds"), labelId);
@@ -118,7 +119,7 @@ void GmailClient::listMessages(const QString &labelId, int maxResults, const QSt
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);
     }
-    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb), Priority::Background);
+    call("GET", QStringLiteral("/messages"), q, {}, 5, std::move(cb), priority);
 }
 
 void GmailClient::batchModifyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove, JsonCb cb)

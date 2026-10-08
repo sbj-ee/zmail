@@ -553,6 +553,66 @@ private slots:
         QCOMPARE(f.g.count(sendPath), 3);
     }
 
+    // Eudora's Mailbox and Transfer menus: the sidebar's mailboxes, to go
+    // to or to move the selected messages into, and its shortcut keys.
+    void mailboxAndTransferMenus()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        auto *mailbox = f.w->findChild<QMenu *>(QStringLiteral("menuMailbox"));
+        auto *transfer = f.w->findChild<QMenu *>(QStringLiteral("menuTransfer"));
+        QVERIFY(mailbox && transfer);
+        const auto named = [&](const char *name) { return f.w->findChild<QAction *>(QString::fromLatin1(name)); };
+        QTRY_VERIFY_WITH_TIMEOUT(named("transfer_Label_7"), 10000); // once the account's folders are in
+        QVERIFY(named("mailbox_In") && named("mailbox_Out") && named("mailbox_Trash"));
+        QVERIFY(named("mailbox_gmail:Label_7"));
+        QCOMPARE(named("mailbox_In")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_1));
+        QCOMPARE(named("mailbox_gmail:Label_7")->text(), QStringLiteral("Projects"));
+        // Transfer offers only places mail can go: In, folders, Trash.
+        QVERIFY(named("transfer_INBOX") && named("transfer_TRASH"));
+        QVERIFY(!f.w->findChild<QAction *>(QStringLiteral("transfer_")));
+        for (QAction *a : transfer->findChildren<QAction *>()) {
+            QVERIFY2(!a->objectName().contains(QStringLiteral("Out")) && !a->objectName().contains(QStringLiteral("STARRED")),
+                     qPrintable(a->objectName()));
+        }
+
+        // Transfer the current message (Bravo) to the folder: it leaves the
+        // Inbox list and the selection moves on.
+        named("transfer_Label_7")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(kLabel), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000);
+        QVERIFY(f.list->currentIndex().isValid());
+        QVERIFY(f.currentId() != f.b);
+
+        // Mailbox goes there; Transfer > In brings it back.
+        named("mailbox_gmail:Label_7")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        QCOMPARE(f.visibleIds(), QStringList{f.b});
+        f.list->setCurrentIndex(f.proxy->index(0, 0));
+        named("transfer_INBOX")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(kLabel));
+        named("mailbox_In")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 10000);
+
+        // Transfer > Trash is Delete. The same menu is in the right-click menu.
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(f.a), 0)));
+        QTRY_COMPARE(f.w->shownMessageId(), f.a);
+        named("transfer_TRASH")->trigger();
+        QTRY_COMPARE(f.g.trashCalls, QStringList{f.a});
+
+        // Eudora's keys.
+        QVERIFY(named("menuActionDelete")->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_D)));
+        QCOMPARE(named("actionSendQueued")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_T));
+        QCOMPARE(named("actionFilterMessages")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_J));
+        QCOMPARE(named("actionContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_L));
+        QCOMPARE(named("actionAddSenderToContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_K));
+        ComposeWindow c;
+        QVERIFY(c.findChild<QAction *>(QStringLiteral("actionSend"))->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_E)));
+        QCOMPARE(c.findChild<QAction *>(QStringLiteral("actionComposeAttach"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_H));
+    }
+
     // Drag a message from the list onto a folder in the sidebar.
     void dragOntoAFolderMovesTheMessage()
     {
@@ -623,6 +683,100 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(kLabel), 10000);
         QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000); // it left the Inbox list
+    }
+
+    // After Empty Trash the list is empty though Gmail's Trash is not.
+    // "The list is short, load more" must not then page through all of it,
+    // fetching thousands of messages nobody will see: that kept zmail busy
+    // for minutes and left a second Empty Trash waiting behind it (0.6.3).
+    void emptiedTrashIsNotPagedThroughAgain()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("Trash"), {QStringLiteral("TRASH")}));
+        // Thirty more in Gmail's Trash that zmail has not listed yet.
+        for (int i = 0; i < 30; ++i) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Old <old@example.com>");
+            m.subject = QStringLiteral("Old trash %1").arg(i);
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {QStringLiteral("TRASH")};
+            m.date = QDateTime::currentDateTimeUtc().addDays(-10 - i);
+            f.g.addMessage(m, false);
+        }
+        f.session->sync()->setPageSize(10);
+        f.session->cache()->setMeta(QStringLiteral("pageToken:TRASH"), QStringLiteral("3"));
+        const QString getMessage = QStringLiteral("GET /gmail/v1/users/me/messages/");
+        const QString list = QStringLiteral("GET /gmail/v1/users/me/messages");
+
+        QSignalSpy emptied(f.session->sync(), &SyncEngine::trashEmptied);
+        f.w->emptyTrash(false);
+        QTRY_COMPARE_WITH_TIMEOUT(emptied.size(), 1, 10000);
+        QCOMPARE(emptied.first().first().toInt(), 33);
+        QTRY_COMPARE(f.proxy->rowCount(), 0);
+        const int fetched = f.g.count(getMessage);
+        const int listed = f.g.count(list) - fetched; // the prefix counts both
+        QTest::qWait(1500);
+        QCOMPARE(f.g.count(getMessage), fetched);                   // no emptied message is downloaded
+        QVERIFY2(f.g.count(list) - f.g.count(getMessage) - listed <= 1, // at most one more look at the listing
+                 qPrintable(QString::number(f.g.count(list) - f.g.count(getMessage) - listed)));
+
+        // And emptying again, with more deleted since, still works at once.
+        const QString later = f.seed(QStringLiteral("Later zebra"), {QStringLiteral("TRASH")}, 0);
+        f.session->sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        f.w->emptyTrash(false);
+        QTRY_COMPARE_WITH_TIMEOUT(emptied.size(), 2, 10000);
+        QCOMPARE(emptied.last().first().toInt(), 34);
+        QTRY_COMPARE(f.proxy->rowCount(), 0);
+    }
+
+    // Right-click Trash offers Empty Trash, wherever you were when you did.
+    void rightClickTrashOffersEmptyTrash_data()
+    {
+        QTest::addColumn<QString>("from");
+        QTest::addColumn<QStringList>("labels");
+        QTest::newRow("from In") << "In" << QStringList{"INBOX"};
+        QTest::newRow("from Trash itself") << "Trash" << QStringList{"TRASH"};
+        QTest::newRow("from a folder") << "gmail:Label_7" << QStringList{kLabel};
+        QTest::newRow("from Junk") << "Junk" << QStringList{"SPAM"};
+        QTest::newRow("from Search results") << "Search" << QStringList{"INBOX", kLabel};
+        QTest::newRow("from Out") << "Out" << QStringList{"SENT"};
+    }
+    void rightClickTrashOffersEmptyTrash()
+    {
+        QFETCH(QString, from);
+        QFETCH(QStringList, labels);
+        Fixture f;
+        QVERIFY(f.open(from, labels));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        QTreeWidgetItem *trash = nullptr;
+        const auto findTrash = [&]() {
+            trash = nullptr;
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == QLatin1String("Trash")) {
+                    trash = *it;
+                }
+            }
+            return trash != nullptr;
+        };
+        QTRY_VERIFY(findTrash());
+        emit tree->customContextMenuRequested(tree->visualItemRect(trash).center());
+        QMenu *menu = nullptr;
+        (void)QTest::qWaitFor([&] {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if (auto *m = qobject_cast<QMenu *>(w); m && m->isVisible() && m->objectName() == QLatin1String("mailboxMenu")) {
+                    menu = m;
+                }
+            }
+            return menu != nullptr;
+        }, 3000);
+        QVERIFY(menu);
+        QStringList names;
+        for (QAction *a : menu->actions()) {
+            names << a->objectName();
+        }
+        menu->close();
+        QVERIFY2(names.contains(QStringLiteral("actionEmptyTrash")), qPrintable(names.join(QLatin1Char(' '))));
     }
 
     // Coloured flags: the colour is zmail's, "flagged" is Gmail's star.

@@ -114,9 +114,11 @@ public:
 public slots:
     void send();
     void saveDraft();
+    void queue(); // Send Later
 
 signals:
     void sent(const QString &gmailMessageId, const QString &threadId);
+    void queued(); // Send Later: it is in Out's queue now
     void sendFailed(const QString &error);
     void draftSaved(const QString &draftId);
 

@@ -27,6 +27,7 @@
 #include <QTextFrame>
 #include <QFileInfo>
 #include <QTextCursor>
+#include <QTextEdit>
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QLineEdit>
@@ -467,6 +468,89 @@ private slots:
         const QString line = QGuiApplication::clipboard()->text();
         QVERIFY2(line.contains(QStringLiteral("Files for you")) && line.contains(QStringLiteral("Priya Raman")), qPrintable(line));
         QSettings().remove(QStringLiteral("viewer/plainText"));
+    }
+
+    // The queue, as in Eudora: Send Later puts a message in Out, Send
+    // Queued Messages delivers what is waiting, and nothing goes sooner.
+    void sendLaterQueuesAndSendQueuedDelivers()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const QString sendPath = QStringLiteral("POST /gmail/v1/users/me/messages/send");
+        const auto write = [&](const QString &to, const QString &subject) {
+            ComposeWindow *c = f.w->openCompose();
+            c->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(to);
+            c->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(subject);
+            c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("Body of ") + subject);
+            return c;
+        };
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionSendQueued")));
+        QCOMPARE(f.w->queuedCount(), 0);
+
+        // An address that isn't one is refused, exactly as Send refuses it.
+        QPointer<ComposeWindow> bad = write(QStringLiteral("not an address"), QStringLiteral("Nope"));
+        bad->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QVERIFY(bad && bad->isVisible());
+        QCOMPARE(f.w->queuedCount(), 0);
+        delete bad.data();
+
+        QPointer<ComposeWindow> first = write(QStringLiteral("Dana Whitfield <dana@example.org>"), QStringLiteral("First queued"));
+        first->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!first); // closed without asking about a draft
+        QPointer<ComposeWindow> second = write(QStringLiteral("eli@example.com"), QStringLiteral("Second queued"));
+        second->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!second);
+        QCOMPARE(f.w->queuedCount(), 2);
+        QCOMPARE(f.g.count(sendPath), 0); // nothing has gone anywhere
+
+        // They wait in Out, marked Q, and can be read there.
+        f.selectView(QStringLiteral("Out"));
+        QTRY_COMPARE(f.proxy->rowCount(), 2);
+        f.list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        QCOMPARE(f.proxy->index(0, MessageListModel::Status).data().toString(), QStringLiteral("Q"));
+        QCOMPARE(f.proxy->index(0, MessageListModel::Who).data().toString(), QStringLiteral("Dana Whitfield"));
+        f.list->setCurrentIndex(f.proxy->index(0, 0));
+        auto *view = f.w->findChild<MessageView *>(QStringLiteral("messageView"));
+        QTRY_VERIFY(view->body()->toPlainText().contains(QStringLiteral("Body of First queued")));
+        QVERIFY(view->headerText().contains(QStringLiteral("dana@example.org")));
+        // The queue is kept in the cache's own table: a full resync leaves it.
+        f.session->cache()->clearMessages();
+        QCOMPARE(f.w->queuedCount(), 2);
+
+        // Gmail refuses the first: it stays, with the reason; the second goes.
+        f.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/send"), 400, 1, -1});
+        f.w->sendQueued();
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->queuedCount(), 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.count(sendPath), 2, 10000);
+        const QList<MailCache::QueuedMessage> left = f.session->cache()->queued();
+        QCOMPARE(left.first().subject, QStringLiteral("First queued"));
+        QVERIFY(!left.first().error.isEmpty());
+        bool delivered = false;
+        for (const MockGoogle::Message &m : f.g.messages()) {
+            delivered = delivered || m.subject == QLatin1String("Second queued");
+        }
+        QVERIFY(delivered);
+
+        // Again: this time it goes, and the queue is empty.
+        f.w->findChild<QAction *>(QStringLiteral("actionSendQueued"))->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->queuedCount(), 0, 10000);
+        QCOMPARE(f.g.count(sendPath), 3);
+
+        // Delete on a queued message takes it out of the queue, unsent.
+        QPointer<ComposeWindow> third = write(QStringLiteral("eli@example.com"), QStringLiteral("Third queued"));
+        third->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!third);
+        int row = -1;
+        QTRY_VERIFY_WITH_TIMEOUT((row = f.model->rowForId(QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id))) >= 0, 5000);
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(row, 0)));
+        const int trashCalls = f.g.trashCalls.size();
+        QTRY_COMPARE(f.w->shownMessageId(), QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id));
+        f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger(); // the compose windows took the focus
+        QCOMPARE(f.w->queuedCount(), 0);
+        QCOMPARE(f.g.trashCalls.size(), trashCalls); // it was never mail
+        f.w->sendQueued();
+        QTest::qWait(200);
+        QCOMPARE(f.g.count(sendPath), 3);
     }
 
     // Drag a message from the list onto a folder in the sidebar.

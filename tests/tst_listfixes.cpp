@@ -251,9 +251,10 @@ private slots:
             QVERIFY2(a && a->isVisible() && a->isEnabled() && !a->property("placeholder").toBool(), name);
         }
         ComposeWindow c;
+        // Send Later is real too (0.6.3): it queues the message in Out.
         QAction *later = c.findChild<QAction *>(QStringLiteral("actionSendLater"));
         QVERIFY(later);
-        QVERIFY(!later->isVisible());
+        QVERIFY(later->isVisible() && later->isEnabled());
     }
 };
 

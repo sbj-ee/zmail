@@ -114,6 +114,10 @@ public:
     // dialog was cancelled.
     bool printMessage(QPrinter *printer = nullptr);
     void copySelection(); // Edit > Copy
+    // File > Send Queued Messages: everything waiting in Out, oldest first.
+    // One that Gmail refuses stays queued, with the reason.
+    void sendQueued();
+    int queuedCount() const;
     void setViewAsPlainText(bool on); // View > View as Plain Text, remembered
     // Filters (Settings > Filters): the rules in force, the editor, and
     // Message > Filter Messages for the selection. A rule passed to the
@@ -267,6 +271,8 @@ private:
     void applyListAppearance();
     void loadMoreIfListIsShort();
     QStringList m_savedAttachments;
+    bool m_sendingQueue = false;
+    void sendNextQueued(int sent, int failed, QList<qint64> left);
     zmail::Rules m_rules;
     bool applyRule(const zmail::Rule &rule, const QString &messageId); // its flag / move / mark read
     QString m_lastSync;     // "8:45 AM"

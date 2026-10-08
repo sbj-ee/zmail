@@ -156,6 +156,25 @@ public:
     void setPurged(const QStringList &ids); // replaces the set
     QSet<QString> purged() const;
 
+    // The queue, as in Eudora: messages written and set aside in Out with
+    // "Send Later", delivered by File > Send Queued Messages. Each is kept
+    // as the finished MIME message, with what the list and preview show.
+    struct QueuedMessage {
+        qint64 id = 0;
+        QByteArray mime;   // read only when asked for
+        QString threadId;  // a reply's Gmail thread
+        QString draftId;   // the Gmail draft it was written from, deleted once sent
+        QString to, cc, subject, text;
+        qint64 createdMs = 0;
+        qint64 size = 0;
+        QString error;     // why the last attempt to send it failed
+    };
+    qint64 addQueued(const QueuedMessage &m);
+    QList<QueuedMessage> queued(bool withMime = false) const; // oldest first
+    QueuedMessage queuedMessage(qint64 id) const;             // with its MIME; id 0 if gone
+    void removeQueued(qint64 id);
+    void setQueuedError(qint64 id, const QString &error);
+
 private:
     bool exec(const QString &sql);
     bool migrate();

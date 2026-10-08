@@ -96,6 +96,11 @@ void MainWindow::setSession(zmail::MailSession *session)
         attachSync();
         reloadFromCache();
         populateMailboxes(); // the account's folders, not the sample ones, without waiting for a label refresh
+        if (const int n = queuedCount(); n > 0) {
+            statusBar()->showMessage(n == 1 ? tr("1 message is queued in Out. File \u203a Send Queued Messages sends it.")
+                                            : tr("%1 messages are queued in Out. File \u203a Send Queued Messages sends them.").arg(n),
+                                     10000);
+        }
         selectMailbox(QStringLiteral("In"));
         sessionStateChanged();
     });
@@ -262,6 +267,22 @@ void MainWindow::reloadFromCache()
         m.attachments = c.attachments;
         items.append(std::move(m));
     }
+    // The queue: written, set aside with Send Later, waiting in Out.
+    for (const zmail::MailCache::QueuedMessage &q : cache->queued()) {
+        MailItem m;
+        m.id = QStringLiteral("queued:%1").arg(q.id);
+        m.status = MailStatus::Queued;
+        const auto first = zmail::MessageParser::splitAddress(q.to.section(QLatin1Char(','), 0, 0));
+        m.who = first.first.isEmpty() ? first.second : first.first;
+        m.address = first.second;
+        m.to = q.to;
+        m.date = QDateTime::fromMSecsSinceEpoch(q.createdMs).toLocalTime();
+        m.sizeBytes = q.size;
+        m.subject = q.subject.isEmpty() ? tr("(no subject)") : q.subject;
+        m.mailboxes = {QStringLiteral("Out")};
+        m.preview = q.text;
+        items.append(std::move(m));
+    }
     const QString reselect = std::exchange(m_reselectAfterReload, QString());
     const QString keep = m_shownId;
     const int fallbackRow = std::exchange(m_selectRowAfterReload, -1);
@@ -299,6 +320,25 @@ void MainWindow::showLiveMessage(int row)
     zmail::SyncEngine *sync = m_session->sync();
     zmail::MailCache *cache = m_session->cache();
     if (!sync || !cache) {
+        return;
+    }
+    if (id.startsWith(QLatin1String("queued:"))) {
+        // Not in Gmail yet: shown from the queue.
+        const zmail::MailCache::QueuedMessage q = cache->queuedMessage(id.mid(7).toLongLong());
+        ViewMessage v;
+        v.id = id;
+        v.from = m_session->fromHeader();
+        v.to = q.to;
+        v.cc = q.cc;
+        v.subject = q.subject;
+        v.date = QDateTime::fromMSecsSinceEpoch(q.createdMs);
+        v.bodyText = q.text;
+        if (!q.error.isEmpty()) {
+            v.warning = tr("<b>This message is still queued.</b> The last attempt to send it failed: %1").arg(q.error.toHtmlEscaped());
+        } else {
+            v.warning = tr("<b>Queued.</b> File \u203a Send Queued Messages sends it; Delete takes it out of the queue.");
+        }
+        m_view->setMessage(v);
         return;
     }
     if (cache->snooze(id).badge) {

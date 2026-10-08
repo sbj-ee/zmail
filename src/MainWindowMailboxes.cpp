@@ -207,6 +207,7 @@ void MainWindow::populateMailboxes()
             folders.insert(l.name, it);
         }
         m_mailboxes->expandAll();
+        rebuildMailboxMenus();
         return;
     }
     add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), -1, countFor(QStringLiteral("In"), true));
@@ -236,6 +237,7 @@ void MainWindow::populateMailboxes()
         add(labels, l.name, swatch(l.color, 14), QStringLiteral("label:") + l.name);
     }
     m_mailboxes->expandAll();
+    rebuildMailboxMenus();
 }
 
 void MainWindow::updateCounts()
@@ -259,12 +261,15 @@ void MainWindow::updateCounts()
     } else if (box.startsWith(QLatin1String("gmail:")) && m_mailboxes->currentItem()) {
         box = m_mailboxes->currentItem()->text(0);
     }
-    m_countLabel->setText(tr("%1: %2 messages, %3 unread, %4  \u00b7  %5 queued ")
-                              .arg(box)
-                              .arg(total)
-                              .arg(unread)
-                              .arg(zmail::formatSize(bytes))
-                              .arg(queued));
+    // "queued" only when something is.
+    QString text = tr("%1: %2, %3 unread, %4")
+                       .arg(box, total == 1 ? tr("1 message") : tr("%1 messages").arg(total))
+                       .arg(unread)
+                       .arg(zmail::formatSize(bytes));
+    if (queued > 0) {
+        text += QStringLiteral("  \u00b7  ") + tr("%1 queued").arg(queued);
+    }
+    m_countLabel->setText(text + QLatin1Char(' '));
 }
 
 void MainWindow::selectMailbox(const QString &key)

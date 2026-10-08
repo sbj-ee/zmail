@@ -40,7 +40,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.3"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.4"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -56,7 +56,7 @@ private slots:
         for (QAction *a : w.menuBar()->actions()) {
             titles << a->text().remove(QLatin1Char('&'));
         }
-        QCOMPARE(titles, (QStringList{"File", "Edit", "View", "Message", "Settings", "Help"}));
+        QCOMPARE(titles, (QStringList{"File", "Edit", "View", "Mailbox", "Message", "Transfer", "Settings", "Help"}));
     }
 
     void messageListTextSizeAndSpacingAreRemembered()

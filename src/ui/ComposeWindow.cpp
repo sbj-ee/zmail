@@ -216,8 +216,8 @@ void ComposeWindow::buildToolbar()
 
     m_send = tb->addAction(icon(QStringLiteral("send")), tr("Send"));
     m_send->setObjectName(QStringLiteral("actionSend"));
-    m_send->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
-    m_send->setToolTip(tr("Send now (Ctrl+Enter)"));
+    m_send->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_E)}); // Ctrl+E as in Eudora
+    m_send->setToolTip(tr("Send now (Ctrl+Enter or Ctrl+E)"));
     connect(m_send, &QAction::triggered, this, &ComposeWindow::send);
     QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later\u2026"));
     later->setObjectName(QStringLiteral("actionSendLater"));
@@ -232,6 +232,7 @@ void ComposeWindow::buildToolbar()
     tb->addSeparator();
     QAction *attach = tb->addAction(icon(QStringLiteral("paperclip")), tr("Attach"));
     attach->setObjectName(QStringLiteral("actionComposeAttach"));
+    attach->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_H)); // as in Eudora
     connect(attach, &QAction::triggered, this, [this] {
         const QStringList files = QFileDialog::getOpenFileNames(this, tr("Attach files"));
         if (!files.isEmpty()) {

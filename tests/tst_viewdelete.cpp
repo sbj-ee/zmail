@@ -553,6 +553,66 @@ private slots:
         QCOMPARE(f.g.count(sendPath), 3);
     }
 
+    // Eudora's Mailbox and Transfer menus: the sidebar's mailboxes, to go
+    // to or to move the selected messages into, and its shortcut keys.
+    void mailboxAndTransferMenus()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        auto *mailbox = f.w->findChild<QMenu *>(QStringLiteral("menuMailbox"));
+        auto *transfer = f.w->findChild<QMenu *>(QStringLiteral("menuTransfer"));
+        QVERIFY(mailbox && transfer);
+        const auto named = [&](const char *name) { return f.w->findChild<QAction *>(QString::fromLatin1(name)); };
+        QTRY_VERIFY_WITH_TIMEOUT(named("transfer_Label_7"), 10000); // once the account's folders are in
+        QVERIFY(named("mailbox_In") && named("mailbox_Out") && named("mailbox_Trash"));
+        QVERIFY(named("mailbox_gmail:Label_7"));
+        QCOMPARE(named("mailbox_In")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_1));
+        QCOMPARE(named("mailbox_gmail:Label_7")->text(), QStringLiteral("Projects"));
+        // Transfer offers only places mail can go: In, folders, Trash.
+        QVERIFY(named("transfer_INBOX") && named("transfer_TRASH"));
+        QVERIFY(!f.w->findChild<QAction *>(QStringLiteral("transfer_")));
+        for (QAction *a : transfer->findChildren<QAction *>()) {
+            QVERIFY2(!a->objectName().contains(QStringLiteral("Out")) && !a->objectName().contains(QStringLiteral("STARRED")),
+                     qPrintable(a->objectName()));
+        }
+
+        // Transfer the current message (Bravo) to the folder: it leaves the
+        // Inbox list and the selection moves on.
+        named("transfer_Label_7")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(kLabel), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000);
+        QVERIFY(f.list->currentIndex().isValid());
+        QVERIFY(f.currentId() != f.b);
+
+        // Mailbox goes there; Transfer > In brings it back.
+        named("mailbox_gmail:Label_7")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        QCOMPARE(f.visibleIds(), QStringList{f.b});
+        f.list->setCurrentIndex(f.proxy->index(0, 0));
+        named("transfer_INBOX")->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(kLabel));
+        named("mailbox_In")->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 10000);
+
+        // Transfer > Trash is Delete. The same menu is in the right-click menu.
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(f.a), 0)));
+        QTRY_COMPARE(f.w->shownMessageId(), f.a);
+        named("transfer_TRASH")->trigger();
+        QTRY_COMPARE(f.g.trashCalls, QStringList{f.a});
+
+        // Eudora's keys.
+        QVERIFY(named("menuActionDelete")->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_D)));
+        QCOMPARE(named("actionSendQueued")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_T));
+        QCOMPARE(named("actionFilterMessages")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_J));
+        QCOMPARE(named("actionContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_L));
+        QCOMPARE(named("actionAddSenderToContacts")->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_K));
+        ComposeWindow c;
+        QVERIFY(c.findChild<QAction *>(QStringLiteral("actionSend"))->shortcuts().contains(QKeySequence(Qt::CTRL | Qt::Key_E)));
+        QCOMPARE(c.findChild<QAction *>(QStringLiteral("actionComposeAttach"))->shortcut(), QKeySequence(Qt::CTRL | Qt::Key_H));
+    }
+
     // Drag a message from the list onto a folder in the sidebar.
     void dragOntoAFolderMovesTheMessage()
     {

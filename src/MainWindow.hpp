@@ -114,6 +114,11 @@ public:
     // dialog was cancelled.
     bool printMessage(QPrinter *printer = nullptr);
     void copySelection(); // Edit > Copy
+    // Eudora's Mailbox and Transfer menus, built from the sidebar: go to a
+    // mailbox, or move the selected messages to one ("INBOX", a folder's
+    // Gmail label id, or "TRASH" to delete them).
+    void openMailbox(const QString &key);
+    void transferSelected(const QString &target);
     // File > Send Queued Messages: everything waiting in Out, oldest first.
     // One that Gmail refuses stays queued, with the reason.
     void sendQueued();
@@ -271,6 +276,9 @@ private:
     void applyListAppearance();
     void loadMoreIfListIsShort();
     QStringList m_savedAttachments;
+    QMenu *m_mailboxMenu = nullptr;
+    QMenu *m_transferMenu = nullptr;
+    void rebuildMailboxMenus();
     bool m_sendingQueue = false;
     void sendNextQueued(int sent, int failed, QList<qint64> left);
     zmail::Rules m_rules;

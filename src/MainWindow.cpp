@@ -547,6 +547,7 @@ void MainWindow::buildMenus()
     connect(theme, &QMenu::aboutToShow, this, &MainWindow::rebuildCustomThemeActions);
     rebuildCustomThemeActions();
 
+    m_mailboxMenu = addMenu("menuMailbox", tr("Mail&box")); // filled by rebuildMailboxMenus()
     QMenu *message = addMenu("menuMessage", tr("&Message"));
     QAction *openWin = message->addAction(tr("&Open in New Window"), this, [this]() {
         openMessageWindow(m_list->currentIndex());
@@ -581,10 +582,11 @@ void MainWindow::buildMenus()
                                       [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
     del->setProperty("lucide", QStringLiteral("trash"));
-    del->setShortcuts({QKeySequence::Delete});
+    del->setShortcuts({QKeySequence::Delete, QKeySequence(Qt::CTRL | Qt::Key_D)}); // Ctrl+D as in Eudora
     message->addSeparator();
     QAction *addContact = message->addAction(tr("Add Sender to &Contacts"), this, &MainWindow::addSenderToContacts);
     addContact->setObjectName(QStringLiteral("actionAddSenderToContacts"));
+    addContact->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K)); // Eudora's Make Nickname
     QAction *junk = message->addAction(icon(QStringLiteral("shield-alert")), tr("Mark as &Junk"), this,
                                        [this]() { junkSelected(); });
     junk->setObjectName(QStringLiteral("menuActionJunk"));
@@ -604,6 +606,7 @@ void MainWindow::buildMenus()
     unsnooze->setObjectName(QStringLiteral("menuActionUnsnooze"));
     unsnooze->setVisible(false);
 
+    m_transferMenu = addMenu("menuTransfer", tr("&Transfer"));
     QMenu *settings = addMenu("menuSettings", tr("&Settings"));
     later(settings, tr("&Account\u2026"));
     QAction *filters = settings->addAction(tr("&Filters\u2026"), this, [this]() { showRulesDialog(); });
@@ -617,6 +620,7 @@ void MainWindow::buildMenus()
     sounds->setObjectName(QStringLiteral("actionSounds"));
     QAction *contacts = settings->addAction(tr("&Contacts…"), this, &MainWindow::showContacts);
     contacts->setObjectName(QStringLiteral("actionContacts"));
+    contacts->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L)); // Eudora's address book
     QAction *syncContacts = settings->addAction(tr("Sync &Contacts from Google"), this, [this]() {
         if (m_session) {
             m_session->enableContactsSync();
@@ -1559,6 +1563,114 @@ void MainWindow::setViewAsPlainText(bool on)
     }
 }
 
+// ---- Mailbox and Transfer menus -----------------------------------------------
+
+void MainWindow::openMailbox(const QString &key)
+{
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == key) {
+            m_mailboxes->setCurrentItem(*it); // as a click on it: loads the folder too
+            m_list->setFocus();
+            return;
+        }
+    }
+    selectMailbox(key);
+}
+
+void MainWindow::transferSelected(const QString &target)
+{
+    if (target == QLatin1String("TRASH")) {
+        trashSelected();
+        return;
+    }
+    QStringList ids = selectedMessageIds();
+    if (ids.isEmpty() && !m_shownId.isEmpty()) {
+        ids << m_shownId;
+    }
+    if (ids.isEmpty()) {
+        statusBar()->showMessage(tr("Select a message to transfer."), 5000);
+        return;
+    }
+    if (!(m_live && m_session && m_session->sync())) {
+        statusBar()->showMessage(tr("Sign in to Gmail to move mail."), 5000);
+        return;
+    }
+    selectPastRemoved(ids); // the list moves on to the next message, as after Delete
+    moveMessagesToLabel(ids, target);
+}
+
+// Rebuilt whenever the sidebar is: the same mailboxes, in the same order and
+// nesting. Mailbox goes to one; Transfer moves the selection to one (In, a
+// folder, or Trash).
+void MainWindow::rebuildMailboxMenus()
+{
+    if (!m_mailboxMenu || !m_transferMenu || !m_mailboxes) {
+        return;
+    }
+    m_mailboxMenu->clear();
+    m_transferMenu->clear();
+    const auto target = [](const QString &key) -> QString {
+        if (key == QLatin1String("In")) {
+            return QStringLiteral("INBOX");
+        }
+        if (key == QLatin1String("Trash")) {
+            return QStringLiteral("TRASH");
+        }
+        if (key.startsWith(QLatin1String("gmail:Label_"))) {
+            return key.mid(6);
+        }
+        return {};
+    };
+    std::function<void(QTreeWidgetItem *, QMenu *, QMenu *)> add = [&](QTreeWidgetItem *item, QMenu *go, QMenu *move) {
+        const QString key = item->data(0, Qt::UserRole).toString();
+        const QString text = item->text(0);
+        const QString to = target(key);
+        const auto goAction = [&](QMenu *menu) {
+            QAction *a = menu->addAction(item->icon(0), text, this, [this, key]() { openMailbox(key); });
+            a->setObjectName(QStringLiteral("mailbox_") + key);
+            if (key == QLatin1String("In")) {
+                a->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_1)); // as in Eudora
+            } else if (key == QLatin1String("Out")) {
+                a->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_2)); // Eudora's Ctrl+0 resets the zoom here
+            }
+        };
+        const auto moveAction = [&](QMenu *menu) {
+            QAction *a = menu->addAction(item->icon(0), text, this, [this, to]() { transferSelected(to); });
+            a->setObjectName(QStringLiteral("transfer_") + to);
+        };
+        if (item->childCount() == 0) {
+            if (!key.isEmpty()) {
+                goAction(go);
+            }
+            if (!to.isEmpty()) {
+                moveAction(move);
+            }
+            return;
+        }
+        // A folder of folders: a submenu, with the folder itself on top if it holds mail too.
+        QMenu *goSub = go->addMenu(item->icon(0), text);
+        QMenu *moveSub = move->addMenu(item->icon(0), text);
+        if (!key.isEmpty()) {
+            goAction(goSub);
+            goSub->addSeparator();
+        }
+        if (!to.isEmpty()) {
+            moveAction(moveSub);
+            moveSub->addSeparator();
+        }
+        for (int i = 0; i < item->childCount(); ++i) {
+            add(item->child(i), goSub, moveSub);
+        }
+        if (moveSub->isEmpty()) {
+            move->removeAction(moveSub->menuAction()); // nothing in there takes mail
+            moveSub->deleteLater();
+        }
+    };
+    for (int i = 0; i < m_mailboxes->topLevelItemCount(); ++i) {
+        add(m_mailboxes->topLevelItem(i), m_mailboxMenu, m_transferMenu);
+    }
+}
+
 // ---- the queue (Send Later / Send Queued Messages) ---------------------------
 
 int MainWindow::queuedCount() const
@@ -1884,6 +1996,9 @@ QMenu *MainWindow::buildListMenu()
         menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildSnoozeMenu(menu));
     }
     menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildFlagMenu(menu));
+    if (m_transferMenu && !m_transferMenu->isEmpty()) {
+        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), m_transferMenu); // the menu bar's own
+    }
     const QModelIndex cur = m_list->currentIndex();
     if (cur.isValid()) {
         const MailItem &m = m_model->item(m_proxy->mapToSource(cur).row());

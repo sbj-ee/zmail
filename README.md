@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.2: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.3: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -59,7 +59,8 @@ flag, move, mark read and play a sound, first match wins. New in 0.6.1:
 nicknames (a contact's short name, or a category's name for everyone in
 it, typed in To, Cc or Bcc). New in 0.6.2: Save Attachments, Print, Copy
 and View as Plain Text, dates as 01/01/2026, and counts that read "1
-message" rather than "1 message(s)". See
+message" rather than "1 message(s)". New in 0.6.3: the queue (Send Later
+puts a message in Out; Send Queued Messages delivers what is waiting). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -126,7 +127,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.2_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.3_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -173,6 +174,12 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   mail arrives, or on **Message → Filter Messages** (Ctrl+J) for the
   selection. Right-click a message → **Make Filter** starts one from its
   sender. Rules are kept in `rules.json` in zmail's config folder.
+- **The queue**, as in Eudora: **Send Later** in the compose window
+  (Ctrl+Shift+Enter) puts the message in Out, marked Q, instead of sending
+  it. **File → Send Queued Messages** (Ctrl+T) sends everything waiting,
+  oldest first; one that Gmail refuses stays queued with the reason. Delete
+  takes a queued message out of the queue. The queue is kept on this
+  computer until it is sent.
 - **Flags** come in seven colours. Click a message's flag column to flag it
   (in the colour used last) or clear it; right-click, or **Message → Flag**,
   to pick a colour, for one message or several. Any flag also stars the

@@ -17,6 +17,7 @@
 #include "ui/ContactsWindow.h"
 #include "ui/Flags.h"
 #include "core/ContactStore.h"
+#include "core/Sender.h"
 #include "core/GmailClient.h"
 #include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
@@ -430,6 +431,9 @@ void MainWindow::buildMenus()
     nm->setShortcut(QKeySequence::New);
     QAction *cm = file->addAction(tr("&Check Mail"), this, &MainWindow::checkMail);
     cm->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
+    QAction *sq = file->addAction(icon(QStringLiteral("send")), tr("Send &Queued Messages"), this, [this]() { sendQueued(); });
+    sq->setObjectName(QStringLiteral("actionSendQueued"));
+    sq->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_T)); // as in Eudora
     file->addSeparator();
     m_signInAction = file->addAction(icon(QStringLiteral("log-in")), tr("Sign &In to Gmail\u2026"), this,
                                      [this]() { showConnectDialog(); });
@@ -1000,6 +1004,12 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
         connect(c, &QObject::destroyed, this, [this, c]() { m_composers.removeAll(c); });
         connect(c, &ComposeWindow::sent, this,
                 [this]() { statusBar()->showMessage(tr("Message sent"), 6000); });
+        connect(c, &ComposeWindow::queued, this, [this]() {
+            reloadFromCache();
+            populateMailboxes();
+            const QString key = findChild<QAction *>(QStringLiteral("actionSendQueued"))->shortcut().toString(QKeySequence::NativeText);
+            statusBar()->showMessage(tr("Queued in Out. File \u203a Send Queued Messages (%1) sends it.").arg(key), 8000);
+        });
     } else if (sampleReply) {
         c->loadSampleReply();
     }
@@ -1547,6 +1557,79 @@ void MainWindow::setViewAsPlainText(bool on)
         const QSignalBlocker block(a);
         a->setChecked(on);
     }
+}
+
+// ---- the queue (Send Later / Send Queued Messages) ---------------------------
+
+int MainWindow::queuedCount() const
+{
+    return m_live && m_session && m_session->cache() ? int(m_session->cache()->queued().size()) : 0;
+}
+
+void MainWindow::sendQueued()
+{
+    if (!(m_live && m_session && m_session->cache() && m_session->sender())) {
+        statusBar()->showMessage(tr("Sign in to Gmail to send queued mail."), 5000);
+        return;
+    }
+    if (m_sendingQueue) {
+        return;
+    }
+    QList<qint64> ids;
+    for (const zmail::MailCache::QueuedMessage &q : m_session->cache()->queued()) {
+        ids.append(q.id);
+    }
+    if (ids.isEmpty()) {
+        statusBar()->showMessage(tr("Nothing is queued."), 5000);
+        return;
+    }
+    m_sendingQueue = true;
+    sendNextQueued(0, 0, ids);
+}
+
+// One at a time, in the order they were queued.
+void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
+{
+    if (left.isEmpty() || !m_session || !m_session->cache() || !m_session->sender()) {
+        m_sendingQueue = false;
+        QString text = sent == 1 ? tr("Sent 1 queued message.") : tr("Sent %1 queued messages.").arg(sent);
+        if (failed > 0) {
+            text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Out.")
+                                                    : tr("%1 could not be sent and are still in Out.").arg(failed));
+        }
+        statusBar()->showMessage(text, 8000);
+        reloadFromCache();
+        populateMailboxes();
+        if (sent > 0 && m_session) {
+            m_session->syncSoon(); // they show up as sent
+        }
+        return;
+    }
+    const qint64 id = left.takeFirst();
+    const zmail::MailCache::QueuedMessage q = m_session->cache()->queuedMessage(id);
+    if (q.id == 0) { // deleted from the queue meanwhile
+        sendNextQueued(sent, failed, left);
+        return;
+    }
+    statusBar()->showMessage(tr("Sending queued mail\u2026 %1 to go").arg(left.size() + 1));
+    QPointer<MainWindow> guard(this);
+    zmail::Sender *sender = m_session->sender();
+    sender->send(q.mime, q.threadId, [guard, sender, id, q, sent, failed, left](const zmail::Sender::Result &r) {
+        if (!guard || !guard->m_session || !guard->m_session->cache()) {
+            return;
+        }
+        if (r.ok) {
+            guard->m_session->cache()->removeQueued(id);
+            if (!q.draftId.isEmpty()) {
+                sender->deleteDraft(q.draftId, [](const zmail::Sender::Result &) {});
+            }
+            guard->sendNextQueued(sent + 1, failed, left);
+        } else {
+            guard->m_session->cache()->setQueuedError(
+                id, r.err.message.isEmpty() ? tr("HTTP %1").arg(r.err.httpStatus) : r.err.message);
+            guard->sendNextQueued(sent, failed + 1, left);
+        }
+    });
 }
 
 // ---- filters ----------------------------------------------------------------

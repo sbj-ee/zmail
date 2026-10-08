@@ -8,6 +8,7 @@
 #include "core/Log.h"
 #include "core/MailSession.h"
 #include "core/ContactStore.h"
+#include "core/MailCache.h"
 #include "core/Markdown.h"
 #include "core/MessageParser.h"
 #include "core/RichText.h"
@@ -220,9 +221,9 @@ void ComposeWindow::buildToolbar()
     connect(m_send, &QAction::triggered, this, &ComposeWindow::send);
     QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later\u2026"));
     later->setObjectName(QStringLiteral("actionSendLater"));
-    later->setEnabled(false);
-    later->setVisible(false); // hidden until scheduled send is implemented
-    later->setToolTip(tr("Scheduled send arrives in a later release"));
+    later->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
+    later->setToolTip(tr("Queue it in Out, to go with File \u203a Send Queued Messages (Ctrl+Shift+Enter)"));
+    connect(later, &QAction::triggered, this, &ComposeWindow::queue);
     m_saveDraft = tb->addAction(icon(QStringLiteral("save")), tr("Save Draft"));
     m_saveDraft->setObjectName(QStringLiteral("actionSaveDraft"));
     m_saveDraft->setShortcut(QKeySequence::Save);
@@ -1367,6 +1368,60 @@ void ComposeWindow::send()
         emit self->sent(r.messageId, r.threadId);
         self->close();
     });
+}
+
+// Send Later: the finished message goes into the queue in Out (as in Eudora)
+// and leaves with File > Send Queued Messages. Checked exactly as Send
+// checks it, so nothing waits in the queue that can't be sent.
+void ComposeWindow::queue()
+{
+    if (m_busy) {
+        return;
+    }
+    m_lastError.clear();
+    QString why;
+    if (!validate(&why)) {
+        fail(why);
+        return;
+    }
+    if (sizeLevel() == limits::SizeLevel::Blocked) {
+        fail(tr("Remove attachments (or zip them) to send."));
+        return;
+    }
+    QString err;
+    toOutgoing(m_attachments, &err);
+    if (!err.isEmpty()) {
+        fail(err);
+        return;
+    }
+    const QByteArray mime = buildMime();
+    if (limits::classifySendSize(mime.size()) == limits::SizeLevel::Blocked) {
+        fail(tr("The message is %1 once encoded, over Gmail's %2 MB limit.")
+                 .arg(formatBytes(mime.size()))
+                 .arg(limits::kSendLimitBytes / 1'000'000));
+        return;
+    }
+    MailCache *cache = m_session ? m_session->cache() : nullptr;
+    if (!cache) {
+        fail(tr("Sign in to Gmail to queue mail."));
+        return;
+    }
+    const OutgoingMessage m = message();
+    MailCache::QueuedMessage q;
+    q.mime = mime;
+    q.threadId = m_threadId;
+    q.draftId = m_draftId;
+    q.to = m.to;
+    q.cc = m.cc;
+    q.subject = m.subject;
+    q.text = m.text;
+    if (cache->addQueued(q) <= 0) {
+        fail(tr("Couldn't put the message in the queue."));
+        return;
+    }
+    m_sent = true; // nothing left to save or ask about on close
+    emit queued();
+    close();
 }
 
 void ComposeWindow::saveDraft()

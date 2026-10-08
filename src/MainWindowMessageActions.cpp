@@ -125,9 +125,32 @@ void MainWindow::trashSelected()
 void MainWindow::trashMessages(const QStringList &idsIn)
 {
     QStringList ids;
+    int unqueued = 0;
     for (const QString &id : idsIn) {
+        if (id.startsWith(QLatin1String("queued:"))) {
+            // Not mail yet: Delete takes it out of the queue, and that is all.
+            if (m_live && m_session && m_session->cache()) {
+                m_session->cache()->removeQueued(id.mid(7).toLongLong());
+                ++unqueued;
+            }
+            continue;
+        }
         if (!id.isEmpty() && !ids.contains(id)) {
             ids.append(id);
+        }
+    }
+    if (unqueued > 0) {
+        if (idsIn.contains(m_shownId)) {
+            m_view->clear();
+            m_shownId.clear();
+        }
+        reloadFromCache();
+        populateMailboxes();
+        statusBar()->showMessage(unqueued == 1 ? tr("Removed 1 message from the queue.")
+                                               : tr("Removed %1 messages from the queue.").arg(unqueued),
+                                 5000);
+        if (ids.isEmpty()) {
+            return;
         }
     }
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;

@@ -137,7 +137,10 @@ bool MailCache::open(const QString &path)
             "wake_ms INTEGER NOT NULL DEFAULT 0, had_inbox INTEGER NOT NULL DEFAULT 0, "
             "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS flags (message_id TEXT PRIMARY KEY, color TEXT NOT NULL)")) &&
-        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS purged (message_id TEXT PRIMARY KEY)"));
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS purged (message_id TEXT PRIMARY KEY)")) &&
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, mime BLOB NOT NULL, "
+                            "thread_id TEXT, draft_id TEXT, to_addr TEXT, cc_addr TEXT, subject TEXT, body_text TEXT, "
+                            "created_ms INTEGER NOT NULL, error TEXT)"));
     if (!ok) {
         return false;
     }
@@ -713,6 +716,82 @@ QSet<QString> MailCache::purged() const
         }
     }
     return out;
+}
+
+qint64 MailCache::addQueued(const QueuedMessage &m)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("INSERT INTO outbox(mime, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms) "
+                             "VALUES (?,?,?,?,?,?,?,?)"));
+    q.addBindValue(m.mime);
+    q.addBindValue(m.threadId);
+    q.addBindValue(m.draftId);
+    q.addBindValue(m.to);
+    q.addBindValue(m.cc);
+    q.addBindValue(m.subject);
+    q.addBindValue(m.text);
+    q.addBindValue(m.createdMs > 0 ? m.createdMs : QDateTime::currentMSecsSinceEpoch());
+    return q.exec() ? q.lastInsertId().toLongLong() : 0;
+}
+
+namespace {
+MailCache::QueuedMessage queuedFromRow(const QSqlQuery &q, bool withMime)
+{
+    MailCache::QueuedMessage m;
+    m.id = q.value(0).toLongLong();
+    m.threadId = q.value(1).toString();
+    m.draftId = q.value(2).toString();
+    m.to = q.value(3).toString();
+    m.cc = q.value(4).toString();
+    m.subject = q.value(5).toString();
+    m.text = q.value(6).toString();
+    m.createdMs = q.value(7).toLongLong();
+    m.error = q.value(8).toString();
+    m.size = q.value(9).toLongLong();
+    if (withMime) {
+        m.mime = q.value(10).toByteArray();
+    }
+    return m;
+}
+const char *kQueuedColumns = "id, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, error, length(mime)";
+} // namespace
+
+QList<MailCache::QueuedMessage> MailCache::queued(bool withMime) const
+{
+    QList<QueuedMessage> out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("SELECT %1%2 FROM outbox ORDER BY id")
+                   .arg(QLatin1String(kQueuedColumns), withMime ? QStringLiteral(", mime") : QString()))) {
+        while (q.next()) {
+            out.append(queuedFromRow(q, withMime));
+        }
+    }
+    return out;
+}
+
+MailCache::QueuedMessage MailCache::queuedMessage(qint64 id) const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("SELECT %1, mime FROM outbox WHERE id = ?").arg(QLatin1String(kQueuedColumns)));
+    q.addBindValue(id);
+    return q.exec() && q.next() ? queuedFromRow(q, true) : QueuedMessage();
+}
+
+void MailCache::removeQueued(qint64 id)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("DELETE FROM outbox WHERE id = ?"));
+    q.addBindValue(id);
+    q.exec();
+}
+
+void MailCache::setQueuedError(qint64 id, const QString &error)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("UPDATE outbox SET error = ? WHERE id = ?"));
+    q.addBindValue(error);
+    q.addBindValue(id);
+    q.exec();
 }
 
 QList<MailCache::SnoozeRow> MailCache::snoozes(bool activeOnly) const

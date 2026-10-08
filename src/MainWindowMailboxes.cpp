@@ -139,9 +139,12 @@ void MainWindow::populateMailboxes()
         auto unread = [&](const QString &id) { return byId.contains(id) ? byId.value(id).unread : 0; };
         add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), total(QStringLiteral("INBOX")),
             unread(QStringLiteral("INBOX")));
+        const int waiting = int(m_session->cache()->queued().size());
         QTreeWidgetItem *out = add(nullptr, tr("Out"), icon(QStringLiteral("send")), QStringLiteral("Out"),
-                                   total(QStringLiteral("SENT")));
-        out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
+                                   total(QStringLiteral("SENT")) + waiting, waiting);
+        out->setToolTip(0, waiting == 0   ? tr("Sent mail (Gmail SENT)")
+                           : waiting == 1 ? tr("Sent mail, and 1 message queued to send")
+                                          : tr("Sent mail, and %1 messages queued to send").arg(waiting));
         add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"),
             m_session->cache() ? int(m_session->cache()->snoozes(true).size()) : 0);
         if (showJunkFolder) {

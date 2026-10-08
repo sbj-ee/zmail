@@ -16,6 +16,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
+#include "ui/MailboxWindow.h"
 #include "ui/Flags.h"
 #include "core/ContactStore.h"
 #include "core/PeopleClient.h"
@@ -355,6 +356,11 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
         menu->addSeparator();
     }
 
+    if (!key.isEmpty() && key != QLatin1String("Search")) {
+        QAction *own = menu->addAction(tr("Open in New &Window"), menu, [this, key]() { openMailboxWindow(key); });
+        own->setObjectName(QStringLiteral("actionOpenMailboxWindow"));
+        menu->addSeparator();
+    }
     if (live && key == QLatin1String("Trash")) {
         QAction *empty = menu->addAction(icon(QStringLiteral("trash")), tr("&Empty Trash\u2026"), menu,
                                          [this]() { emptyTrash(); });

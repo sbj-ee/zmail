@@ -14,6 +14,9 @@
 #include "core/TokenStore.h"
 #include "mock/MockGoogle.h"
 #include "ui/ComposeWindow.h"
+#include "ui/MailboxWindow.h"
+#include "ui/MessageWindow.h"
+#include "ui/ListDialog.h"
 #include "ui/MessageListModel.h"
 #include "ui/MessageView.h"
 #include "ui/SafeHtmlView.h"
@@ -33,6 +36,7 @@
 #include <QTextEdit>
 #include <QDrag>
 #include <QDragEnterEvent>
+#include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMimeData>
@@ -661,6 +665,64 @@ private slots:
         dlg->accept();
         QCOMPARE(StationeryStore().all().size(), 2);
         QFile::remove(StationeryStore::defaultPath());
+    }
+
+    // A mailbox in a window of its own, as in Eudora: the same live list.
+    void mailboxOpensInItsOwnWindow()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), kLabel}));
+        const QString folder = QLatin1String("gmail:") + kLabel;
+        QTRY_VERIFY_WITH_TIMEOUT(f.w->findChild<QAction *>(QStringLiteral("mailbox_") + folder), 10000);
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionMailboxWindow")));
+
+        MailboxWindow *mw = f.w->openMailboxWindow(folder);
+        QVERIFY(mw);
+        QVERIFY(mw->isWindow() && mw->isVisible());
+        QVERIFY2(mw->windowTitle().startsWith(QStringLiteral("Projects")), qPrintable(mw->windowTitle()));
+        QTRY_COMPARE_WITH_TIMEOUT(mw->proxy()->rowCount(), 3, 10000);
+        QCOMPARE(mw->findChild<QLabel *>(QStringLiteral("mailboxWindowCount"))->text().trimmed(), QStringLiteral("3 messages, 0 unread"));
+        // Asked for again: the same window, not a second one.
+        QCOMPARE(f.w->openMailboxWindow(folder), mw);
+        QCOMPARE(f.w->mailboxWindows().size(), 1);
+        // The main window is untouched, and can show another mailbox meanwhile.
+        QCOMPARE(f.proxy->rowCount(), 3); // still In
+        f.selectView(QStringLiteral("Trash"));
+        QTRY_COMPARE(f.proxy->rowCount(), 0);
+        QCOMPARE(mw->proxy()->rowCount(), 3);
+
+        // Open a message from it (it isn't in the main list's mailbox now).
+        mw->list()->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
+        mw->list()->setCurrentIndex(mw->proxy()->index(0, 0));
+        QCOMPARE(mw->selectedIds(), QStringList{f.a});
+        emit mw->list()->doubleClicked(mw->proxy()->index(0, 0));
+        QTRY_COMPARE(f.w->messageWindows().size(), 1);
+        QCOMPARE(f.w->messageWindows().first()->messageId(), f.a);
+        f.w->messageWindows().first()->close();
+
+        // Delete from it: Gmail trashes the message, and it leaves the
+        // window's list and turns up in the main window's Trash.
+        emit mw->deleteRequested(mw->selectedIds());
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.trashCalls, QStringList{f.a}, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(mw->proxy()->rowCount(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+
+        // The list's look follows Settings > Message List.
+        f.w->setListAppearance(0, 0);
+        const int compact = mw->list()->visualRect(mw->proxy()->index(0, 0)).height();
+        f.w->setListAppearance(0, 14);
+        QCOMPARE(mw->list()->visualRect(mw->proxy()->index(0, 0)).height(), compact + 14);
+        f.w->setListAppearance(0, kListSpacingDefault);
+
+        // The current mailbox with no key; search results have no window.
+        MailboxWindow *trash = f.w->openMailboxWindow();
+        QVERIFY(trash && trash != mw);
+        QCOMPARE(trash->mailbox(), QStringLiteral("Trash"));
+        QCOMPARE(trash->proxy()->rowCount(), 1);
+        QVERIFY(!f.w->openMailboxWindow(QStringLiteral("Search")));
+        QCOMPARE(f.w->mailboxWindows().size(), 2);
+        trash->close();
+        QTRY_COMPARE(f.w->mailboxWindows().size(), 1);
     }
 
     // Drag a message from the list onto a folder in the sidebar.

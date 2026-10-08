@@ -45,6 +45,7 @@ class PrivacyDialog;
 class StripesDialog;
 class ListDialog;
 class RulesDialog;
+class MailboxWindow;
 class StationeryDialog;
 class ContactsWindow;
 } // namespace zmail::ui
@@ -124,6 +125,10 @@ public:
     // mailbox, or move the selected messages to one ("INBOX", a folder's
     // Gmail label id, or "TRASH" to delete them).
     void openMailbox(const QString &key);
+    // The mailbox in a window of its own (the current one when key is empty).
+    zmail::ui::MailboxWindow *openMailboxWindow(const QString &key = {});
+    QList<zmail::ui::MailboxWindow *> mailboxWindows() const;
+    zmail::ui::MessageWindow *openMessageWindowFor(const QString &messageId);
     void transferSelected(const QString &target);
     // File > Send Queued Messages: everything waiting in Out, oldest first.
     // One that Gmail refuses stays queued, with the reason.
@@ -153,7 +158,7 @@ public:
     bool previewRight() const;
     zmail::ui::MessageView *messageView() const { return m_view; }
     // Open the list row (proxy index) in its own window, as double-click does.
-    zmail::ui::MessageWindow *openMessageWindow(const QModelIndex &proxyIndex);
+    zmail::ui::MessageWindow *openMessageWindow(const QModelIndex &proxyIndex, int sourceRow = -1);
     QList<zmail::ui::MessageWindow *> messageWindows() const;
 
 public slots:
@@ -284,6 +289,8 @@ private:
     QString m_autoLoadMailbox; // the mailbox the last automatic "load more" was for...
     int m_autoLoadRows = -1;   // ...and how many rows it showed then
     QStringList m_savedAttachments;
+    QList<QPointer<zmail::ui::MailboxWindow>> m_mailboxWindows;
+    void styleMailboxWindow(zmail::ui::MailboxWindow *w); // the list's text size, row spacing and stripes
     QMenu *m_mailboxMenu = nullptr;
     QMenu *m_transferMenu = nullptr;
     void rebuildMailboxMenus();

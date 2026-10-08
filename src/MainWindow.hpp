@@ -45,6 +45,7 @@ class PrivacyDialog;
 class StripesDialog;
 class ListDialog;
 class RulesDialog;
+class StationeryDialog;
 class ContactsWindow;
 } // namespace zmail::ui
 
@@ -114,6 +115,11 @@ public:
     // dialog was cancelled.
     bool printMessage(QPrinter *printer = nullptr);
     void copySelection(); // Edit > Copy
+    // Stationery (Settings > Stationery): a new message, or a reply to the
+    // shown one, started from a saved template.
+    ComposeWindow *newMessageWith(const QString &stationeryName);
+    ComposeWindow *replyWith(const QString &stationeryName);
+    zmail::ui::StationeryDialog *showStationeryDialog(); // non-modal; returned for tests
     // Eudora's Mailbox and Transfer menus, built from the sidebar: go to a
     // mailbox, or move the selected messages to one ("INBOX", a folder's
     // Gmail label id, or "TRASH" to delete them).

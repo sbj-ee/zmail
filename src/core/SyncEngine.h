@@ -94,7 +94,8 @@ public:
     // Labels as folders (users.labels.*). Create/rename use Gmail's "/" nesting
     // (e.g. "Projects/zmail"). deleteLabel removes the label only — messages
     // keep their other labels and are never trashed.
-    // then(id): once the new label is in the cache (not called if Gmail refuses).
+    // then(id): once the new label is in the cache, or with an empty id if
+    // Gmail refuses (the caller then says so; nothing is reported here).
     void createLabel(const QString &name, const QString &backgroundColor = {},
                      std::function<void(const QString &id)> then = {});
     void renameLabel(const QString &id, const QString &newName);

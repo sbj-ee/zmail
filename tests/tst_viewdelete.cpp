@@ -1238,9 +1238,20 @@ private slots:
         QAction *archive = f.w->findChild<QAction *>(QStringLiteral("menuActionArchive"));
         QVERIFY(archive && archive->isEnabled());
 
+        // Gmail keeps "Archive" for itself, and here "Archived" too: the
+        // folder gets the next name, and is still the Archive row.
+        f.g.reservedLabelNames << QStringLiteral("Archived");
         archive->trigger(); // Bravo
         QTRY_VERIFY_WITH_TIMEOUT(archiveRow() && archiveRow()->data(0, Qt::UserRole).toString().startsWith(QLatin1String("gmail:")), 10000);
         const QString id = archiveRow()->data(0, Qt::UserRole).toString().mid(6);
+        QString named;
+        for (const zmail::CachedLabel &l : f.session->cache()->labels()) {
+            if (l.id == id) {
+                named = l.name;
+            }
+        }
+        QCOMPARE(named, QStringLiteral("Archives"));
+        QCOMPARE(archiveRow()->text(0), QStringLiteral("Archive"));
         QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(id), 10000);
         QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
         QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("IMPORTANT")));
@@ -1259,6 +1270,26 @@ private slots:
         archive->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.a).labels.contains(id), 10000);
         QTRY_COMPARE_WITH_TIMEOUT(archiveRow()->text(1), QStringLiteral("2"), 10000);
+    }
+
+    // Gmail refuses every name: nothing is moved, and the status bar says so.
+    // Opening the still-empty Archive row asks Gmail for nothing.
+    void archiveSaysSoWhenGmailRefusesTheFolder()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        f.g.reservedLabelNames << QStringLiteral("Archived") << QStringLiteral("Archives")
+                               << QStringLiteral("Archived Mail") << QStringLiteral("zmail Archive");
+        f.w->findChild<QAction *>(QStringLiteral("menuActionArchive"))->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.w->statusBar()->currentMessage().contains(QStringLiteral("nothing was moved")), 10000);
+        QVERIFY(f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
+        QCOMPARE(f.proxy->rowCount(), 3);
+
+        const int lists = f.g.count(QStringLiteral("GET /gmail/v1/users/me/messages"));
+        f.selectView(QStringLiteral("Archive"));
+        QTest::qWait(500);
+        QCOMPARE(f.proxy->rowCount(), 0);
+        QCOMPARE(f.g.count(QStringLiteral("GET /gmail/v1/users/me/messages")), lists);
     }
 
     // Empty Trash remembers what it hid, and the sidebar takes that many off

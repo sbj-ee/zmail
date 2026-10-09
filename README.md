@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.11: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.12: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -71,7 +71,8 @@ included. New in 0.6.9: Load All Messages for a mailbox, and large
 deletes go to Gmail in batches. New in 0.6.10: live folder counts, shown
 as unread / total. New in 0.6.11: an Archive mailbox, coloured folder
 icons, filed mail leaves Gmail's Important, Send Later takes a date and
-time, Out is called Sent, and the Trash and Drafts counts are right. See
+time, Out is called Sent, and the Trash and Drafts counts are right.
+0.6.12 fixes Archive, whose folder Gmail refused to create. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -138,7 +139,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.11_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.12_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -197,8 +198,9 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   for Gmail. Mail and changes made elsewhere show within about 15 seconds.
 - **Archive** has a row of its own above Trash. Right-click a message and
   choose Archive (or Message → Archive, or drag it there) to move it out of
-  the Inbox. It is an ordinary folder, the Gmail label "Archive", made the
-  first time you archive something.
+  the Inbox. It is an ordinary folder, made the first time you archive
+  something: a Gmail label called "Archived" (Gmail keeps the name
+  "Archive" for itself).
 - Every folder in the sidebar is a folder icon in its own colour: the
   label's Gmail colour if it has one, otherwise one picked from its name.
 - Moving a message into a folder also takes it out of Gmail's **Important**

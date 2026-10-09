@@ -583,6 +583,11 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
                 replyJson(s, 400, gerror(400, QStringLiteral("INVALID_ARGUMENT"), QStringLiteral("name required")));
                 return;
             }
+            // Real Gmail refuses its own names ("Archive" among them) this way.
+            if (reservedLabelNames.contains(name, Qt::CaseInsensitive)) {
+                replyJson(s, 400, gerror(400, QStringLiteral("invalidArgument"), QStringLiteral("Invalid label name")));
+                return;
+            }
             int maxN = 0;
             for (const Label &l : m_labels) {
                 if (l.id.startsWith(QLatin1String("Label_"))) {

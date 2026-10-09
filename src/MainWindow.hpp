@@ -268,10 +268,12 @@ private:
     void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
     QMenu *buildFlagMenu(QWidget *parent);
     int trashCount(int gmailTotal) const; // what the sidebar shows for Trash
-    // Archive: a folder (the Gmail label "Archive", made on first use) with a
+    // Archive: a folder (a Gmail label, "Archived", made on first use) with a
     // row of its own in the sidebar.
     QString archiveLabelId() const;
     void archiveSelected();
+    static QStringList archiveLabelNames();
+    void archiveInto(const QStringList &ids, QStringList names); // makes the folder first, trying each name
     void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
     void setCurrentRead(bool read); // selected rows (Shift/Ctrl multi-select)
     void offerUndoDelete(const QStringList &ids);

@@ -689,12 +689,52 @@ QString MainWindow::archiveLabelId() const
     if (!(m_live && m_session && m_session->cache())) {
         return {};
     }
-    for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
-        if (l.type == QLatin1String("user") && l.name.compare(QLatin1String("Archive"), Qt::CaseInsensitive) == 0) {
+    // The one made (or adopted) before, whatever it is called now; else a
+    // folder with one of the names Archive uses.
+    const QList<zmail::CachedLabel> labels = m_session->cache()->labels();
+    const QString known = m_session->cache()->meta(QStringLiteral("archiveLabel"));
+    for (const zmail::CachedLabel &l : labels) {
+        if (!known.isEmpty() && l.id == known) {
             return l.id;
         }
     }
+    for (const QString &name : archiveLabelNames()) {
+        for (const zmail::CachedLabel &l : labels) {
+            if (l.type == QLatin1String("user") && l.name.compare(name, Qt::CaseInsensitive) == 0) {
+                return l.id;
+            }
+        }
+    }
     return {};
+}
+
+// Gmail keeps "Archive" for itself (labels.create answers 400), so the
+// folder gets the first of these it accepts.
+QStringList MainWindow::archiveLabelNames()
+{
+    return {QStringLiteral("Archived"), QStringLiteral("Archives"), QStringLiteral("Archived Mail"),
+            QStringLiteral("zmail Archive")};
+}
+
+void MainWindow::archiveInto(const QStringList &ids, QStringList names)
+{
+    if (!(m_live && m_session && m_session->sync())) {
+        return;
+    }
+    if (names.isEmpty()) {
+        statusBar()->showMessage(tr("Gmail wouldn't make a folder for the Archive, so nothing was moved."), 10000);
+        return;
+    }
+    const QString name = names.takeFirst();
+    m_session->sync()->createLabel(name, {}, [this, ids, names](const QString &id) {
+        if (id.isEmpty()) {
+            archiveInto(ids, names); // refused: the next name
+            return;
+        }
+        m_session->cache()->setMeta(QStringLiteral("archiveLabel"), id);
+        populateMailboxes(); // the Archive row is that folder now
+        moveMessagesToLabel(ids, id);
+    });
 }
 
 void MainWindow::archiveSelected()
@@ -714,9 +754,7 @@ void MainWindow::archiveSelected()
     }
     // First use: make the folder, then file the mail in it.
     statusBar()->showMessage(tr("Creating the Archive folder\u2026"), 4000);
-    m_session->sync()->createLabel(QStringLiteral("Archive"), {}, [this, ids](const QString &id) {
-        moveMessagesToLabel(ids, id);
-    });
+    archiveInto(ids, archiveLabelNames());
 }
 
 void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId)

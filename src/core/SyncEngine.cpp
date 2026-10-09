@@ -106,6 +106,7 @@ void SyncEngine::stop()
     m_poll->stop();
     m_labelsRefreshSoon->stop();
     m_fetchQueue.clear();
+    m_loadAllLabel.clear();
     m_loadingLabels.clear(); // their callbacks are dropped with the old generation
     m_busy = false;
     m_labelsRefreshing = false;
@@ -383,6 +384,71 @@ void SyncEngine::fetchMore(const QString &labelId)
         }
         m_loadingLabels.remove(labelId);
         emit statusChanged(countText(tr("1 message cached"), tr("%1 messages cached"), m_cache->count()));
+    });
+}
+
+void SyncEngine::loadAll(const QString &labelId, const QString &displayName)
+{
+    if (!m_running || labelId.isEmpty() || !m_loadAllLabel.isEmpty()) {
+        return; // one at a time
+    }
+    m_loadAllLabel = labelId;
+    m_loadAllName = displayName.isEmpty() ? labelId : displayName;
+    m_loadAllStop = false;
+    if (m_cache->meta(QStringLiteral("synced:") + labelId) != QLatin1String("1")) {
+        m_cache->setMeta(QStringLiteral("pageToken:") + labelId, {}); // never listed: from the top
+    }
+    loadAllStep(false);
+}
+
+void SyncEngine::stopLoadAll()
+{
+    m_loadAllStop = true; // takes effect when the page in flight lands
+}
+
+void SyncEngine::loadAllStep(bool retried)
+{
+    const QString labelId = m_loadAllLabel;
+    const auto finish = [this, labelId](bool complete) {
+        m_loadAllLabel.clear();
+        m_loadingLabels.remove(labelId);
+        const int loaded = m_cache->count(labelId);
+        emit statusChanged(complete ? tr("Loaded all of %1: %2 messages").arg(m_loadAllName).arg(loaded)
+                                    : tr("%1: %2 messages loaded").arg(m_loadAllName).arg(loaded));
+        emit loadAllFinished(labelId, loaded, complete);
+    };
+    if (!m_running || labelId.isEmpty()) {
+        m_loadAllLabel.clear();
+        return;
+    }
+    const QString token = m_cache->meta(QStringLiteral("pageToken:") + labelId);
+    if (token == QLatin1String("-")) {
+        finish(true);
+        return;
+    }
+    if (m_loadAllStop) {
+        finish(false);
+        return;
+    }
+    m_loadingLabels.insert(labelId); // scrolling doesn't start a second fetch of the same pages
+    emit statusChanged(tr("Loading all of %1\u2026 %2 so far").arg(m_loadAllName).arg(m_cache->count(labelId)));
+    const int gen = m_generation;
+    listPage(labelId, token, 500, [this, gen, labelId, token, retried, finish](bool ok) {
+        if (gen != m_generation || m_loadAllLabel != labelId) {
+            return;
+        }
+        if (!ok) {
+            if (!token.isEmpty() && !retried) {
+                // A saved page token Gmail no longer takes: start the listing
+                // again (what is cached already is not fetched twice).
+                m_cache->setMeta(QStringLiteral("pageToken:") + labelId, {});
+                loadAllStep(true);
+            } else {
+                finish(false);
+            }
+            return;
+        }
+        loadAllStep(false);
     });
 }
 
@@ -831,6 +897,65 @@ void SyncEngine::trash(const QString &id)
             }
         });
     });
+}
+
+void SyncEngine::trashMany(const QStringList &idsIn)
+{
+    if (!m_running) {
+        return;
+    }
+    QStringList folders{kInbox};
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user")) {
+            folders.append(l.id);
+        }
+    }
+    QStringList ids;
+    {
+        const MailCache::Batch batch(*m_cache);
+        for (const QString &id : idsIn) {
+            const CachedMessage m = m_cache->summary(id);
+            if (m.id.isEmpty() || m.labels.contains(QStringLiteral("TRASH"))) {
+                continue;
+            }
+            m_labelsBeforeTrash.insert(id, m.labels); // for untrash()
+            m_cache->modifyLabels(id, {QStringLiteral("TRASH")}, folders); // optimistic
+            ids.append(id);
+        }
+    }
+    emit messagesChanged();
+    const int gen = m_generation;
+    // batchModify takes 1000 messages and 100 labels a call; an account with
+    // more folders than that has the rest taken off by the single trash().
+    const QStringList remove = folders.mid(0, 100);
+    for (qsizetype at = 0; at < ids.size(); at += 1000) {
+        const QStringList chunk = ids.mid(at, 1000);
+        m_api->batchModifyLabels(chunk, {QStringLiteral("TRASH")}, remove,
+                                 [this, gen, chunk](const QJsonObject &, const ApiError &err) {
+            if (gen != m_generation) {
+                return;
+            }
+            if (err.isError) {
+                // Not accepted as a batch: put them back as they were, and
+                // do it the ordinary way, one by one.
+                qCWarning(lcSync) << "Batch delete refused (HTTP" << err.httpStatus << "); deleting one by one";
+                {
+                    const MailCache::Batch batch(*m_cache);
+                    for (const QString &id : chunk) {
+                        m_cache->setLabels(id, m_labelsBeforeTrash.take(id));
+                    }
+                }
+                for (const QString &id : chunk) {
+                    trash(id);
+                }
+                return;
+            }
+            for (const QString &id : chunk) {
+                emit trashSucceeded(id);
+            }
+            m_labelsRefreshSoon->start(); // the counts
+        });
+    }
 }
 
 bool SyncEngine::untrash(const QString &id)

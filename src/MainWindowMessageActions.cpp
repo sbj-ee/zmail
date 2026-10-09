@@ -84,8 +84,9 @@
 using namespace zmail::ui;
 #include "MainWindowDetail.h"
 
-void MainWindow::selectPastRemoved(const QStringList &ids)
+void MainWindow::selectPastRemoved(const QStringList &idList)
 {
+    const QSet<QString> ids(idList.begin(), idList.end()); // thousands at a time must stay quick
     const QModelIndex cur = m_list->currentIndex();
     if (!cur.isValid() || !ids.contains(m_model->item(m_proxy->mapToSource(cur).row()).id)) {
         return; // e.g. deleted from its own window while another row is selected
@@ -167,8 +168,12 @@ void MainWindow::trashMessages(const QStringList &idsIn)
         // One pending entry is enough to reselect the neighbour if Gmail refuses.
         m_pendingTrash.insert(currentId, {m_proxy->mailbox(), currentListId()});
     }
-    for (const QString &id : ids) {
-        sync->trash(id); // optimistic; rolled back (onTrashFailed) if Gmail refuses
+    if (ids.size() > kBatchDeleteFrom) {
+        sync->trashMany(ids); // a request per thousand, not one each
+    } else {
+        for (const QString &id : ids) {
+            sync->trash(id); // optimistic; rolled back (onTrashFailed) if Gmail refuses
+        }
     }
     if (ids.contains(m_shownId)) {
         m_view->clear();

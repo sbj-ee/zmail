@@ -373,6 +373,13 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
         own->setObjectName(QStringLiteral("actionOpenMailboxWindow"));
         menu->addSeparator();
     }
+    if (live && !labelForMailbox(key).isEmpty()) {
+        const bool loading = !m_session->sync()->loadingAll().isEmpty();
+        QAction *all = menu->addAction(loading ? tr("Stop &Loading") : tr("&Load All Messages"), menu,
+                                       [this, key]() { loadAllMessages(key); });
+        all->setObjectName(QStringLiteral("actionLoadAllHere"));
+        all->setToolTip(tr("Fetch every message in this mailbox, not only the ones scrolled to so far"));
+    }
     if (live && key == QLatin1String("Trash")) {
         QAction *empty = menu->addAction(icon(QStringLiteral("trash")), tr("&Empty Trash\u2026"), menu,
                                          [this]() { emptyTrash(); });

@@ -194,6 +194,12 @@ void MainWindow::attachSync()
             statusBar()->showMessage(tr("The Trash is back as it was."), 4000);
         });
     });
+    connect(sync, &zmail::SyncEngine::loadAllFinished, this, [this](const QString &, int loaded, bool complete) {
+        rebuildMailboxMenus(); // back to "Load All Messages"
+        statusBar()->showMessage(complete ? (loaded == 1 ? tr("All loaded: 1 message.") : tr("All loaded: %1 messages.").arg(loaded))
+                                          : tr("Stopped: %1 messages loaded so far.").arg(loaded),
+                                 8000);
+    });
     connect(sync, &zmail::SyncEngine::labelEmptied, this, [this](const QString &labelId, const QStringList &ids) {
         if (ids.isEmpty()) {
             return;

@@ -134,6 +134,11 @@ public:
     // mailbox, or move the selected messages to one ("INBOX", a folder's
     // Gmail label id, or "TRASH" to delete them).
     void openMailbox(const QString &key);
+    // Load every message of a mailbox (the current one when key is empty), or
+    // stop if that is already under way.
+    void loadAllMessages(const QString &key = {});
+    // More messages than this deleted at once go to Gmail as batches.
+    static constexpr int kBatchDeleteFrom = 25;
     // The mailbox in a window of its own (the current one when key is empty).
     zmail::ui::MailboxWindow *openMailboxWindow(const QString &key = {});
     QList<zmail::ui::MailboxWindow *> mailboxWindows() const;

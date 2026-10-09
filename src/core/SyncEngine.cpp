@@ -500,7 +500,7 @@ void SyncEngine::loadAllStep(bool retried)
 
 void SyncEngine::ensureLabel(const QString &labelId)
 {
-    if (!m_running || m_cache->meta(QStringLiteral("synced:") + labelId) == QLatin1String("1") ||
+    if (!m_running || labelId.isEmpty() || m_cache->meta(QStringLiteral("synced:") + labelId) == QLatin1String("1") ||
         m_loadingLabels.contains(labelId)) {
         return;
     }
@@ -1101,7 +1101,12 @@ void SyncEngine::createLabel(const QString &name, const QString &backgroundColor
     const QString trimmed = name.trimmed();
     m_api->createLabel(trimmed, backgroundColor, [this, trimmed, then](const QJsonObject &json, const ApiError &err) {
         if (err.isError) {
-            reportError(err, tr("Creating folder \"%1\"").arg(trimmed));
+            if (then) {
+                qCWarning(lcSync) << "Creating folder" << trimmed << "refused with HTTP" << err.httpStatus << err.reason;
+                then({});
+            } else {
+                reportError(err, tr("Creating folder \"%1\"").arg(trimmed));
+            }
             return;
         }
         // Refresh so the new label (with counts) appears under Gmail Labels.

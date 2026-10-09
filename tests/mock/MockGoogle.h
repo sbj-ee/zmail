@@ -105,6 +105,10 @@ public:
     QByteArray lastRaw;            // last message received by send / drafts
     QString lastSendPath;          // "simple" or "resumable"
     int sendCalls = 0;
+    // labels.create answers 400 for these, as Gmail does for its reserved names.
+    QStringList reservedLabelNames{QStringLiteral("Archive"), QStringLiteral("Inbox"), QStringLiteral("Sent"),
+                                   QStringLiteral("Drafts"), QStringLiteral("Trash"), QStringLiteral("Spam"),
+                                   QStringLiteral("Starred"), QStringLiteral("Important")};
     int uploadSessions = 0;
     int uploadPuts = 0;
     int statusQueries = 0;         // Content-Range: bytes */N

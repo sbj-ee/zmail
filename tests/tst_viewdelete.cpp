@@ -1085,6 +1085,73 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 10000);
     }
 
+    // The sidebar's counts are live: they move with the mail as it is
+    // deleted, read, moved or arrives, and show unread of total.
+    void sidebarCountsAreLive()
+    {
+        Fixture f;
+        f.g.listen();
+        MockGoogle::Message u;
+        u.from = QStringLiteral("Priya Raman <priya.raman@example.com>");
+        u.subject = QStringLiteral("Unread one");
+        u.text = QStringLiteral("Fake test mail.");
+        u.labels = {QStringLiteral("INBOX"), QStringLiteral("UNREAD")};
+        u.date = QDateTime::currentDateTimeUtc().addSecs(-600);
+        const QString unread1 = f.g.addMessage(u, true);
+        u.subject = QStringLiteral("Unread two");
+        const QString unread2 = f.g.addMessage(u, true);
+        QVERIFY(f.open(QStringLiteral("gmail:") + kLabel, {kLabel})); // Alpha, Bravo, Charlie filed and read
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto row = [tree](const QString &key) -> QTreeWidgetItem * {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == key) {
+                    return *it;
+                }
+            }
+            return nullptr;
+        };
+        const auto count = [&row](const QString &key) { return row(key) ? row(key)->text(1) : QStringLiteral("?"); };
+        const QString folder = QLatin1String("gmail:") + kLabel;
+
+        // Unread of total while something is unread, in bold; just the total otherwise.
+        QTRY_COMPARE_WITH_TIMEOUT(count(QStringLiteral("In")), QStringLiteral("2 / 2"), 10000);
+        QVERIFY(row(QStringLiteral("In"))->font(0).bold());
+        QCOMPARE(row(QStringLiteral("In"))->toolTip(1), QStringLiteral("2 unread of 2"));
+        QCOMPARE(count(folder), QStringLiteral("3"));
+        QVERIFY(!row(folder)->font(0).bold());
+        QCOMPARE(count(QStringLiteral("Trash")), QString());
+
+        // Delete from the folder: its count and Trash's change with the list,
+        // without waiting for Gmail. (No request has been answered yet.)
+        const int answered = f.g.trashCalls.size();
+        f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger(); // Bravo
+        QCOMPARE(f.g.trashCalls.size(), answered);
+        QTRY_COMPARE_WITH_TIMEOUT(count(folder), QStringLiteral("2"), 2000);
+        QCOMPARE(count(QStringLiteral("Trash")), QStringLiteral("1"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.trashCalls.size(), answered + 1, 10000);
+        QTest::qWait(1200); // Gmail's own numbers arrive and agree
+        QCOMPARE(count(folder), QStringLiteral("2"));
+        QCOMPARE(count(QStringLiteral("Trash")), QStringLiteral("1"));
+
+        // Reading a message takes one off its mailbox's unread.
+        f.session->sync()->markRead(unread1);
+        QTRY_COMPARE_WITH_TIMEOUT(count(QStringLiteral("In")), QStringLiteral("1 / 2"), 5000);
+        // Moving one into the folder: out of In, into the folder, still unread there.
+        f.session->sync()->moveToLabel(unread2, kLabel);
+        QTRY_COMPARE_WITH_TIMEOUT(count(QStringLiteral("In")), QStringLiteral("1"), 5000);
+        QCOMPARE(count(folder), QStringLiteral("1 / 3"));
+        QVERIFY(row(folder)->font(0).bold() && !row(QStringLiteral("In"))->font(0).bold());
+
+        // Mail that arrives (or changes elsewhere) shows at the next check.
+        u.subject = QStringLiteral("Just in");
+        f.g.addMessage(u, true);
+        f.session->sync()->pollNow(true);
+        QTRY_COMPARE_WITH_TIMEOUT(count(QStringLiteral("In")), QStringLiteral("1 / 2"), 10000);
+        QTest::qWait(1200);
+        QCOMPARE(count(QStringLiteral("In")), QStringLiteral("1 / 2"));
+        QCOMPARE(count(folder), QStringLiteral("1 / 3"));
+    }
+
     // Drag a message from the list onto a folder in the sidebar.
     void dragOntoAFolderMovesTheMessage()
     {

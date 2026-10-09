@@ -89,6 +89,8 @@ public:
     void setHistoryId(qint64 id) { setMeta(QStringLiteral("historyId"), QString::number(id)); }
 
     void replaceLabels(const QList<CachedLabel> &labels);
+    // A label's counts as Gmail last gave them (labels.get).
+    void setLabelCounts(const QString &id, int total, int unread);
     QList<CachedLabel> labels() const;
 
     // Insert or update metadata; keeps an already-fetched body.

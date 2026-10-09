@@ -285,6 +285,16 @@ void MailCache::replaceLabels(const QList<CachedLabel> &labels)
     }
 }
 
+void MailCache::setLabelCounts(const QString &id, int total, int unread)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("UPDATE labels SET total = ?, unread = ? WHERE id = ?"));
+    q.addBindValue(total);
+    q.addBindValue(unread);
+    q.addBindValue(id);
+    q.exec();
+}
+
 QList<CachedLabel> MailCache::labels() const
 {
     QList<CachedLabel> out;
@@ -350,11 +360,57 @@ void MailCache::setBody(const QString &id, const QString &text, const QString &h
     q.exec();
 }
 
+namespace {
+// Is this message counted in label `l`, as Gmail counts? Mail in Trash or
+// Spam is counted there and nowhere else.
+bool countedIn(const QStringList &labels, const QString &l)
+{
+    if (!labels.contains(l)) {
+        return false;
+    }
+    if (l == QLatin1String("TRASH") || l == QLatin1String("SPAM")) {
+        return true;
+    }
+    return !labels.contains(QStringLiteral("TRASH")) && !labels.contains(QStringLiteral("SPAM"));
+}
+} // namespace
+
 void MailCache::setLabels(const QString &id, const QStringList &labels)
 {
     const Batch batch(*this);
     QSqlDatabase db = QSqlDatabase::database(m_conn);
     QSqlQuery q(db);
+    // The folder counts move with the message, now, rather than when Gmail
+    // is next asked for them: delete a message and its folder's count drops
+    // as the row leaves the list. (Gmail's own numbers replace these when
+    // they arrive, so a count can't drift for long.)
+    q.prepare(QStringLiteral("SELECT labels FROM messages WHERE id = ?"));
+    q.addBindValue(id);
+    if (q.exec() && q.next()) {
+        const QStringList before = q.value(0).toString().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        const bool unreadBefore = before.contains(QStringLiteral("UNREAD"));
+        const bool unreadAfter = labels.contains(QStringLiteral("UNREAD"));
+        QStringList touched = before;
+        for (const QString &l : labels) {
+            if (!touched.contains(l)) {
+                touched.append(l);
+            }
+        }
+        QSqlQuery u(db);
+        u.prepare(QStringLiteral("UPDATE labels SET total = MAX(0, total + ?), unread = MAX(0, unread + ?) WHERE id = ?"));
+        for (const QString &l : std::as_const(touched)) {
+            const bool was = countedIn(before, l);
+            const bool is = countedIn(labels, l);
+            const int total = int(is) - int(was);
+            const int unread = int(is && unreadAfter) - int(was && unreadBefore);
+            if (total != 0 || unread != 0) {
+                u.addBindValue(total);
+                u.addBindValue(unread);
+                u.addBindValue(l);
+                u.exec();
+            }
+        }
+    }
     q.prepare(QStringLiteral("UPDATE messages SET labels = ? WHERE id = ?"));
     q.addBindValue(labels.join(QLatin1Char(' ')));
     q.addBindValue(id);

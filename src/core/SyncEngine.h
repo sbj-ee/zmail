@@ -116,6 +116,7 @@ public:
 
 signals:
     void labelsChanged();
+    void countsChanged(); // some labels' totals / unread counts are new (not their names)
     void trashEmptied(int messages);
     void labelEmptied(const QString &labelId, const QStringList &messageIds); // emptyLabel finished
     // loadAll() ended: everything is in (complete), it was stopped, or a page failed.
@@ -173,6 +174,12 @@ private:
     MailCache *m_cache;
     QTimer *m_poll;
     QTimer *m_labelsRefreshSoon; // one label refresh after a burst of moves
+    // Labels whose counts a change just touched: Gmail is asked for those
+    // alone (a labels.get each), a moment later, instead of for every label.
+    QSet<QString> m_countsDirty;
+    void touchCounts(const QStringList &labelIds);
+    void refreshCounts(const QSet<QString> &labelIds);
+    static constexpr int kTargetedCountLabels = 12; // more than this: one full refresh instead
     int m_initialCount = 500;
     int m_pageSize = 100;
     int m_maxInFlight = 8;

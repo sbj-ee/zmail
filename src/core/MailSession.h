@@ -30,7 +30,7 @@ struct SessionOptions
     QString contactsPathOverride;                    // ":memory:" in tests
     AuthManager::BrowserOpener browserOpener;        // empty = QDesktopServices
     bool rememberAccount = true;                     // QSettings "account/email"
-    int pollIntervalMs = 30000;
+    int pollIntervalMs = 15000; // how soon mail and changes made elsewhere show up
     int initialCount = 500;
     int backoffBaseMs = 1000;
 };

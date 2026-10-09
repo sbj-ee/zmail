@@ -577,6 +577,9 @@ int MailCache::count(const QString &labelId) const
     QSqlQuery q(QSqlDatabase::database(m_conn));
     if (labelId.isEmpty()) {
         q.prepare(QStringLiteral("SELECT COUNT(*) FROM messages"));
+    } else if (labelId == QLatin1String(kAllMailLabel)) {
+        q.prepare(QStringLiteral("SELECT COUNT(*) FROM messages WHERE id NOT IN "
+                                 "(SELECT message_id FROM message_labels WHERE label_id IN ('TRASH', 'SPAM'))"));
     } else {
         q.prepare(QStringLiteral("SELECT COUNT(*) FROM message_labels WHERE label_id = ?"));
         q.addBindValue(labelId);

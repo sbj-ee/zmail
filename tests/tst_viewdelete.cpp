@@ -1272,6 +1272,30 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(archiveRow()->text(1), QStringLiteral("2"), 10000);
     }
 
+    // All Mail shows what is in neither the Inbox nor a folder (mail that
+    // would otherwise be nowhere in the sidebar), and not what is in Trash.
+    void allMailShowsMailWithNoFolder()
+    {
+        Fixture f;
+        f.g.listen();
+        const QString binned = f.seed(QStringLiteral("Binned zebra"), {QStringLiteral("TRASH")}, 9);
+        QVERIFY(f.open(QStringLiteral("All"), {})); // three messages with no label at all
+        QStringList shown;
+        for (int r = 0; r < f.proxy->rowCount(); ++r) {
+            shown << f.idAt(r);
+        }
+        QVERIFY(shown.contains(f.a) && shown.contains(f.b) && shown.contains(f.c));
+        QVERIFY(!shown.contains(binned));
+
+        // They are in no other mailbox; one moved to the Inbox is in both.
+        f.selectView(QStringLiteral("In"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 5000);
+        f.session->sync()->moveToLabel(f.a, QStringLiteral("INBOX"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
+        f.selectView(QStringLiteral("All"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 5000);
+    }
+
     // Gmail refuses every name: nothing is moved, and the status bar says so.
     // Opening the still-empty Archive row asks Gmail for nothing.
     void archiveSaysSoWhenGmailRefusesTheFolder()

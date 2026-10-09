@@ -181,6 +181,10 @@ void MainWindow::populateMailboxes()
                                     total(archive), unread(archive));
         arch->setData(0, Qt::UserRole + 2, byId.value(archive).name);
         arch->setToolTip(0, tr("Archive \u00b7 drag mail here, or right-click a message and choose Archive"));
+        // Everything, filed or not: mail that is in neither the Inbox nor a
+        // folder shows nowhere else. No count: Gmail has none for it.
+        QTreeWidgetItem *everything = add(nullptr, tr("All Mail"), icon(QStringLiteral("mail")), QStringLiteral("All"), 0);
+        everything->setToolTip(0, tr("Every message in Gmail except Trash and Spam, whether or not it is in the Inbox or a folder"));
         add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), trashCount(total(QStringLiteral("TRASH"))));
 
         auto *root = add(nullptr, tr("Folders"), icon(QStringLiteral("folder-open")), QString());
@@ -405,6 +409,7 @@ QString MainWindow::labelForMailbox(const QString &key) const
     if (key == QLatin1String("Out")) return QStringLiteral("SENT");
     if (key == QLatin1String("Junk")) return QStringLiteral("SPAM");
     if (key == QLatin1String("Trash")) return QStringLiteral("TRASH");
+    if (key == QLatin1String("All")) return QString::fromLatin1(zmail::kAllMailLabel);
     if (key.startsWith(QLatin1String("gmail:"))) return key.mid(6);
     return {};
 }

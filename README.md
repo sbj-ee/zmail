@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.10: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.11: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -16,7 +16,7 @@ for custom themes (`*.ztheme.json`, shared with zterminal). New in 0.4.1:
 security hardening (no local file reads from mail or quoted replies, remote
 images default to Ask over HTTPS only with private addresses refused, OAuth
 state, header and `mailto:` fixes). New in 0.4.2: Delete works in every
-mailbox, not just In: a message deleted from a Gmail label, Starred, Out,
+mailbox, not just In: a message deleted from a Gmail label, Starred, Sent,
 Snoozed, Junk or search results now leaves the list (it stays in Trash, and
 Undo Delete still puts it back), and if Gmail refuses the Delete the message
 and the selection come back with the error in the status bar. New in 0.5.0:
@@ -69,7 +69,9 @@ notifications, a shortcut list, flag search, and a round of polish. New in
 0.6.8: contacts are edited in a window of their own, name and addresses
 included. New in 0.6.9: Load All Messages for a mailbox, and large
 deletes go to Gmail in batches. New in 0.6.10: live folder counts, shown
-as unread / total. See
+as unread / total. New in 0.6.11: an Archive mailbox, coloured folder
+icons, filed mail leaves Gmail's Important, Send Later takes a date and
+time, Out is called Sent, and the Trash and Drafts counts are right. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -136,7 +138,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.10_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.11_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -184,7 +186,7 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   selection. Right-click a message → **Make Filter** starts one from its
   sender. Rules are kept in `rules.json` in zmail's config folder.
 - Eudora's **Mailbox** and **Transfer** menus list your mailboxes and
-  folders: Mailbox goes to one (Ctrl+1 for In, Ctrl+2 for Out), Transfer
+  folders: Mailbox goes to one (Ctrl+1 for In, Ctrl+2 for Sent), Transfer
   moves the selected messages to one, also from the right-click menu.
   Eudora's keys work: Ctrl+D delete, Ctrl+E send, Ctrl+T send queued,
   Ctrl+Alt+J filter, Ctrl+K add the sender to Contacts, Ctrl+L Contacts,
@@ -193,6 +195,17 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   (`3 / 212`, in bold while something is unread; just the total otherwise),
   and the numbers move as you delete, read or move mail, without waiting
   for Gmail. Mail and changes made elsewhere show within about 15 seconds.
+- **Archive** has a row of its own above Trash. Right-click a message and
+  choose Archive (or Message → Archive, or drag it there) to move it out of
+  the Inbox. It is an ordinary folder, the Gmail label "Archive", made the
+  first time you archive something.
+- Every folder in the sidebar is a folder icon in its own colour: the
+  label's Gmail colour if it has one, otherwise one picked from its name.
+- Moving a message into a folder also takes it out of Gmail's **Important**
+  (which Gmail assigns by itself); Undo puts it back. **Mailbox → Clear
+  Important from Filed Mail** does the same, once, for everything already
+  in a folder.
+- The mailbox for sent and queued mail is called **Sent** (it was Out).
 - **Mailbox → Load All Messages** (or right-click a mailbox) fetches every
   message in it, not only the ones scrolled to so far, with progress in the
   status bar and Stop Loading to interrupt. Deleting a large selection goes
@@ -209,10 +222,12 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   from one and **Message → Reply With** answers with one: its text goes
   above your signature and the quoted original, and its recipients and
   subject are used where the message has none.
-- **The queue**, as in Eudora: **Send Later** in the compose window
-  (Ctrl+Shift+Enter) puts the message in Out, marked Q, instead of sending
-  it. **File → Send Queued Messages** (Ctrl+T) sends everything waiting,
-  oldest first; one that Gmail refuses stays queued with the reason. Delete
+- **Send Later** in the compose window (Ctrl+Shift+Enter) asks when: at a
+  date and time you pick, or held, as in Eudora, until you choose **File →
+  Send Queued Messages**. Either way the message waits in Sent, marked Q. A
+  timed one goes at its time if zmail is running, and otherwise the next
+  time zmail starts. **File → Send Queued Messages** (Ctrl+T) sends
+  everything waiting, timed or not, oldest first; one that Gmail refuses stays queued with the reason. Delete
   takes a queued message out of the queue. The queue is kept on this
   computer until it is sent.
 - **Flags** come in seven colours. Click a message's flag column to flag it

@@ -86,6 +86,9 @@ public:
     // Background by default (paging, sync); Interactive when the user is waiting on it.
     void listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb,
                       Priority priority = Priority::Background);
+    // Messages carrying every one of labelIds (Gmail ANDs repeated labelIds).
+    void listMessages(const QStringList &labelIds, int maxResults, const QString &pageToken, JsonCb cb,
+                      Priority priority = Priority::Background);
     // users.messages.batchModify: up to 1000 ids, up to 100 labels each way.
     void batchModifyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove, JsonCb cb);
     void getMessageMetadata(const QString &id, JsonCb cb);

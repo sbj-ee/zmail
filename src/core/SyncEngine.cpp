@@ -142,8 +142,15 @@ void SyncEngine::refreshCounts(const QSet<QString> &labelIds)
                 return;
             }
             if (!err.isError && json.contains(QStringLiteral("messagesTotal"))) {
-                m_cache->setLabelCounts(id, json.value(QStringLiteral("messagesTotal")).toInt(),
-                                        json.value(QStringLiteral("messagesUnread")).toInt());
+                const int total = json.value(QStringLiteral("messagesTotal")).toInt();
+                m_cache->setLabelCounts(id, total, json.value(QStringLiteral("messagesUnread")).toInt());
+                // Gmail erases old Trash by itself; if the emptied set now
+                // outnumbers what is left, it holds mail that is gone.
+                if (id == QLatin1String("TRASH")
+                    && total - int(m_cache->purged().size()) < m_cache->unpurgedTrash()
+                    && (m_lastPruneMs == 0 || monoMs() - m_lastPruneMs > kPruneMinIntervalMs)) {
+                    prunePurged();
+                }
             }
             if (--*left == 0) {
                 emit countsChanged();
@@ -609,7 +616,12 @@ void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared
                 run->changed = true;
             }
             for (const auto &d : h.value(QStringLiteral("messagesDeleted")).toArray()) {
-                const QString id = d.toObject().value(QStringLiteral("message")).toObject().value(QStringLiteral("id")).toString();
+                const QJsonObject msg = d.toObject().value(QStringLiteral("message")).toObject();
+                const QString id = msg.value(QStringLiteral("id")).toString();
+                // Its folders lose a message (a sent draft leaves Drafts this
+                // way): the counts drop now, and Gmail confirms them.
+                run->labels += m_cache->summary(id).labels + labelIds(msg);
+                m_cache->setLabels(id, {});
                 m_cache->remove(id);
                 run->added.removeAll(id);
                 run->addedInbox.remove(id);
@@ -927,6 +939,10 @@ void SyncEngine::trash(const QString &id)
                 m_cache->setLabels(id, labels);
                 emit messagesChanged();
             }
+            // The counts moved with the row; have Gmail confirm the ones this
+            // touched, so a count that slipped doesn't wait for a history poll.
+            touchCounts(QStringList{QStringLiteral("TRASH")} + (before.contains(kInbox) ? QStringList{kInbox} : QStringList())
+                        + userLabels(before));
         };
         const QStringList folders = userLabels(labelIds(json));
         if (folders.isEmpty() || m_untrashQueued.contains(id)) {
@@ -1076,20 +1092,25 @@ void SyncEngine::markUnread(const QString &id)
 }
 
 
-void SyncEngine::createLabel(const QString &name, const QString &backgroundColor)
+void SyncEngine::createLabel(const QString &name, const QString &backgroundColor,
+                             std::function<void(const QString &id)> then)
 {
     if (!m_running || name.trimmed().isEmpty()) {
         return;
     }
     const QString trimmed = name.trimmed();
-    m_api->createLabel(trimmed, backgroundColor, [this, trimmed](const QJsonObject &json, const ApiError &err) {
+    m_api->createLabel(trimmed, backgroundColor, [this, trimmed, then](const QJsonObject &json, const ApiError &err) {
         if (err.isError) {
             reportError(err, tr("Creating folder \"%1\"").arg(trimmed));
             return;
         }
         // Refresh so the new label (with counts) appears under Gmail Labels.
-        Q_UNUSED(json);
-        refreshLabels();
+        const QString id = json.value(QStringLiteral("id")).toString();
+        refreshLabels([then, id] {
+            if (then && !id.isEmpty()) {
+                then(id);
+            }
+        });
     });
 }
 
@@ -1186,6 +1207,7 @@ void SyncEngine::prunePurged()
     if (!m_running || m_cache->purged().isEmpty()) {
         return;
     }
+    m_lastPruneMs = monoMs();
     listTrash([this](bool ok, const QStringList &ids) {
         if (!ok) {
             return;
@@ -1269,6 +1291,99 @@ void SyncEngine::emptyLabel(const QString &id, int round, std::shared_ptr<QStrin
     });
 }
 
+// Which filed mail is Important: asked of Gmail a folder at a time (the
+// cache holds only what has been scrolled to), then the Inbox's taken out.
+struct ClearImportantRun {
+    QStringList queue; // labels still to ask about; INBOX last
+    QSet<QString> filed;
+    QSet<QString> inInbox;
+};
+
+void SyncEngine::clearImportantFromFiled()
+{
+    if (!m_running) {
+        return;
+    }
+    auto run = std::make_shared<ClearImportantRun>();
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user")) {
+            run->queue.append(l.id);
+        }
+    }
+    if (run->queue.isEmpty()) {
+        emit importantCleared(0, true);
+        return;
+    }
+    run->queue.append(kInbox);
+    clearImportantStep(run, {});
+}
+
+void SyncEngine::clearImportantStep(std::shared_ptr<ClearImportantRun> run, const QString &pageToken)
+{
+    const int gen = m_generation;
+    const QString important = QStringLiteral("IMPORTANT");
+    if (run->queue.isEmpty()) {
+        const QStringList ids = (run->filed - run->inInbox).values();
+        if (ids.isEmpty()) {
+            emit importantCleared(0, true);
+            return;
+        }
+        auto pending = std::make_shared<int>(0);
+        auto failed = std::make_shared<bool>(false);
+        auto cleared = std::make_shared<int>(0);
+        for (qsizetype at = 0; at < ids.size(); at += 1000) { // batchModify's limit
+            const QStringList chunk = ids.mid(at, 1000);
+            ++*pending;
+            m_api->batchModifyLabels(chunk, {}, {important},
+                                     [this, gen, chunk, important, pending, failed, cleared](const QJsonObject &,
+                                                                                             const ApiError &err) {
+                if (gen != m_generation) {
+                    return;
+                }
+                if (err.isError) {
+                    reportError(err, tr("Clearing Important"));
+                    *failed = true;
+                } else {
+                    const MailCache::Batch batch(*m_cache);
+                    for (const QString &messageId : chunk) {
+                        if (m_cache->contains(messageId)) {
+                            m_cache->modifyLabels(messageId, {}, {important});
+                        }
+                    }
+                    *cleared += int(chunk.size());
+                }
+                if (--*pending == 0) {
+                    refreshLabels();
+                    emit messagesChanged();
+                    emit importantCleared(*cleared, !*failed);
+                }
+            });
+        }
+        return;
+    }
+    const QString label = run->queue.first();
+    m_api->listMessages(QStringList{important, label}, 500, pageToken,
+                        [this, gen, run, label](const QJsonObject &json, const ApiError &err) {
+        if (gen != m_generation) {
+            return;
+        }
+        if (err.isError) {
+            reportError(err, tr("Clearing Important"));
+            emit importantCleared(0, false);
+            return;
+        }
+        QSet<QString> &into = label == kInbox ? run->inInbox : run->filed;
+        for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
+            into.insert(v.toObject().value(QStringLiteral("id")).toString());
+        }
+        const QString next = json.value(QStringLiteral("nextPageToken")).toString();
+        if (next.isEmpty()) {
+            run->queue.removeFirst();
+        }
+        clearImportantStep(run, next);
+    });
+}
+
 void SyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
 {
     if (!m_running || id.isEmpty() || messageIds.isEmpty()) {
@@ -1311,9 +1426,9 @@ void SyncEngine::restoreFolders(const QString &messageId, const QStringList &bef
     if (now.id.isEmpty()) {
         return;
     }
-    // Only where it is filed: the folders and the Inbox. Read state, stars
-    // and the rest stay as they are now.
-    QStringList folders{kInbox};
+    // Only where it is filed: the folders, the Inbox and Important. Read
+    // state, stars and the rest stay as they are now.
+    QStringList folders{kInbox, QStringLiteral("IMPORTANT")}; // a move into a folder clears Important
     for (const CachedLabel &l : m_cache->labels()) {
         if (l.type == QLatin1String("user")) {
             folders.append(l.id);
@@ -1387,6 +1502,12 @@ void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabe
         if (l.type == QLatin1String("user") && l.id != targetLabelId && before.labels.contains(l.id)) {
             remove.append(l.id);
         }
+    }
+    // Gmail marks mail Important by itself; filed mail would otherwise stay
+    // listed under Important as well as in its folder.
+    const QString important = QStringLiteral("IMPORTANT");
+    if (targetLabelId != inbox && before.labels.contains(important)) {
+        remove.append(important);
     }
     if (add.isEmpty() && remove.isEmpty()) {
         return; // already there, and nowhere else

@@ -94,7 +94,9 @@ public:
     // Labels as folders (users.labels.*). Create/rename use Gmail's "/" nesting
     // (e.g. "Projects/zmail"). deleteLabel removes the label only — messages
     // keep their other labels and are never trashed.
-    void createLabel(const QString &name, const QString &backgroundColor = {});
+    // then(id): once the new label is in the cache (not called if Gmail refuses).
+    void createLabel(const QString &name, const QString &backgroundColor = {},
+                     std::function<void(const QString &id)> then = {});
     void renameLabel(const QString &id, const QString &newName);
     void deleteLabel(const QString &id);
     // Empty a folder: every message with the label goes to Trash and out of
@@ -103,14 +105,23 @@ public:
     // Undo of emptyLabel: the messages come out of Trash and back into the
     // folder. (Those that were also in the Inbox return to the folder only.)
     void unemptyLabel(const QString &id, const QStringList &messageIds);
-    // Undo of a move: put a message's folders (user labels) and INBOX back as
-    // they were in `before`, leaving its other labels as they are now.
+    // One-off tidy-up for mail filed before moves cleared Important: takes
+    // IMPORTANT off every message that is in a folder (a user label) and not
+    // in the Inbox, cached or not. Ends with importantCleared().
+    void clearImportantFromFiled();
+    // Undo of a move: put a message's folders (user labels), INBOX and
+    // IMPORTANT back as they were in `before`, leaving its other labels as
+    // they are now.
     void restoreFolders(const QString &messageId, const QStringList &before);
     // A message lives in one folder. Moving it onto a user label adds that
     // label and removes INBOX and every other user label it had; moving it
     // onto INBOX puts it back in the Inbox and removes its user labels.
-    // System labels other than INBOX (UNREAD, STARRED, ...) are left alone.
+    // Filing it in a folder also takes it out of Important (IMPORTANT).
+    // Other system labels (UNREAD, STARRED, ...) are left alone.
     void moveToLabel(const QString &messageId, const QString &targetLabelId);
+    // Ask Gmail (shortly, coalesced) for these labels' counts: something
+    // changed in them that no sync call here made, such as a draft deleted.
+    void touchCounts(const QStringList &labelIds);
 
     int fullSyncs() const { return m_fullSyncs; }
 
@@ -119,6 +130,8 @@ signals:
     void countsChanged(); // some labels' totals / unread counts are new (not their names)
     void trashEmptied(int messages);
     void labelEmptied(const QString &labelId, const QStringList &messageIds); // emptyLabel finished
+    // clearImportantFromFiled() ended; ok=false if Gmail refused part of it.
+    void importantCleared(int messages, bool ok);
     // loadAll() ended: everything is in (complete), it was stopped, or a page failed.
     void loadAllFinished(const QString &labelId, int loaded, bool complete);
     void messagesChanged();
@@ -149,6 +162,7 @@ private:
     void reportError(const ApiError &e, const QString &what);
     void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
     QStringList userLabels(const QStringList &labels) const; // the ones that are folders
+    void clearImportantStep(std::shared_ptr<struct ClearImportantRun> run, const QString &pageToken);
     void loadAllStep(bool retried);
     QString m_loadAllLabel;
     QString m_loadAllName;
@@ -177,7 +191,6 @@ private:
     // Labels whose counts a change just touched: Gmail is asked for those
     // alone (a labels.get each), a moment later, instead of for every label.
     QSet<QString> m_countsDirty;
-    void touchCounts(const QStringList &labelIds);
     void refreshCounts(const QSet<QString> &labelIds);
     static constexpr int kTargetedCountLabels = 12; // more than this: one full refresh instead
     int m_initialCount = 500;
@@ -200,6 +213,8 @@ private:
     int m_inFlight = 0;
     QSet<QString> m_loadingLabels;
     qint64 m_lastLabelsRefreshMs = 0;
+    qint64 m_lastPruneMs = 0; // prunePurged(), so a stubborn mismatch doesn't relist the Trash every poll
+    static constexpr qint64 kPruneMinIntervalMs = 10 * 60 * 1000;
     bool m_labelsRefreshing = false;
     bool m_labelsRefreshAgain = false; // a forced refresh was asked for during one
     static constexpr qint64 kLabelRefreshMinIntervalMs = 60000;

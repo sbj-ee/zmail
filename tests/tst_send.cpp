@@ -292,7 +292,7 @@ private slots:
         QCOMPARE(decodeWords(p.headers.value("cc")), QStringLiteral("José Núñez <jose@example.es>"));
         QCOMPARE(p.headers.value("bcc"), QStringLiteral("audit@example.com")); // Gmail strips it on delivery
         QCOMPARE(decodeWords(p.headers.value("subject")), m.subject);
-        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.6.10")));
+        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.6.11")));
 
         // multipart/mixed( multipart/alternative(text, html), attachment )
         const QString ct = p.headers.value("content-type");
@@ -833,10 +833,23 @@ private slots:
         QCOMPARE(L.g.messages().value(L.g.drafts().value(draftId).messageId).subject, QStringLiteral("Draft two"));
         QVERIFY(L.g.requests.contains(QStringLiteral("PUT /gmail/v1/users/me/drafts/") + draftId));
 
+        // The sidebar's Drafts count follows: one while it waits, none once sent.
+        const auto draftCount = [&L] {
+            for (const zmail::CachedLabel &l : L.session->cache()->labels()) {
+                if (l.id == QLatin1String("DRAFT")) {
+                    return l.total;
+                }
+            }
+            return -1;
+        };
+        L.session->sync()->touchCounts({QStringLiteral("DRAFT")});
+        QTRY_COMPARE_WITH_TIMEOUT(draftCount(), 1, 10000);
+
         QSignalSpy sent(&c, &ComposeWindow::sent);
         c.send();
         QTRY_COMPARE_WITH_TIMEOUT(sent.size(), 1, 10000);
         QTRY_VERIFY_WITH_TIMEOUT(L.g.drafts().isEmpty(), 10000); // sent -> draft deleted
+        QTRY_COMPARE_WITH_TIMEOUT(draftCount(), 0, 5000);
         QVERIFY(L.g.requests.contains(QStringLiteral("DELETE /gmail/v1/users/me/drafts/") + draftId));
     }
 

@@ -157,6 +157,9 @@ public:
     // so they stay in Gmail's own Trash until it purges them (30 days).
     void setPurged(const QStringList &ids); // replaces the set
     QSet<QString> purged() const;
+    // Cached mail in Trash that Empty Trash has not hidden: what the Trash
+    // mailbox has on show.
+    int unpurgedTrash() const;
 
     // The queue, as in Eudora: messages written and set aside in Out with
     // "Send Later", delivered by File > Send Queued Messages. Each is kept
@@ -170,6 +173,7 @@ public:
         qint64 createdMs = 0;
         qint64 size = 0;
         QString error;     // why the last attempt to send it failed
+        qint64 sendAtMs = 0; // Send Later's time; 0: it waits for Send Queued Messages
         QByteArray state;  // the compose window as it was (ComposeWindow::saveState), to edit it again
     };
     qint64 addQueued(const QueuedMessage &m);

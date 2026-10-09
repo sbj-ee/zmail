@@ -156,7 +156,8 @@ private slots:
                       QStringLiteral("#00897b")});
         const QString mid = r.g.addMessage(
             r.msg(QStringLiteral("Move me"),
-                  {QStringLiteral("INBOX"), QStringLiteral("UNREAD"), QStringLiteral("Label_1")}),
+                  {QStringLiteral("INBOX"), QStringLiteral("UNREAD"), QStringLiteral("IMPORTANT"),
+                   QStringLiteral("Label_1")}),
             false);
 
         r.sync->start();
@@ -166,7 +167,8 @@ private slots:
             local.id = mid;
             local.threadId = mid;
             local.subject = QStringLiteral("Move me");
-            local.labels = {QStringLiteral("INBOX"), QStringLiteral("UNREAD"), QStringLiteral("Label_1")};
+            local.labels = {QStringLiteral("INBOX"), QStringLiteral("UNREAD"), QStringLiteral("IMPORTANT"),
+                            QStringLiteral("Label_1")};
             local.internalDateMs = QDateTime::currentMSecsSinceEpoch();
             r.cache.upsert(local);
         }
@@ -179,11 +181,62 @@ private slots:
         QVERIFY(!got.contains(QStringLiteral("INBOX")));
         QVERIFY(!got.contains(QStringLiteral("Label_1")));
         QVERIFY(got.contains(QStringLiteral("UNREAD")));
+        QVERIFY(!got.contains(QStringLiteral("IMPORTANT"))); // filed mail leaves Important
 
         const QStringList local = r.cache.message(mid).labels;
         QVERIFY(local.contains(QStringLiteral("Label_2")));
         QVERIFY(!local.contains(QStringLiteral("INBOX")));
         QVERIFY(!local.contains(QStringLiteral("Label_1")));
+        QVERIFY(!local.contains(QStringLiteral("IMPORTANT")));
+
+        // Undo puts it back where it was, Important included.
+        r.sync->restoreFolders(mid, {QStringLiteral("INBOX"), QStringLiteral("UNREAD"), QStringLiteral("IMPORTANT"),
+                                     QStringLiteral("Label_1")});
+        QTRY_VERIFY_WITH_TIMEOUT(r.g.messages().value(mid).labels.contains(QStringLiteral("IMPORTANT")), 10000);
+        QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("INBOX")));
+        QVERIFY(r.g.messages().value(mid).labels.contains(QStringLiteral("Label_1")));
+        QVERIFY(!r.g.messages().value(mid).labels.contains(QStringLiteral("Label_2")));
+    }
+
+    // The one-off tidy-up: Important comes off mail that is in a folder and
+    // not in the Inbox, whether or not it has been fetched into the cache.
+    void clearImportantFromFiledLeavesTheInboxAlone()
+    {
+        Rig r;
+        r.g.seedSystemLabels();
+        r.g.addLabel({QStringLiteral("Label_1"), QStringLiteral("Work"), QStringLiteral("user"), {}});
+        r.g.addLabel({QStringLiteral("Label_2"), QStringLiteral("Family"), QStringLiteral("user"), {}});
+        const QString imp = QStringLiteral("IMPORTANT");
+        const QString filed1 = r.g.addMessage(r.msg(QStringLiteral("Filed 1"), {imp, QStringLiteral("Label_1")}, 1), false);
+        const QString filed2 = r.g.addMessage(
+            r.msg(QStringLiteral("Filed 2"), {imp, QStringLiteral("STARRED"), QStringLiteral("Label_2")}, 2), false);
+        const QString inboxLabelled = r.g.addMessage(
+            r.msg(QStringLiteral("Inbox, labelled"), {imp, QStringLiteral("INBOX"), QStringLiteral("Label_1")}, 3), false);
+        const QString inboxOnly = r.g.addMessage(r.msg(QStringLiteral("Inbox"), {imp, QStringLiteral("INBOX")}, 4), false);
+        const QString loose = r.g.addMessage(r.msg(QStringLiteral("Archived"), {imp}, 5), false);
+
+        r.sync->start();
+        QTRY_VERIFY_WITH_TIMEOUT(!r.sync->isBusy(), 20000);
+
+        QSignalSpy done(r.sync.get(), &SyncEngine::importantCleared);
+        r.sync->clearImportantFromFiled();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 1, 20000);
+        QCOMPARE(done.first().at(0).toInt(), 2);
+        QVERIFY(done.first().at(1).toBool());
+
+        const auto labels = [&r](const QString &id) { return r.g.messages().value(id).labels; };
+        QVERIFY(!labels(filed1).contains(imp));
+        QVERIFY(labels(filed1).contains(QStringLiteral("Label_1")));
+        QVERIFY(!labels(filed2).contains(imp));
+        QVERIFY(labels(filed2).contains(QStringLiteral("STARRED")));
+        QVERIFY(labels(inboxLabelled).contains(imp));
+        QVERIFY(labels(inboxOnly).contains(imp));
+        QVERIFY(labels(loose).contains(imp));
+
+        // Nothing left to do the second time.
+        r.sync->clearImportantFromFiled();
+        QTRY_COMPARE_WITH_TIMEOUT(done.size(), 2, 20000);
+        QCOMPARE(done.at(1).at(0).toInt(), 0);
     }
 
     // A multi-select move sends one modify per message; the sidebar counts are

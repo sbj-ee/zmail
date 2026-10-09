@@ -394,6 +394,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_snoozeTimer = new QTimer(this);
     m_snoozeTimer->setInterval(30 * 1000); // wake check while the app is open
     connect(m_snoozeTimer, &QTimer::timeout, this, &MainWindow::checkSnoozeWakes);
+    connect(m_snoozeTimer, &QTimer::timeout, this, &MainWindow::sendDueQueued);
 
     buildMenus();
     buildToolbar();
@@ -632,6 +633,11 @@ void MainWindow::buildMenus()
     // Ctrl+Shift+J for Not Junk). Sharing it made Qt treat the key as
     // ambiguous and run neither (0.6.0-0.6.6).
     filterNow->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_J));
+    QAction *archive = message->addAction(icon(QStringLiteral("archive")), tr("&Archive"), this,
+                                          [this]() { archiveSelected(); });
+    archive->setObjectName(QStringLiteral("menuActionArchive"));
+    archive->setProperty("lucide", QStringLiteral("archive"));
+    archive->setToolTip(tr("Move to the Archive folder (out of the Inbox)"));
     QAction *del = message->addAction(icon(QStringLiteral("trash")), tr("&Delete"), this,
                                       [this]() { trashSelected(); });
     del->setObjectName(QStringLiteral("menuActionDelete"));
@@ -1085,11 +1091,17 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
             reloadFromCache(); // it may have been in the queue
             populateMailboxes();
         });
-        connect(c, &ComposeWindow::queued, this, [this]() {
+        connect(c, &ComposeWindow::queued, this, [this](qint64 sendAtMs) {
             reloadFromCache();
             populateMailboxes();
             const QString key = findChild<QAction *>(QStringLiteral("actionSendQueued"))->shortcut().toString(QKeySequence::NativeText);
-            statusBar()->showMessage(tr("Queued in Out. File \u203a Send Queued Messages (%1) sends it.").arg(key), 8000);
+            statusBar()->showMessage(
+                sendAtMs > 0 ? tr("Waiting in Sent, to go %1.")
+                                   .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(sendAtMs).toLocalTime(),
+                                                           QStringLiteral("MM/dd/yyyy h:mm AP")))
+                             : tr("Queued in Sent. File \u203a Send Queued Messages (%1) sends it.").arg(key),
+                8000);
+            sendDueQueued(); // a time already past: now
         });
     } else if (sampleReply) {
         c->loadSampleReply();
@@ -1145,7 +1157,7 @@ void MainWindow::updateMessageActions()
     // Delete / Mark / Junk: only with a message actually selected (so never in an
     // empty mailbox), in sample mode too. Multi-select keeps a current index.
     const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
-    for (const char *n : {"actionDelete", "menuActionDelete", "actionMarkRead", "actionMarkUnread",
+    for (const char *n : {"actionDelete", "menuActionDelete", "menuActionArchive", "actionMarkRead", "actionMarkUnread",
                           "actionJunk", "menuActionJunk", "menuActionNotJunk", "menuActionUnsnooze"}) {
         if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             a->setEnabled(selected);
@@ -1918,7 +1930,7 @@ QDialog *MainWindow::showShortcuts()
     row(tr("Zoom the message"), tr("Ctrl+Wheel"));
     heading(tr("Writing a message"));
     row(tr("Send"), tr("Ctrl+Enter, Ctrl+E"));
-    row(tr("Send Later (queue in Out)"), tr("Ctrl+Shift+Enter"));
+    row(tr("Send Later (at a time, or queued in Sent)"), tr("Ctrl+Shift+Enter"));
     row(tr("Save Draft"), QKeySequence(QKeySequence::Save).toString(QKeySequence::NativeText));
     row(tr("Attach"), tr("Ctrl+H"));
     row(tr("Insert link"), tr("Ctrl+K"));
@@ -1955,6 +1967,26 @@ void MainWindow::loadAllMessages(const QString &keyIn)
     }
     sync->loadAll(label, name);
     rebuildMailboxMenus(); // "Stop Loading"
+}
+
+void MainWindow::clearImportantFromFiled()
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync) {
+        statusBar()->showMessage(tr("Sign in to Gmail to clear Important."), 5000);
+        return;
+    }
+    const auto choice = QMessageBox::question(
+        this, tr("Clear Important from Filed Mail"),
+        tr("Take Gmail's Important marker off every message that is in a folder?\n\n"
+           "Mail still in the Inbox keeps it, and nothing is moved or deleted. There is no Undo; "
+           "a message can be marked Important again in Gmail."),
+        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (choice != QMessageBox::Yes) {
+        return;
+    }
+    sync->clearImportantFromFiled();
+    statusBar()->showMessage(tr("Clearing Important from filed mail\u2026"), 4000);
 }
 
 // ---- mailbox windows -----------------------------------------------------------
@@ -2178,6 +2210,10 @@ void MainWindow::rebuildMailboxMenus()
                                             [this]() { loadAllMessages(); });
     all->setObjectName(QStringLiteral("actionLoadAll"));
     all->setToolTip(tr("Fetch every message in the current mailbox, not only the ones scrolled to so far"));
+    QAction *unimportant = m_mailboxMenu->addAction(tr("Clear &Important from Filed Mail\u2026"), this,
+                                                    [this]() { clearImportantFromFiled(); });
+    unimportant->setObjectName(QStringLiteral("actionClearImportantFiled"));
+    unimportant->setToolTip(tr("Take Gmail's Important marker off everything already in a folder"));
     m_mailboxMenu->addSeparator();
     const auto target = [](const QString &key) -> QString {
         if (key == QLatin1String("In")) {
@@ -2310,6 +2346,27 @@ void MainWindow::sendQueued()
     sendNextQueued(0, 0, ids);
 }
 
+// Send Later with a time: the queued messages whose time has come. (Ones
+// that already failed wait for Send Queued Messages, not a retry a minute.)
+void MainWindow::sendDueQueued()
+{
+    if (!(m_live && m_session && m_session->cache() && m_session->sender()) || m_sendingQueue) {
+        return;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QList<qint64> ids;
+    for (const zmail::MailCache::QueuedMessage &q : m_session->cache()->queued()) {
+        if (q.sendAtMs > 0 && q.sendAtMs <= now && q.error.isEmpty()) {
+            ids.append(q.id);
+        }
+    }
+    if (ids.isEmpty()) {
+        return;
+    }
+    m_sendingQueue = true;
+    sendNextQueued(0, 0, ids);
+}
+
 // One at a time, in the order they were queued.
 void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
 {
@@ -2317,8 +2374,8 @@ void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
         m_sendingQueue = false;
         QString text = sent == 1 ? tr("Sent 1 queued message.") : tr("Sent %1 queued messages.").arg(sent);
         if (failed > 0) {
-            text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Out.")
-                                                    : tr("%1 could not be sent and are still in Out.").arg(failed));
+            text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Sent.")
+                                                    : tr("%1 could not be sent and are still in Sent.").arg(failed));
         }
         statusBar()->showMessage(text, 8000);
         reloadFromCache();
@@ -2344,7 +2401,12 @@ void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
         if (r.ok) {
             guard->m_session->cache()->removeQueued(id);
             if (!q.draftId.isEmpty()) {
-                sender->deleteDraft(q.draftId, [](const zmail::Sender::Result &) {});
+                sender->deleteDraft(q.draftId, [guard](const zmail::Sender::Result &) {
+                    if (guard && guard->m_session && guard->m_session->sync()) {
+                        guard->m_session->sync()->touchCounts({QStringLiteral("DRAFT")}); // Drafts drops it now
+                        guard->m_session->syncSoon();
+                    }
+                });
             }
             guard->sendNextQueued(sent + 1, failed, left);
         } else {
@@ -2666,7 +2728,7 @@ QMenu *MainWindow::buildListMenu()
     menu->setObjectName(QStringLiteral("messageListMenu"));
     for (const char *n : {"actionOpenMessage", "", "menuActionReply", "menuActionReplyAll", "menuActionForward", "",
                           "actionMarkRead", "actionMarkUnread", "", "menuActionJunk", "menuActionNotJunk", "",
-                          "menuActionUnsnooze", "", "menuActionDelete"}) {
+                          "menuActionUnsnooze", "", "menuActionArchive", "menuActionDelete"}) {
         if (!*n) {
             menu->addSeparator();
         } else if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
@@ -2674,11 +2736,11 @@ QMenu *MainWindow::buildListMenu()
         }
     }
     if (m_proxy->mailbox() != QLatin1String("Snoozed")) {
-        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildSnoozeMenu(menu));
+        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionArchive")), buildSnoozeMenu(menu));
     }
-    menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), buildFlagMenu(menu));
+    menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionArchive")), buildFlagMenu(menu));
     if (m_transferMenu && !m_transferMenu->isEmpty()) {
-        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionDelete")), m_transferMenu); // the menu bar's own
+        menu->insertMenu(findChild<QAction *>(QStringLiteral("menuActionArchive")), m_transferMenu); // the menu bar's own
     }
     const QModelIndex cur = m_list->currentIndex();
     if (cur.isValid()) {

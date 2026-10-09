@@ -7,6 +7,7 @@
 #include "core/GmailClient.h"
 #include "core/Log.h"
 #include "core/MailSession.h"
+#include "core/SyncEngine.h"
 #include "core/ContactStore.h"
 #include "core/MailCache.h"
 #include "core/Markdown.h"
@@ -42,6 +43,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QCompleter>
+#include <QDateTimeEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QRadioButton>
 #include <QStringListModel>
 #include <QMenu>
 #include <QMessageBox>
@@ -225,8 +230,8 @@ void ComposeWindow::buildToolbar()
     QAction *later = tb->addAction(icon(QStringLiteral("clock")), tr("Send Later"));
     later->setObjectName(QStringLiteral("actionSendLater"));
     later->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_Return));
-    later->setToolTip(tr("Queue it in Out, to go with File \u203a Send Queued Messages (Ctrl+Shift+Enter)"));
-    connect(later, &QAction::triggered, this, &ComposeWindow::queue);
+    later->setToolTip(tr("Send at a time you choose, or hold it for File \u203a Send Queued Messages (Ctrl+Shift+Enter)"));
+    connect(later, &QAction::triggered, this, &ComposeWindow::sendLater);
     m_saveDraft = tb->addAction(icon(QStringLiteral("save")), tr("Save Draft"));
     m_saveDraft->setObjectName(QStringLiteral("actionSaveDraft"));
     m_saveDraft->setShortcut(QKeySequence::Save);
@@ -1539,7 +1544,15 @@ void ComposeWindow::send()
             self->m_queuedId = 0;
         }
         if (!self->m_draftId.isEmpty()) {
-            sender->deleteDraft(self->m_draftId, [](const Sender::Result &) {});
+            // Checked again once the draft is gone, so Drafts drops it now
+            // rather than at the next poll.
+            const QPointer<zmail::MailSession> session = self->m_session;
+            sender->deleteDraft(self->m_draftId, [session](const Sender::Result &) {
+                if (session && session->sync()) {
+                    session->sync()->touchCounts({QStringLiteral("DRAFT")});
+                    session->syncSoon();
+                }
+            });
         }
         if (self->m_session) {
             self->m_session->syncSoon();
@@ -1549,10 +1562,58 @@ void ComposeWindow::send()
     });
 }
 
-// Send Later: the finished message goes into the queue in Out (as in Eudora)
-// and leaves with File > Send Queued Messages. Checked exactly as Send
-// checks it, so nothing waits in the queue that can't be sent.
-void ComposeWindow::queue()
+// Send Later asks when: at a date and time, or whenever File > Send Queued
+// Messages is next chosen (as in Eudora).
+void ComposeWindow::sendLater()
+{
+    if (m_busy) {
+        return;
+    }
+    QString why;
+    if (!validate(&why)) { // before asking when, not after
+        m_lastError.clear();
+        fail(why);
+        return;
+    }
+    QDialog dlg(this);
+    dlg.setObjectName(QStringLiteral("sendLaterDialog"));
+    dlg.setWindowTitle(tr("Send Later"));
+    auto *lay = new QVBoxLayout(&dlg);
+    auto *at = new QRadioButton(tr("Send &at:"), &dlg);
+    at->setObjectName(QStringLiteral("sendLaterAt"));
+    at->setChecked(true);
+    lay->addWidget(at);
+    // The next full hour, as a start.
+    QDateTime start = QDateTime::currentDateTime().addSecs(3600);
+    start.setTime(QTime(start.time().hour(), 0));
+    auto *edit = new QDateTimeEdit(start, &dlg);
+    edit->setObjectName(QStringLiteral("sendLaterDateTime"));
+    edit->setCalendarPopup(true);
+    edit->setDisplayFormat(QStringLiteral("MM/dd/yyyy h:mm AP")); // as in the message list
+    edit->setMinimumDateTime(QDateTime::currentDateTime());
+    lay->addWidget(edit);
+    auto *held = new QRadioButton(tr("&Hold it until I choose File \u203a Send Queued Messages"), &dlg);
+    held->setObjectName(QStringLiteral("sendLaterHold"));
+    lay->addWidget(held);
+    auto *note = new QLabel(tr("zmail sends it at that time if it is running, and otherwise the next time it starts."), &dlg);
+    note->setWordWrap(true);
+    note->setEnabled(false);
+    lay->addWidget(note);
+    connect(at, &QRadioButton::toggled, edit, &QWidget::setEnabled);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("Send Later"));
+    lay->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) {
+        return;
+    }
+    queue(at->isChecked() ? edit->dateTime().toMSecsSinceEpoch() : 0);
+}
+
+// The finished message goes into the queue. Checked exactly as Send checks
+// it, so nothing waits in the queue that can't be sent.
+void ComposeWindow::queue(qint64 sendAtMs)
 {
     if (m_busy) {
         return;
@@ -1595,6 +1656,7 @@ void ComposeWindow::queue()
     q.subject = m.subject;
     q.text = m.text;
     q.state = saveState();
+    q.sendAtMs = sendAtMs;
     if (cache->addQueued(q) <= 0) {
         fail(tr("Couldn't put the message in the queue."));
         return;
@@ -1604,7 +1666,7 @@ void ComposeWindow::queue()
         m_queuedId = 0;
     }
     m_sent = true; // nothing left to save or ask about on close
-    emit queued();
+    emit queued(sendAtMs);
     close();
 }
 

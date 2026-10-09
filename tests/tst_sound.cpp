@@ -308,6 +308,16 @@ private slots:
         dlg->reject();
         QVERIFY(w.newMailSound()->soundFile().isEmpty());
     }
+
+    // Running the tests must not make a sound: they simulate mail arriving,
+    // and the chime played on the developer's speakers every time (0.6.8).
+    void testRunsAreSilent()
+    {
+        QCOMPARE(NewMailSound::outputVolume(), 0.0f);
+        NewMailSound s;
+        s.play(); // counted, and inaudible
+        QVERIFY(s.playCount() >= 1);
+    }
 };
 
 QTEST_MAIN(TstSound)

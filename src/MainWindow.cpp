@@ -1929,6 +1929,34 @@ QDialog *MainWindow::showShortcuts()
     return dlg;
 }
 
+void MainWindow::loadAllMessages(const QString &keyIn)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (!sync) {
+        statusBar()->showMessage(tr("Sign in to Gmail to load mail."), 5000);
+        return;
+    }
+    if (!sync->loadingAll().isEmpty()) {
+        sync->stopLoadAll();
+        statusBar()->showMessage(tr("Stopping after the page being fetched\u2026"), 5000);
+        return;
+    }
+    const QString key = keyIn.isEmpty() ? m_proxy->mailbox() : keyIn;
+    const QString label = labelForMailbox(key);
+    if (label.isEmpty()) {
+        statusBar()->showMessage(tr("Choose a mailbox to load."), 5000);
+        return;
+    }
+    QString name = key;
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == key) {
+            name = (*it)->text(0);
+        }
+    }
+    sync->loadAll(label, name);
+    rebuildMailboxMenus(); // "Stop Loading"
+}
+
 // ---- mailbox windows -----------------------------------------------------------
 
 QList<MailboxWindow *> MainWindow::mailboxWindows() const
@@ -2145,6 +2173,11 @@ void MainWindow::rebuildMailboxMenus()
     own->setObjectName(QStringLiteral("actionMailboxWindow"));
     own->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N));
     own->setToolTip(tr("Open the current mailbox in a window of its own"));
+    const bool loading = m_live && m_session && m_session->sync() && !m_session->sync()->loadingAll().isEmpty();
+    QAction *all = m_mailboxMenu->addAction(loading ? tr("Stop &Loading") : tr("&Load All Messages"), this,
+                                            [this]() { loadAllMessages(); });
+    all->setObjectName(QStringLiteral("actionLoadAll"));
+    all->setToolTip(tr("Fetch every message in the current mailbox, not only the ones scrolled to so far"));
     m_mailboxMenu->addSeparator();
     const auto target = [](const QString &key) -> QString {
         if (key == QLatin1String("In")) {

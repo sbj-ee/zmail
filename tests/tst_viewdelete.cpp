@@ -1024,6 +1024,67 @@ private slots:
         QCOMPARE(f.w->queuedCount(), 1);
     }
 
+    // Load All Messages: every message of a mailbox, not just the first
+    // pages; then a big selection is deleted in batches, and Undo still works.
+    void loadAllThenDeleteMany()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("gmail:IMPORTANT"), {QStringLiteral("INBOX"), QStringLiteral("IMPORTANT")}));
+        QStringList older;
+        for (int i = 0; i < 60; ++i) {
+            MockGoogle::Message m;
+            m.from = QStringLiteral("Old <old@example.com>");
+            m.subject = QStringLiteral("Important %1").arg(i);
+            m.text = QStringLiteral("Fake test mail.");
+            m.labels = {QStringLiteral("IMPORTANT"), i % 2 ? QStringLiteral("INBOX") : kLabel};
+            m.date = QDateTime::currentDateTimeUtc().addDays(-1 - i);
+            older << f.g.addMessage(m, false);
+        }
+        f.session->sync()->setPageSize(10);
+        f.session->cache()->setMeta(QStringLiteral("pageToken:IMPORTANT"), QStringLiteral("3")); // more to come
+        QCOMPARE(f.proxy->rowCount(), 3);
+        QVERIFY(f.w->findChild<QAction *>(QStringLiteral("actionLoadAll")));
+
+        QSignalSpy finished(f.session->sync(), &SyncEngine::loadAllFinished);
+        f.w->loadAllMessages();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 20000);
+        QCOMPARE(finished.first().at(1).toInt(), 63);
+        QVERIFY(finished.first().at(2).toBool()); // complete
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 63, 10000);
+        QVERIFY(!f.session->sync()->hasMore(QStringLiteral("IMPORTANT")));
+        QVERIFY(f.session->sync()->loadingAll().isEmpty());
+        // Asked again with nothing left: done at once.
+        f.w->loadAllMessages();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 5000);
+
+        // Select everything and delete: one batch request, not 63.
+        const QString batch = QStringLiteral("POST /gmail/v1/users/me/messages/batchModify");
+        f.list->selectAll();
+        f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.count(batch), 1, 10000);
+        QVERIFY(f.g.trashCalls.isEmpty());
+        for (const QString &id : older + QStringList{f.a, f.b, f.c}) {
+            const QStringList l = f.g.messages().value(id).labels;
+            QVERIFY(l.contains(QStringLiteral("TRASH")));
+            QVERIFY(!l.contains(QStringLiteral("INBOX")) && !l.contains(kLabel)); // out of the Inbox and its folder
+        }
+        // Undo puts them back where they were.
+        f.w->findChild<QAction *>(QStringLiteral("actionUndoDelete"))->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 63, 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(!f.g.messages().value(older.first()).labels.contains(QStringLiteral("TRASH")), 20000);
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(older.first()).labels.contains(kLabel), 20000);
+
+        // If Gmail refuses the batch, they are deleted one by one instead.
+        f.g.addFault({QStringLiteral("/gmail/v1/users/me/messages/batchModify"), 400, 1, -1});
+        f.list->setCurrentIndex(f.proxy->index(0, 0)); // Delete needs a current message
+        QTRY_VERIFY(f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->isEnabled());
+        f.list->selectAll();
+        f.w->findChild<QAction *>(QStringLiteral("menuActionDelete"))->trigger();
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.trashCalls.size(), 63, 30000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 10000);
+    }
+
     // Drag a message from the list onto a folder in the sidebar.
     void dragOntoAFolderMovesTheMessage()
     {

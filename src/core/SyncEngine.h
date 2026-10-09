@@ -47,6 +47,12 @@ public:
     // First page of a label that hasn't been synced yet (mailbox selected).
     void ensureLabel(const QString &labelId);
     bool hasMore(const QString &labelId) const;
+    // Every message of a label, not just the pages scrolled to so far: keeps
+    // fetching, 500 at a time, until there are no more (or stopLoadAll()).
+    // Progress comes as statusChanged(); loadAllFinished() says how it ended.
+    void loadAll(const QString &labelId, const QString &displayName = {});
+    void stopLoadAll();
+    QString loadingAll() const { return m_loadAllLabel; } // the label being loaded, or empty
 
     using MessageCb = std::function<void(const CachedMessage &m, const QString &error)>;
     void fetchBody(const QString &id, MessageCb cb);
@@ -66,6 +72,10 @@ public:
     // Move to Gmail's Trash (users.messages.trash): optimistic cache update,
     // rolled back if the call fails.
     void trash(const QString &id);
+    // Many at once (hundreds, thousands): one request per thousand messages
+    // instead of one each. The same result as trash() on every id, and the
+    // same Undo; if Gmail refuses a batch, those are trashed one by one.
+    void trashMany(const QStringList &ids);
     // Undo a trash() from this session: users.messages.untrash, then put
     // back any labels the message had before (INBOX, UNREAD, ...) that
     // untrash didn't restore. Optimistic, rolled back if Gmail refuses.
@@ -108,6 +118,8 @@ signals:
     void labelsChanged();
     void trashEmptied(int messages);
     void labelEmptied(const QString &labelId, const QStringList &messageIds); // emptyLabel finished
+    // loadAll() ended: everything is in (complete), it was stopped, or a page failed.
+    void loadAllFinished(const QString &labelId, int loaded, bool complete);
     void messagesChanged();
     void newMail(const QStringList &ids);
     void snoozesWoke(const QStringList &ids);
@@ -136,6 +148,10 @@ private:
     void reportError(const ApiError &e, const QString &what);
     void sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson);
     QStringList userLabels(const QStringList &labels) const; // the ones that are folders
+    void loadAllStep(bool retried);
+    QString m_loadAllLabel;
+    QString m_loadAllName;
+    bool m_loadAllStop = false;
     // Every message id in Gmail's Trash, a page at a time; ok=false if a page failed.
     void listTrash(std::function<void(bool ok, const QStringList &ids)> done, const QString &pageToken = {},
                    std::shared_ptr<QStringList> sofar = {});

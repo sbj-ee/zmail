@@ -47,6 +47,11 @@ public:
     static QString resourceUrl() { return QStringLiteral("qrc:/sounds/new-mail.wav"); }
     static QString resourcePath() { return QStringLiteral(":/sounds/new-mail.wav"); }
 
+    // The volume sounds play at: 0 in a test or headless run, so running the
+    // tests (which simulate mail arriving) doesn't chime on the developer's
+    // speakers; normal otherwise.
+    static float outputVolume();
+
     // True when path is a readable local .wav (case-insensitive extension).
     static bool isUsableSoundFile(const QString &path);
 

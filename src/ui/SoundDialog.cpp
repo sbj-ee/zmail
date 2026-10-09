@@ -169,7 +169,7 @@ void SoundDialog::test()
     if (!m_preview) {
         m_preview = new QSoundEffect(this);
         m_preview->setObjectName(QStringLiteral("soundPreviewEffect"));
-        m_preview->setVolume(0.8f);
+        m_preview->setVolume(NewMailSound::outputVolume()); // silent in a test run
         connect(m_preview, &QSoundEffect::statusChanged, this, &SoundDialog::playPreviewIfReady);
     }
     const QUrl src = previewSource();

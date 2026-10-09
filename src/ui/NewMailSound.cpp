@@ -3,6 +3,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
+#include <QGuiApplication>
+#include <QStandardPaths>
 #include <QSoundEffect>
 #include <QUrl>
 
@@ -72,12 +74,19 @@ void NewMailSound::saveToSettings() const
     }
 }
 
+float NewMailSound::outputVolume()
+{
+    const bool silent = QStandardPaths::isTestModeEnabled() || QGuiApplication::platformName() == QLatin1String("offscreen") ||
+                        qEnvironmentVariableIsSet("ZMAIL_SILENT");
+    return silent ? 0.0f : 0.8f;
+}
+
 void NewMailSound::ensureEffect()
 {
     if (!m_effect) {
         m_effect = new QSoundEffect(this);
-        m_effect->setVolume(0.8f);
     }
+    m_effect->setVolume(outputVolume());
     // Always re-resolve: the custom file may have appeared or vanished.
     m_effect->setSource(resolvedSource());
 }

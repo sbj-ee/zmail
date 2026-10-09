@@ -316,6 +316,10 @@ private:
     int m_listRowSpacing = 6;
     void applyListAppearance();
     void loadMoreIfListIsShort();
+    // The sidebar's counts, refreshed where they stand (no rebuild): each
+    // mailbox shows "unread / total", or just the total when all is read.
+    void updateMailboxCounts();
+    static void setMailboxCount(QTreeWidgetItem *item, int total, int unread, const QFont &base, const QColor &dim);
     QString m_autoLoadMailbox; // the mailbox the last automatic "load more" was for...
     int m_autoLoadRows = -1;   // ...and how many rows it showed then
     QStringList m_savedAttachments;

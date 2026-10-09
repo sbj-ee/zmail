@@ -187,8 +187,8 @@ private slots:
     }
 
     // A multi-select move sends one modify per message; the sidebar counts are
-    // refreshed once afterwards, not once per message (each refresh is a
-    // labels.list plus a labels.get per label).
+    // followed at once from the cache, and confirmed with Gmail once
+    // afterwards for just the folders that changed, not once per message.
     void movingSeveralMessagesRefreshesLabelsOnce()
     {
         Rig r;
@@ -221,9 +221,31 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(std::all_of(ids.begin(), ids.end(), [&r](const QString &id) {
             return r.g.messages().value(id).labels.contains(QStringLiteral("Label_2"));
         }), 20000);
-        QTRY_COMPARE_WITH_TIMEOUT(labelLists(), before + 1, 10000);
+        // The counts follow at once, from the cache, before Gmail is asked:
+        const auto total = [&r](const QString &id) {
+            for (const CachedLabel &l : r.cache.labels()) {
+                if (l.id == id) {
+                    return l.total;
+                }
+            }
+            return -1;
+        };
+        QCOMPARE(total(QStringLiteral("Label_2")), 8);
+        QCOMPARE(total(QStringLiteral("INBOX")), 0);
+        // ...and then Gmail is asked for the two folders that changed, once
+        // each, not for the whole list of labels and every label's counts.
+        const auto gets = [&r](const QString &id) {
+            return int(r.g.requests.count(QStringLiteral("GET /gmail/v1/users/me/labels/") + id));
+        };
+        const int inboxGets = gets(QStringLiteral("INBOX"));
+        const int folderGets = gets(QStringLiteral("Label_2"));
+        QTRY_COMPARE_WITH_TIMEOUT(gets(QStringLiteral("Label_2")), folderGets + 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(gets(QStringLiteral("INBOX")), inboxGets + 1, 10000);
         QTest::qWait(1000); // and no more follow
-        QCOMPARE(labelLists(), before + 1);
+        QCOMPARE(gets(QStringLiteral("Label_2")), folderGets + 1);
+        QCOMPARE(labelLists(), before); // no full refresh
+        QCOMPARE(total(QStringLiteral("Label_2")), 8);
+        QCOMPARE(total(QStringLiteral("INBOX")), 0);
         QCOMPARE(r.cache.count(QStringLiteral("INBOX")), 0);
         QCOMPARE(r.cache.count(QStringLiteral("Label_2")), 8);
     }

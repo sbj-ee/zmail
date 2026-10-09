@@ -69,6 +69,7 @@
 #include <QInputDialog>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QHash>
 #include <QStyledItemDelegate>
 #include <QTextBrowser>
 #include <QToolBar>
@@ -115,16 +116,7 @@ void MainWindow::populateMailboxes()
         it->setIcon(0, ic);
         it->setData(0, Qt::UserRole, key);
         const int n = forcedTotal >= 0 ? forcedTotal : key.isEmpty() ? 0 : countFor(key, false);
-        if (n > 0) {
-            it->setText(1, QString::number(n));
-            it->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-            it->setForeground(1, palEarly.color(QPalette::PlaceholderText));
-        }
-        if (unreadHint > 0) {
-            QFont f = m_mailboxes->font();
-            f.setBold(true);
-            it->setFont(0, f);
-        }
+        setMailboxCount(it, n, unreadHint, m_mailboxes->font(), palEarly.color(QPalette::PlaceholderText));
         return it;
     };
     const QPalette pal = QApplication::palette();
@@ -239,6 +231,61 @@ void MainWindow::populateMailboxes()
     }
     m_mailboxes->expandAll();
     rebuildMailboxMenus();
+}
+
+// "3 / 212": unread of total, in bold while something is unread; "212" when
+// all of it has been read; nothing for an empty mailbox.
+void MainWindow::setMailboxCount(QTreeWidgetItem *item, int total, int unread, const QFont &base, const QColor &dim)
+{
+    unread = std::clamp(unread, 0, std::max(0, total));
+    item->setText(1, total <= 0 ? QString() : unread > 0 ? QStringLiteral("%1 / %2").arg(unread).arg(total) : QString::number(total));
+    item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
+    QFont f = base;
+    f.setBold(unread > 0);
+    item->setFont(0, f);
+    item->setFont(1, f);
+    item->setForeground(1, unread > 0 ? QBrush() : QBrush(dim));
+    if (!item->data(0, Qt::UserRole).toString().isEmpty()) {
+        item->setToolTip(1, total <= 0     ? tr("No messages")
+                            : unread > 0 ? tr("%1 unread of %2").arg(unread).arg(total)
+                                         : (total == 1 ? tr("1 message, read") : tr("%1 messages, all read").arg(total)));
+    }
+}
+
+void MainWindow::updateMailboxCounts()
+{
+    if (!(m_live && m_session && m_session->cache()) || !m_mailboxes) {
+        return; // the sample mailboxes count their own rows when they are built
+    }
+    QHash<QString, zmail::CachedLabel> byId;
+    for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+        byId.insert(l.id, l);
+    }
+    const QColor dim = QApplication::palette().color(QPalette::PlaceholderText);
+    const int queued = int(m_session->cache()->queued().size());
+    const int purged = int(m_session->cache()->purged().size());
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        const QString key = (*it)->data(0, Qt::UserRole).toString();
+        if (key == QLatin1String("Snoozed")) {
+            setMailboxCount(*it, int(m_session->cache()->snoozes(true).size()), 0, m_mailboxes->font(), dim);
+            continue;
+        }
+        const QString label = labelForMailbox(key);
+        if (label.isEmpty() || !byId.contains(label)) {
+            continue; // headings, Search
+        }
+        const zmail::CachedLabel &l = byId[label];
+        int total = l.total;
+        int unread = l.unread;
+        if (key == QLatin1String("Out")) {
+            total += queued; // waiting to go
+            unread = queued;
+        } else if (key == QLatin1String("Trash")) {
+            total = std::max(0, total - purged); // less what Empty Trash removed from zmail
+            unread = 0;
+        }
+        setMailboxCount(*it, total, unread, m_mailboxes->font(), dim);
+    }
 }
 
 void MainWindow::updateCounts()

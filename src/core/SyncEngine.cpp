@@ -21,6 +21,7 @@ struct HistoryRun
     QStringList added;           // message ids to fetch
     QSet<QString> addedInbox;    // added with INBOX+UNREAD (candidates for "new mail")
     bool changed = false;
+    QStringList labels;          // labels of the messages that changed (their counts did too)
 };
 
 namespace {
@@ -50,12 +51,18 @@ SyncEngine::SyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
     , m_poll(new QTimer(this))
     , m_labelsRefreshSoon(new QTimer(this))
 {
-    m_poll->setInterval(30000);
+    m_poll->setInterval(15000);
     connect(m_poll, &QTimer::timeout, this, [this] { pollNow(true); });
     m_labelsRefreshSoon->setSingleShot(true);
     m_labelsRefreshSoon->setInterval(kLabelRefreshSoonMs);
     connect(m_labelsRefreshSoon, &QTimer::timeout, this, [this] {
-        if (m_running) {
+        if (!m_running) {
+            return;
+        }
+        const QSet<QString> dirty = std::exchange(m_countsDirty, {});
+        if (!dirty.isEmpty() && dirty.size() <= kTargetedCountLabels) {
+            refreshCounts(dirty); // just the folders that changed
+        } else {
             refreshLabels(); // one under way? it runs again when that finishes
         }
     });
@@ -111,6 +118,38 @@ void SyncEngine::stop()
     m_busy = false;
     m_labelsRefreshing = false;
     m_labelsRefreshAgain = false;
+}
+
+void SyncEngine::touchCounts(const QStringList &labelIds)
+{
+    for (const QString &id : labelIds) {
+        if (!id.isEmpty()) {
+            m_countsDirty.insert(id);
+        }
+    }
+    if (m_running && !m_countsDirty.isEmpty()) {
+        m_labelsRefreshSoon->start();
+    }
+}
+
+void SyncEngine::refreshCounts(const QSet<QString> &labelIds)
+{
+    const int gen = m_generation;
+    auto left = std::make_shared<int>(int(labelIds.size()));
+    for (const QString &id : labelIds) {
+        m_api->getLabel(id, [this, gen, id, left](const QJsonObject &json, const ApiError &err) {
+            if (gen != m_generation) {
+                return;
+            }
+            if (!err.isError && json.contains(QStringLiteral("messagesTotal"))) {
+                m_cache->setLabelCounts(id, json.value(QStringLiteral("messagesTotal")).toInt(),
+                                        json.value(QStringLiteral("messagesUnread")).toInt());
+            }
+            if (--*left == 0) {
+                emit countsChanged();
+            }
+        });
+    }
 }
 
 void SyncEngine::refreshLabels(std::function<void()> then, bool force)
@@ -559,6 +598,7 @@ void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared
                 const QJsonObject msg = a.toObject().value(QStringLiteral("message")).toObject();
                 const QString id = msg.value(QStringLiteral("id")).toString();
                 const QStringList labels = labelIds(msg);
+                run->labels += labels;
                 if (!run->added.contains(id)) {
                     run->added.append(id);
                 }
@@ -581,6 +621,8 @@ void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared
                     const QJsonObject lo = lv.toObject();
                     const QString id = lo.value(QStringLiteral("message")).toObject().value(QStringLiteral("id")).toString();
                     const QStringList ids = labelIds(lo);
+                    run->labels += ids;
+                    run->labels += labelIds(lo.value(QStringLiteral("message")).toObject()); // unread counts of where it sits
                     if (adding) {
                         m_cache->modifyLabels(id, ids, {});
                     } else {
@@ -627,6 +669,8 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
             m_busy = false;
             if (run->changed) {
                 emit messagesChanged();
+                run->labels.removeDuplicates();
+                touchCounts(run->labels); // what changed elsewhere: those folders' counts, now
             }
             QStringList stillNew;
             for (const QString &id : fresh) {
@@ -724,6 +768,10 @@ void SyncEngine::modifyOptimistic(const QString &id, const QStringList &add, con
                 emit messagesChanged();
             }
         }
+        // Gmail's own counts for what this touched: the labels changed, and
+        // (a read or unread message changes the unread count of each) the
+        // labels it is in.
+        touchCounts(added + removed + labels);
         if (after) {
             after(err);
         }

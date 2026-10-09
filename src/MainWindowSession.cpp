@@ -292,6 +292,9 @@ void MainWindow::reloadFromCache()
         m.sizeBytes = c.size;
         m.subject = c.subject.isEmpty() ? tr("(no subject)") : c.subject;
         m.suspicious = c.labels.contains(QStringLiteral("SPAM"));
+        if (!c.labels.contains(QStringLiteral("TRASH")) && !c.labels.contains(QStringLiteral("SPAM"))) {
+            m.mailboxes << QStringLiteral("All"); // All Mail, as Gmail has it
+        }
         for (const QString &id : c.labels) {
             if (id == QLatin1String("INBOX")) m.mailboxes << QStringLiteral("In");
             else if (id == QLatin1String("SENT")) m.mailboxes << QStringLiteral("Out");

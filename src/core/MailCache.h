@@ -10,6 +10,10 @@
 
 namespace zmail {
 
+// Not a Gmail label: stands for "all mail" (everything but Trash and Spam)
+// wherever a label id is asked for, to list, page through or count it.
+inline constexpr char kAllMailLabel[] = "ALL";
+
 struct CachedLabel
 {
     QString id;        // "INBOX", "Label_123"

@@ -632,7 +632,10 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
             const bool all = std::all_of(labels.begin(), labels.end(), [&m](const QString &l) {
                 return l.isEmpty() || m.labels.contains(l);
             });
-            if (all) {
+            // No label: all mail, which on Gmail leaves out Trash and Spam.
+            const bool binned = labels.isEmpty() && (m.labels.contains(QStringLiteral("TRASH")) ||
+                                                     m.labels.contains(QStringLiteral("SPAM")));
+            if (all && !binned) {
                 sel.append(m);
             }
         }

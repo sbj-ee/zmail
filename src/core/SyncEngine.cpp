@@ -363,7 +363,10 @@ void SyncEngine::listPage(const QString &labelId, const QString &pageToken, int 
 {
     const int gen = m_generation;
     const int n = std::min(500, std::max(1, remaining));
-    m_api->listMessages(labelId, n, pageToken,
+    // All mail: no label at all, which Gmail answers with everything but
+    // Trash and Spam.
+    const QStringList labels = labelId == QLatin1String(kAllMailLabel) ? QStringList() : QStringList{labelId};
+    m_api->listMessages(labels, n, pageToken,
                         [this, gen, labelId, remaining, done](const QJsonObject &json, const ApiError &err) {
         if (gen != m_generation) {
             return;

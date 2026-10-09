@@ -18,6 +18,11 @@ QIcon icon(const QString &name, const QColor &color = QColor());
 // installed to share/icons/hicolor/<N>x<N>/apps/zmail.png).
 QIcon appIcon();
 
+// Filled folder in `color`, for the mailbox tree: the bundled Lucide folder
+// with its body painted in. Selected rows outline it in HighlightedText so a
+// folder the colour of the selection still shows.
+QIcon folderIcon(const QColor &color);
+
 // Solid rounded swatch used for label colours in lists and trees.
 QIcon swatch(const QColor &color, int size = 12);
 

@@ -131,11 +131,14 @@ public:
 public slots:
     void send();
     void saveDraft();
-    void queue(); // Send Later
+    // Into the queue, to go at sendAtMs (if zmail is running then, else when
+    // it next is), or with File > Send Queued Messages when sendAtMs is 0.
+    void queue(qint64 sendAtMs = 0);
+    void sendLater(); // asks when, then queue()
 
 signals:
     void sent(const QString &gmailMessageId, const QString &threadId);
-    void queued(); // Send Later: it is in Out's queue now
+    void queued(qint64 sendAtMs); // Send Later: it is in the queue now
     void stationerySaved(const QString &name);
     void sendFailed(const QString &error);
     void draftSaved(const QString &draftId);

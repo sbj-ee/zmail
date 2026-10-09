@@ -50,6 +50,9 @@
 #include <QStatusBar>
 #include <QToolButton>
 #include <QTreeView>
+#include <QRadioButton>
+#include <QDateTimeEdit>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QtTest>
 #include <memory>
@@ -498,16 +501,16 @@ private slots:
 
         // An address that isn't one is refused, exactly as Send refuses it.
         QPointer<ComposeWindow> bad = write(QStringLiteral("not an address"), QStringLiteral("Nope"));
-        bad->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        bad->queue();
         QVERIFY(bad && bad->isVisible());
         QCOMPARE(f.w->queuedCount(), 0);
         delete bad.data();
 
         QPointer<ComposeWindow> first = write(QStringLiteral("Dana Whitfield <dana@example.org>"), QStringLiteral("First queued"));
-        first->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        first->queue();
         QTRY_VERIFY(!first); // closed without asking about a draft
         QPointer<ComposeWindow> second = write(QStringLiteral("eli@example.com"), QStringLiteral("Second queued"));
-        second->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        second->queue();
         QTRY_VERIFY(!second);
         QCOMPARE(f.w->queuedCount(), 2);
         QCOMPARE(f.g.count(sendPath), 0); // nothing has gone anywhere
@@ -547,7 +550,7 @@ private slots:
 
         // Delete on a queued message takes it out of the queue, unsent.
         QPointer<ComposeWindow> third = write(QStringLiteral("eli@example.com"), QStringLiteral("Third queued"));
-        third->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        third->queue();
         QTRY_VERIFY(!third);
         int row = -1;
         QTRY_VERIFY_WITH_TIMEOUT((row = f.model->rowForId(QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id))) >= 0, 5000);
@@ -861,7 +864,7 @@ private slots:
         QCOMPARE(byCommand.value(QStringLiteral("Mark as Junk")), QStringLiteral("Ctrl+J"));
         QCOMPARE(byCommand.value(QStringLiteral("Send Queued Messages")), QStringLiteral("Ctrl+T"));
         QVERIFY(byCommand.value(QStringLiteral("Delete")).contains(QStringLiteral("Ctrl+D")));
-        QVERIFY(byCommand.contains(QStringLiteral("In")) && byCommand.contains(QStringLiteral("Send Later (queue in Out)")));
+        QVERIFY(byCommand.contains(QStringLiteral("In")) && byCommand.contains(QStringLiteral("Send Later (at a time, or queued in Sent)")));
         QVERIFY(!byCommand.contains(QStringLiteral("Account"))); // not built: not listed
         keys->close();
 
@@ -962,7 +965,7 @@ private slots:
         c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("First version of the plan."));
         c->addAttachment({QStringLiteral("plan.txt"), 4, {}, QByteArray("PLAN"), QStringLiteral("text/plain")});
         QPointer<ComposeWindow> guard(c);
-        c->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        c->queue();
         QTRY_VERIFY(!guard);
         QCOMPARE(f.w->queuedCount(), 1);
         const QString row1 = QStringLiteral("queued:%1").arg(f.session->cache()->queued().first().id);
@@ -992,7 +995,7 @@ private slots:
         QVERIFY(edit);
         edit->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(QStringLiteral("Final plan"));
         guard = edit;
-        edit->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        edit->queue();
         QTRY_VERIFY(!guard);
         QCOMPARE(f.w->queuedCount(), 1);
         QCOMPARE(f.session->cache()->queued().first().subject, QStringLiteral("Final plan"));
@@ -1150,6 +1153,147 @@ private slots:
         QTest::qWait(1200);
         QCOMPARE(count(QStringLiteral("In")), QStringLiteral("1 / 2"));
         QCOMPARE(count(folder), QStringLiteral("1 / 3"));
+    }
+
+    // Send Later asks when. A time: zmail sends it once that time has come.
+    // Held: it waits for File > Send Queued Messages, as before.
+    void sendLaterTakesATimeOrHolds()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto compose = [&f](const QString &subject) {
+            ComposeWindow *c = f.w->openCompose();
+            c->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(QStringLiteral("dana@example.org"));
+            c->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(subject);
+            c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("Later."));
+            return c;
+        };
+        // Answer the dialog once it is up.
+        const auto answer = [](std::function<void(QDialog *)> how) {
+            QTimer::singleShot(300, qApp, [how]() {
+                for (QWidget *w : QApplication::topLevelWidgets()) {
+                    if (w->objectName() == QLatin1String("sendLaterDialog")) {
+                        auto *dlg = qobject_cast<QDialog *>(w);
+                        how(dlg);
+                        dlg->accept();
+                    }
+                }
+            });
+        };
+        const int sentBefore = f.g.sendCalls;
+
+        // A time two days off.
+        const QDateTime when = QDateTime::currentDateTime().addDays(2);
+        QPointer<ComposeWindow> c = compose(QStringLiteral("In two days"));
+        answer([when](QDialog *dlg) {
+            QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("sendLaterAt"))->isChecked());
+            dlg->findChild<QDateTimeEdit *>(QStringLiteral("sendLaterDateTime"))->setDateTime(when);
+        });
+        c->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!c);
+        QCOMPARE(f.w->queuedCount(), 1);
+        QVERIFY(qAbs(f.session->cache()->queued().first().sendAtMs - when.toMSecsSinceEpoch()) < 60 * 1000);
+        f.w->sendDueQueued(); // not yet
+        QTest::qWait(300);
+        QCOMPARE(f.g.sendCalls, sentBefore);
+        QCOMPARE(f.w->queuedCount(), 1);
+
+        // Held for Send Queued Messages: no time.
+        c = compose(QStringLiteral("Held"));
+        answer([](QDialog *dlg) { dlg->findChild<QRadioButton *>(QStringLiteral("sendLaterHold"))->setChecked(true); });
+        c->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
+        QTRY_VERIFY(!c);
+        QCOMPARE(f.w->queuedCount(), 2);
+        QCOMPARE(f.session->cache()->queued().last().sendAtMs, qint64(0));
+
+        // One whose time has come goes by itself; the other two stay.
+        c = compose(QStringLiteral("Due"));
+        c->queue(QDateTime::currentMSecsSinceEpoch() - 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.sendCalls, sentBefore + 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->queuedCount(), 2, 10000);
+        QStringList left;
+        for (const auto &q : f.session->cache()->queued()) {
+            left << q.subject;
+        }
+        QCOMPARE(left, (QStringList{QStringLiteral("In two days"), QStringLiteral("Held")}));
+    }
+
+    // Archive (Message menu and the list's right-click menu): the first use
+    // makes the Archive folder, which has a row of its own above Trash.
+    void archiveMakesItsFolderAndFilesTheMessage()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), QStringLiteral("IMPORTANT")}));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto archiveRow = [tree]() -> QTreeWidgetItem * {
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                if (tree->topLevelItem(i)->text(0) == QLatin1String("Archive")) {
+                    return tree->topLevelItem(i);
+                }
+            }
+            return nullptr;
+        };
+        QVERIFY(archiveRow());
+        QCOMPARE(archiveRow()->data(0, Qt::UserRole).toString(), QStringLiteral("Archive")); // no folder yet
+        QAction *archive = f.w->findChild<QAction *>(QStringLiteral("menuActionArchive"));
+        QVERIFY(archive && archive->isEnabled());
+
+        archive->trigger(); // Bravo
+        QTRY_VERIFY_WITH_TIMEOUT(archiveRow() && archiveRow()->data(0, Qt::UserRole).toString().startsWith(QLatin1String("gmail:")), 10000);
+        const QString id = archiveRow()->data(0, Qt::UserRole).toString().mid(6);
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.b).labels.contains(id), 10000);
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("INBOX")));
+        QVERIFY(!f.g.messages().value(f.b).labels.contains(QStringLiteral("IMPORTANT")));
+        QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 2, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(archiveRow()->text(1), QStringLiteral("1"), 10000);
+        // It is the Archive row only, not also a folder under Folders.
+        int rows = 0;
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+            rows += (*it)->data(0, Qt::UserRole).toString() == QLatin1String("gmail:") + id;
+        }
+        QCOMPARE(rows, 1);
+
+        // The second one goes to the same folder.
+        f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(f.a), 0)));
+        QTRY_COMPARE(f.w->shownMessageId(), f.a);
+        archive->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.a).labels.contains(id), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(archiveRow()->text(1), QStringLiteral("2"), 10000);
+    }
+
+    // Empty Trash remembers what it hid, and the sidebar takes that many off
+    // Gmail's Trash total. Gmail erases old Trash by itself, so the
+    // remembered set can outnumber what is left; the count must not fall
+    // below the Trash mail that is on show.
+    void trashCountSurvivesAStaleEmptiedSet()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto trashCount = [tree]() {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == QLatin1String("Trash")) {
+                    return (*it)->text(1);
+                }
+            }
+            return QStringLiteral("?");
+        };
+        f.session->sync()->trash(f.a);
+        f.session->sync()->trash(f.c);
+        QTRY_COMPARE_WITH_TIMEOUT(trashCount(), QStringLiteral("2"), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(f.g.messages().value(f.c).labels.contains(QStringLiteral("TRASH")), 10000);
+        QTest::qWait(1200); // Gmail's own numbers are in
+
+        // Five messages emptied long ago, since erased by Gmail.
+        f.session->cache()->setPurged({QStringLiteral("gone1"), QStringLiteral("gone2"), QStringLiteral("gone3"),
+                                       QStringLiteral("gone4"), QStringLiteral("gone5")});
+        emit f.session->sync()->countsChanged();
+        QCOMPARE(trashCount(), QStringLiteral("2"));
+
+        // The next look at Gmail's Trash count notices, and forgets them.
+        f.session->sync()->trash(f.b);
+        QTRY_VERIFY_WITH_TIMEOUT(f.session->cache()->purged().isEmpty(), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(trashCount(), QStringLiteral("3"), 10000);
     }
 
     // Drag a message from the list onto a folder in the sidebar.

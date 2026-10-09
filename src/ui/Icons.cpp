@@ -60,6 +60,26 @@ QIcon appIcon()
     return ic;
 }
 
+QIcon folderIcon(const QColor &color)
+{
+    QFile f(QStringLiteral(":/icons/lucide/folder.svg"));
+    if (!f.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    QByteArray on = f.readAll();
+    on.replace("fill=\"none\"", "fill=\"" + color.name().toLatin1() + "\"");
+    QByteArray sel = on;
+    on.replace("currentColor", color.name().toLatin1());
+    sel.replace("currentColor", QApplication::palette().color(QPalette::HighlightedText).name().toLatin1());
+    const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+    QIcon ic;
+    for (int s : {16, 20, 24, 32, 48}) {
+        ic.addPixmap(render(on, s, dpr), QIcon::Normal);
+        ic.addPixmap(render(sel, s, dpr), QIcon::Selected);
+    }
+    return ic;
+}
+
 QIcon swatch(const QColor &color, int size)
 {
     QPixmap pm(size, size);

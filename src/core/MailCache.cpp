@@ -157,6 +157,19 @@ bool MailCache::open(const QString &path)
             return false;
         }
     }
+    // 0.6.11: Send Later can name a time (0: when Send Queued Messages is chosen).
+    {
+        bool hasSendAt = false;
+        QSqlQuery q(QSqlDatabase::database(m_conn));
+        if (q.exec(QStringLiteral("PRAGMA table_info(outbox)"))) {
+            while (q.next()) {
+                hasSendAt = hasSendAt || q.value(1).toString() == QLatin1String("send_at_ms");
+            }
+        }
+        if (!hasSendAt && !exec(QStringLiteral("ALTER TABLE outbox ADD COLUMN send_at_ms INTEGER NOT NULL DEFAULT 0"))) {
+            return false;
+        }
+    }
     // FTS5 external-content index kept in sync by triggers.
     m_fts5 = exec(QStringLiteral(
         "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(subject, from_name, from_addr, to_addr, "
@@ -787,11 +800,22 @@ QSet<QString> MailCache::purged() const
     return out;
 }
 
+int MailCache::unpurgedTrash() const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("SELECT COUNT(*) FROM message_labels WHERE label_id = 'TRASH' "
+                              "AND message_id NOT IN (SELECT message_id FROM purged)"))
+        && q.next()) {
+        return q.value(0).toInt();
+    }
+    return 0;
+}
+
 qint64 MailCache::addQueued(const QueuedMessage &m)
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
-    q.prepare(QStringLiteral("INSERT INTO outbox(mime, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, state) "
-                             "VALUES (?,?,?,?,?,?,?,?,?)"));
+    q.prepare(QStringLiteral("INSERT INTO outbox(mime, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, state, send_at_ms) "
+                             "VALUES (?,?,?,?,?,?,?,?,?,?)"));
     q.addBindValue(m.mime);
     q.addBindValue(m.threadId);
     q.addBindValue(m.draftId);
@@ -801,6 +825,7 @@ qint64 MailCache::addQueued(const QueuedMessage &m)
     q.addBindValue(m.text);
     q.addBindValue(m.createdMs > 0 ? m.createdMs : QDateTime::currentMSecsSinceEpoch());
     q.addBindValue(m.state);
+    q.addBindValue(m.sendAtMs);
     return q.exec() ? q.lastInsertId().toLongLong() : 0;
 }
 
@@ -818,13 +843,14 @@ MailCache::QueuedMessage queuedFromRow(const QSqlQuery &q, bool withMime)
     m.createdMs = q.value(7).toLongLong();
     m.error = q.value(8).toString();
     m.size = q.value(9).toLongLong();
+    m.sendAtMs = q.value(10).toLongLong();
     if (withMime) {
-        m.mime = q.value(10).toByteArray();
-        m.state = q.value(11).toByteArray();
+        m.mime = q.value(11).toByteArray();
+        m.state = q.value(12).toByteArray();
     }
     return m;
 }
-const char *kQueuedColumns = "id, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, error, length(mime)";
+const char *kQueuedColumns = "id, thread_id, draft_id, to_addr, cc_addr, subject, body_text, created_ms, error, length(mime), send_at_ms";
 } // namespace
 
 QList<MailCache::QueuedMessage> MailCache::queued(bool withMime) const

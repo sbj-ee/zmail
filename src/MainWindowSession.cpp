@@ -97,8 +97,8 @@ void MainWindow::setSession(zmail::MailSession *session)
         reloadFromCache();
         populateMailboxes(); // the account's folders, not the sample ones, without waiting for a label refresh
         if (const int n = queuedCount(); n > 0) {
-            statusBar()->showMessage(n == 1 ? tr("1 message is queued in Out. File \u203a Send Queued Messages sends it.")
-                                            : tr("%1 messages are queued in Out. File \u203a Send Queued Messages sends them.").arg(n),
+            statusBar()->showMessage(n == 1 ? tr("1 message is queued in Sent. File \u203a Send Queued Messages sends it.")
+                                            : tr("%1 messages are queued in Sent. File \u203a Send Queued Messages sends them.").arg(n),
                                      10000);
         }
         selectMailbox(QStringLiteral("In"));
@@ -201,6 +201,12 @@ void MainWindow::attachSync()
                                           : tr("Stopped: %1 messages loaded so far.").arg(loaded),
                                  8000);
     });
+    connect(sync, &zmail::SyncEngine::importantCleared, this, [this](int messages, bool ok) {
+        const QString what = messages == 0 ? tr("No filed mail was marked Important.")
+                             : messages == 1 ? tr("Important cleared from 1 filed message.")
+                                             : tr("Important cleared from %1 filed messages.").arg(messages);
+        statusBar()->showMessage(ok ? what : tr("Gmail refused part of it. %1").arg(what), 8000);
+    });
     connect(sync, &zmail::SyncEngine::labelEmptied, this, [this](const QString &labelId, const QStringList &ids) {
         if (ids.isEmpty()) {
             return;
@@ -223,6 +229,7 @@ void MainWindow::attachSync()
         }
     });
     checkSnoozeWakes();
+    sendDueQueued(); // a Send Later whose time passed while zmail was closed
     m_snoozeTimer->start();
 }
 
@@ -310,7 +317,8 @@ void MainWindow::reloadFromCache()
         m.who = first.first.isEmpty() ? first.second : first.first;
         m.address = first.second;
         m.to = q.to;
-        m.date = QDateTime::fromMSecsSinceEpoch(q.createdMs).toLocalTime();
+        // A timed Send Later shows when it will go.
+        m.date = QDateTime::fromMSecsSinceEpoch(q.sendAtMs > 0 ? q.sendAtMs : q.createdMs).toLocalTime();
         m.sizeBytes = q.size;
         m.subject = q.subject.isEmpty() ? tr("(no subject)") : q.subject;
         m.mailboxes = {QStringLiteral("Out")};

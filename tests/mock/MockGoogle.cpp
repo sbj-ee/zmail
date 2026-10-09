@@ -619,12 +619,15 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
         return;
     }
     if (rest == QLatin1String("/messages")) {
-        const QString label = q.queryItemValue(QStringLiteral("labelIds"));
+        const QStringList labels = q.allQueryItemValues(QStringLiteral("labelIds")); // ANDed, as on Gmail
         const int max = std::clamp(q.queryItemValue(QStringLiteral("maxResults")).toInt(), 1, 500);
         const int offset = q.queryItemValue(QStringLiteral("pageToken")).toInt();
         QList<Message> sel;
         for (const Message &m : m_messages) {
-            if (label.isEmpty() || m.labels.contains(label)) {
+            const bool all = std::all_of(labels.begin(), labels.end(), [&m](const QString &l) {
+                return l.isEmpty() || m.labels.contains(l);
+            });
+            if (all) {
                 sel.append(m);
             }
         }

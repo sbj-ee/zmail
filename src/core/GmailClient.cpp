@@ -113,8 +113,16 @@ void GmailClient::deleteLabel(const QString &id, JsonCb cb)
 void GmailClient::listMessages(const QString &labelId, int maxResults, const QString &pageToken, JsonCb cb,
                                Priority priority)
 {
+    listMessages(QStringList{labelId}, maxResults, pageToken, std::move(cb), priority);
+}
+
+void GmailClient::listMessages(const QStringList &labelIds, int maxResults, const QString &pageToken, JsonCb cb,
+                               Priority priority)
+{
     QUrlQuery q;
-    q.addQueryItem(QStringLiteral("labelIds"), labelId);
+    for (const QString &labelId : labelIds) {
+        q.addQueryItem(QStringLiteral("labelIds"), labelId);
+    }
     q.addQueryItem(QStringLiteral("maxResults"), QString::number(maxResults));
     if (!pageToken.isEmpty()) {
         q.addQueryItem(QStringLiteral("pageToken"), pageToken);

@@ -137,6 +137,8 @@ public:
     // Load every message of a mailbox (the current one when key is empty), or
     // stop if that is already under way.
     void loadAllMessages(const QString &key = {});
+    // Take Gmail's Important marker off everything already filed in a folder.
+    void clearImportantFromFiled();
     // More messages than this deleted at once go to Gmail as batches.
     static constexpr int kBatchDeleteFrom = 25;
     // The mailbox in a window of its own (the current one when key is empty).
@@ -153,6 +155,7 @@ public:
     // File > Send Queued Messages: everything waiting in Out, oldest first.
     // One that Gmail refuses stays queued, with the reason.
     void sendQueued();
+    void sendDueQueued(); // Send Later's timed ones, when their time has come
     int queuedCount() const;
     // Open a queued message ("queued:N") in a compose window to change it.
     ComposeWindow *editQueued(const QString &queuedRowId);
@@ -264,6 +267,11 @@ private:
     void deleteLabelFolder(const QString &labelId, const QString &displayName);
     void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
     QMenu *buildFlagMenu(QWidget *parent);
+    int trashCount(int gmailTotal) const; // what the sidebar shows for Trash
+    // Archive: a folder (the Gmail label "Archive", made on first use) with a
+    // row of its own in the sidebar.
+    QString archiveLabelId() const;
+    void archiveSelected();
     void moveMessagesToLabel(const QStringList &messageIds, const QString &targetLabelId);
     void setCurrentRead(bool read); // selected rows (Shift/Ctrl multi-select)
     void offerUndoDelete(const QStringList &ids);

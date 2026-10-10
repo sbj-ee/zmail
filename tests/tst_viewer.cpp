@@ -818,6 +818,39 @@ private slots:
         QVERIFY(v.body()->toPlainText().contains(QStringLiteral("Hello")));
     }
 
+    // A logo sized by its height alone (<img height="58">) keeps its shape:
+    // QTextDocument (Qt 6.4) took the height and the full natural width, and
+    // drew it squashed. The same with only a width.
+    void imageWithOneDimensionKeepsItsShape()
+    {
+        QImage img(400, 100, QImage::Format_ARGB32);
+        img.fill(Qt::red);
+        QByteArray png;
+        QBuffer buf(&png);
+        buf.open(QIODevice::WriteOnly);
+        img.save(&buf, "PNG");
+        const QString src = QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.toBase64());
+        MessageView v;
+        v.resize(900, 600);
+        v.show();
+        ViewMessage m;
+        m.id = QStringLiteral("logo");
+        m.bodyHtml = QStringLiteral("<p><img src=\"%1\" height=\"50\" style=\"height:50px\"></p>"
+                                    "<p><img src=\"%1\" width=\"100\"></p><p><img src=\"%1\"></p>").arg(src);
+        v.setMessage(m);
+        QList<QSizeF> sizes;
+        const QTextDocument *doc = v.body()->document();
+        for (QTextBlock b = doc->begin(); b.isValid(); b = b.next()) {
+            for (auto it = b.begin(); !it.atEnd(); ++it) {
+                if (it.fragment().charFormat().isImageFormat()) {
+                    const QTextImageFormat f = it.fragment().charFormat().toImageFormat();
+                    sizes.append(QSizeF(f.width(), f.height()));
+                }
+            }
+        }
+        QCOMPARE(sizes, (QList<QSizeF>{QSizeF(200, 50), QSizeF(100, 25), QSizeF(400, 100)}));
+    }
+
     static int tableDepth(const QString &html)
     {
         static const QRegularExpression tag(QStringLiteral("<(/?)table\\b"), QRegularExpression::CaseInsensitiveOption);

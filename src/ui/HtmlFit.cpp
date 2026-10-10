@@ -780,7 +780,9 @@ void fit(QTextDocument *doc, const Options &opt)
                     const QVariant res = doc->resource(QTextDocument::ImageResource, QUrl(img.name()));
                     const QImage natural = res.value<QImage>();
                     if (!natural.isNull()) {
-                        w = natural.width();
+                        // Only a height given (height="58"): the width that
+                        // keeps its shape, not its full natural width.
+                        w = h > 0 && natural.height() > 0 ? h * natural.width() / natural.height() : natural.width();
                         h = h > 0 ? h : natural.height();
                     }
                 } else if (h <= 0) {

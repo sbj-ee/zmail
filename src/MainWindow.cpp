@@ -755,6 +755,26 @@ void MainWindow::buildMenus()
     QAction *vacation = settings->addAction(tr("&Vacation Responder\u2026"), this, [this]() { showVacationDialog(); });
     vacation->setObjectName(QStringLiteral("actionVacation"));
     vacation->setToolTip(tr("Gmail's automatic reply while you are away"));
+    QMenu *sendDelay = settings->addMenu(tr("Sen&d Delay"));
+    sendDelay->setObjectName(QStringLiteral("menuSendDelay"));
+    auto *sendDelayGroup = new QActionGroup(this);
+    const QList<QPair<int, QString>> sendDelays = {{0, tr("&Send at Once")},
+                                                   {30000, tr("&30 Seconds")},
+                                                   {60000, tr("&1 Minute")},
+                                                   {120000, tr("&2 Minutes")},
+                                                   {300000, tr("&5 Minutes")}};
+    for (const auto &d : sendDelays) {
+        QAction *a = sendDelay->addAction(d.second, this, [ms = d.first]() {
+            QSettings().setValue(QStringLiteral("compose/sendDelayMs"), ms);
+        });
+        a->setObjectName(QStringLiteral("actionSendDelay%1").arg(d.first));
+        a->setData(d.first);
+        a->setCheckable(true);
+        a->setChecked(d.first == ComposeWindow::sendDelayMs());
+        sendDelayGroup->addAction(a);
+    }
+    sendDelay->setToolTipsVisible(true);
+    sendDelay->menuAction()->setToolTip(tr("How long Send waits in Queue, where Undo Send can take it back"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row Stri&pes\u2026"), this, [this]() { showSettings(QStringLiteral("stripes")); });
@@ -1169,6 +1189,21 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
                              : tr("Waiting in Queue. File \u203a Send Queued Messages (%1) sends it.").arg(key),
                 8000);
             sendDueQueued(); // a time already past: now
+        });
+        connect(c, &ComposeWindow::sendDelayed, this, [this](qint64 id, qint64 sendAtMs) {
+            reloadFromCache();
+            populateMailboxes();
+            const int wait = int(qMax<qint64>(0, sendAtMs - QDateTime::currentMSecsSinceEpoch()));
+            const int secs = (wait + 500) / 1000;
+            const QString what = secs == 60               ? tr("Sending in 1 minute.")
+                                 : secs % 60 == 0 && secs > 0 ? tr("Sending in %1 minutes.").arg(secs / 60)
+                                 : secs == 1                  ? tr("Sending in 1 second.")
+                                                              : tr("Sending in %1 seconds.").arg(secs);
+            statusBar()->showMessage(tr("%1 It waits in Queue until then.").arg(what), 8000);
+            offerUndo(what, tr("&Undo Send"), [this, id]() { undoSend(id); });
+            m_undoTimer->start(qMax(1000, wait - 1000)); // on offer for as long as it can be taken back
+            // At its time, not at the next half-minute check.
+            QTimer::singleShot(wait + 50, this, &MainWindow::sendDueQueued);
         });
     } else if (sampleReply) {
         c->loadSampleReply();
@@ -2392,6 +2427,24 @@ ComposeWindow *MainWindow::editQueued(const QString &queuedRowId)
     return c;
 }
 
+ComposeWindow *MainWindow::undoSend(qint64 queuedId)
+{
+    ComposeWindow *c = editQueued(QStringLiteral("queued:%1").arg(queuedId));
+    if (!c) {
+        statusBar()->showMessage(tr("That message has already been sent."), 6000);
+        return nullptr;
+    }
+    // An unsent message again, not a queued one being changed: closing it
+    // asks about Drafts instead of leaving it to go at its time.
+    m_session->cache()->removeQueued(queuedId);
+    c->setQueuedId(0);
+    c->markModified();
+    reloadFromCache();
+    populateMailboxes();
+    statusBar()->showMessage(tr("Not sent. The message is open again."), 6000);
+    return c;
+}
+
 void MainWindow::sendQueued()
 {
     if (!(m_live && m_session && m_session->cache() && m_session->sender())) {
@@ -2421,9 +2474,15 @@ void MainWindow::sendDueQueued()
         return;
     }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    QSet<qint64> open; // being changed in a compose window: not from under it
+    for (const ComposeWindow *c : std::as_const(m_composers)) {
+        if (c && c->queuedId() > 0) {
+            open.insert(c->queuedId());
+        }
+    }
     QList<qint64> ids;
     for (const zmail::MailCache::QueuedMessage &q : m_session->cache()->queued()) {
-        if (q.sendAtMs > 0 && q.sendAtMs <= now && q.error.isEmpty()) {
+        if (q.sendAtMs > 0 && q.sendAtMs <= now && q.error.isEmpty() && !open.contains(q.id)) {
             ids.append(q.id);
         }
     }

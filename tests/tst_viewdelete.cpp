@@ -52,6 +52,8 @@
 #include <QTreeView>
 #include <QRadioButton>
 #include <QDateTimeEdit>
+#include <QDialogButtonBox>
+#include <QPushButton>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QtTest>
@@ -1204,7 +1206,16 @@ private slots:
         QPointer<ComposeWindow> c = compose(QStringLiteral("In two days"));
         answer([when](QDialog *dlg) {
             QVERIFY(dlg->findChild<QRadioButton *>(QStringLiteral("sendLaterAt"))->isChecked());
-            dlg->findChild<QDateTimeEdit *>(QStringLiteral("sendLaterDateTime"))->setDateTime(when);
+            auto *edit = dlg->findChild<QDateTimeEdit *>(QStringLiteral("sendLaterDateTime"));
+            // The hour can come down to this one (then the minutes are set):
+            // nothing earlier today is refused while it is being changed...
+            QVERIFY(edit->minimumDateTime() <= QDateTime(QDate::currentDate(), QTime(QTime::currentTime().hour(), 0)));
+            // ...but a time already past is not taken.
+            edit->setDateTime(QDateTime::currentDateTime().addSecs(-120));
+            dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            QCOMPARE(dlg->result(), int(QDialog::Rejected));
+            QVERIFY(!dlg->findChild<QLabel *>(QStringLiteral("sendLaterPast"))->isHidden());
+            edit->setDateTime(when);
         });
         c->findChild<QAction *>(QStringLiteral("actionSendLater"))->trigger();
         QTRY_VERIFY(!c);
@@ -1233,6 +1244,60 @@ private slots:
             left << q.subject;
         }
         QCOMPARE(left, (QStringList{QStringLiteral("In two days"), QStringLiteral("Held")}));
+    }
+
+    // Send waits out the send delay in Queue, then goes by itself. Until
+    // then Undo Send takes it back: out of the queue, open again, unsent.
+    void sendWaitsOutTheDelayAndCanBeUndone()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto compose = [&f](const QString &subject) {
+            ComposeWindow *c = f.w->openCompose();
+            c->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(QStringLiteral("dana@example.org"));
+            c->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(subject);
+            c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("Soon."));
+            return c;
+        };
+        const int sentBefore = f.g.sendCalls;
+        // Two minutes in the app; the tests run with ZMAIL_SEND_DELAY_MS=0.
+        qunsetenv("ZMAIL_SEND_DELAY_MS");
+        QCOMPARE(ComposeWindow::sendDelayMs(), 120000);
+
+        qputenv("ZMAIL_SEND_DELAY_MS", "1500");
+        QPointer<ComposeWindow> c = compose(QStringLiteral("In a moment"));
+        c->send();
+        QTRY_VERIFY(!c);
+        QCOMPARE(f.w->queuedCount(), 1);
+        QCOMPARE(f.g.sendCalls, sentBefore); // not yet
+        QAction *undo = f.w->findChild<QAction *>(QStringLiteral("actionUndoDelete"));
+        QVERIFY(undo && undo->isEnabled());
+        QCOMPARE(undo->text(), QStringLiteral("&Undo Send"));
+        QTRY_COMPARE_WITH_TIMEOUT(f.g.sendCalls, sentBefore + 1, 10000); // at its time, by itself
+        QTRY_COMPARE_WITH_TIMEOUT(f.w->queuedCount(), 0, 10000);
+
+        // Taken back before its time.
+        qputenv("ZMAIL_SEND_DELAY_MS", "60000");
+        c = compose(QStringLiteral("On second thought"));
+        c->send();
+        QTRY_VERIFY(!c);
+        QCOMPARE(f.w->queuedCount(), 1);
+        const qint64 id = f.session->cache()->queued().first().id;
+        qputenv("ZMAIL_SEND_DELAY_MS", "0");
+        undo->trigger();
+        QCOMPARE(f.w->queuedCount(), 0);
+        QCOMPARE(f.w->composers().size(), 1);
+        QPointer<ComposeWindow> back = f.w->composers().first();
+        QCOMPARE(back->queuedId(), qint64(0));
+        QCOMPARE(back->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->text(), QStringLiteral("On second thought"));
+        QVERIFY(back->findChild<QTextEdit *>(QStringLiteral("composeBody"))->document()->isModified());
+        QVERIFY(!f.w->undoSend(id)); // gone from the queue: nothing to take back twice
+        f.w->sendDueQueued();
+        QTest::qWait(300);
+        QCOMPARE(f.g.sendCalls, sentBefore + 1);
+        back->setConfirmOnClose(false);
+        back->close();
+        QTRY_VERIFY(!back); // gone before the window it belongs to
     }
 
     // Archive (Message menu and the list's right-click menu): the first use

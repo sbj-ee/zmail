@@ -78,6 +78,14 @@ public:
     // replaces that entry; closing the window leaves it queued as it was.
     void setQueuedId(qint64 id) { m_queuedId = id; }
     qint64 queuedId() const { return m_queuedId; }
+    // Unsaved work, as far as closing goes (a send taken back with Undo Send).
+    void markModified();
+    // Send waits this long in Queue before it goes, so a slip can be taken
+    // back: Settings > Send Delay (QSettings compose/sendDelayMs, 2 minutes
+    // unless set; 0 = at once). ZMAIL_SEND_DELAY_MS overrides it (the tests
+    // run with 0).
+    static constexpr int kSendDelayMs = 120000;
+    static int sendDelayMs();
     // Reply / Reply All / Forward: headers, threading and the quoted text.
     void setDraft(const zmail::ComposeDraft &draft);
     // A clicked mailto: link: recipients, subject and a plain-text body.
@@ -133,12 +141,13 @@ public slots:
     void saveDraft();
     // Into the queue, to go at sendAtMs (if zmail is running then, else when
     // it next is), or with File > Send Queued Messages when sendAtMs is 0.
-    void queue(qint64 sendAtMs = 0);
+    void queue(qint64 sendAtMs = 0, bool delayedSend = false);
     void sendLater(); // asks when, then queue()
 
 signals:
     void sent(const QString &gmailMessageId, const QString &threadId);
     void queued(qint64 sendAtMs); // Send Later: it is in the queue now
+    void sendDelayed(qint64 queuedId, qint64 sendAtMs); // Send, with a send delay: in the queue until then
     void stationerySaved(const QString &name);
     void sendFailed(const QString &error);
     void draftSaved(const QString &draftId);

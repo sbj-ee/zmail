@@ -387,7 +387,11 @@ void MainWindow::showLiveMessage(int row)
         if (!q.error.isEmpty()) {
             v.warning = tr("<b>This message is still queued.</b> The last attempt to send it failed: %1").arg(q.error.toHtmlEscaped());
         } else {
-            v.warning = tr("<b>Queued.</b> File \u203a Send Queued Messages sends it. Double-click to change it; Delete takes it out of the queue.");
+            v.warning = q.sendAtMs > 0
+                            ? tr("<b>Queued, to go %1.</b> Double-click to change it; Delete takes it out of the queue.")
+                                  .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(q.sendAtMs).toLocalTime(),
+                                                          QStringLiteral("MM/dd/yyyy h:mm AP")))
+                            : tr("<b>Queued.</b> File \u203a Send Queued Messages sends it. Double-click to change it; Delete takes it out of the queue.");
         }
         m_view->setMessage(v);
         return;

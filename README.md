@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.19: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.20: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -82,7 +82,9 @@ included, and a coloured frame. New in 0.6.18: All Mail has a count,
 and a message is marked read only after 10 seconds in the preview. New
 in 0.6.19: one-click unsubscribe from mailing lists, the mark-as-read
 delay as a setting, Gmail's vacation responder, calendar invitations
-shown as a card, and a swoosh when mail is sent. See
+shown as a card, and a swoosh when mail is sent. New in 0.6.20: Send
+waits two minutes in Queue first (a setting) and Undo Send takes it
+back, and Send Later's time can be set to the current hour. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -149,7 +151,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.19_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.20_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -240,6 +242,12 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   from one and **Message → Reply With** answers with one: its text goes
   above your signature and the quoted original, and its recipients and
   subject are used where the message has none.
+- **Send** waits two minutes before the message goes: it sits in **Queue**
+  until then, and **Edit → Undo Send** (Ctrl+Z, or Undo in the status bar)
+  takes it back, open again and unsent. **Settings → Send Delay** sets how
+  long (at once, 30 seconds, 1, 2 or 5 minutes). zmail has to be running
+  for it to go; one still waiting when zmail quits goes the next time it
+  starts.
 - **Send Later** in the compose window (Ctrl+Shift+Enter) asks when: at a
   date and time you pick, or held, as in Eudora, until you choose **File →
   Send Queued Messages**. Either way the message waits in **Queue**, the

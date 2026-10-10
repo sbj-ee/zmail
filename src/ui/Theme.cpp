@@ -4,6 +4,10 @@
 
 #include <QApplication>
 #include <QDialog>
+#include <QEvent>
+#include <QPainter>
+#include <QPen>
+#include <QPointer>
 #include <QHeaderView>
 #include <QToolBar>
 #include <QFont>
@@ -190,6 +194,9 @@ QPalette dialogPalette(const QPalette &app)
         for (auto role : {QPalette::Window, QPalette::Button}) {
             p.setColor(group, role, mix(app.color(group, role), tint, kDialogTint));
         }
+        for (auto role : {QPalette::Base, QPalette::AlternateBase}) {
+            p.setColor(group, role, mix(app.color(group, role), tint, kDialogBaseTint));
+        }
     }
     return p;
 }
@@ -300,6 +307,40 @@ ThemeMode themeFromId(const QString &id, ThemeMode fallback)
 }
 
 namespace {
+// Paints the Highlight frame around dialog windows, over whatever the dialog
+// painted itself. An application filter, so it reaches message boxes and
+// file dialogs too. Dialogs used as pages inside another window have none.
+class DialogFrame : public QObject
+{
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *ev) override
+    {
+        if (ev->type() != QEvent::Paint || m_painting) {
+            return false;
+        }
+        auto *dialog = qobject_cast<QDialog *>(watched);
+        if (!dialog || !dialog->isWindow()) {
+            return false;
+        }
+        m_painting = true;
+        QCoreApplication::sendEvent(dialog, ev); // the dialog's own painting first
+        m_painting = false;
+        QPainter p(dialog);
+        QPen pen(dialog->palette().color(QPalette::Highlight), kDialogFrameWidth);
+        pen.setJoinStyle(Qt::MiterJoin);
+        p.setPen(pen);
+        const qreal half = kDialogFrameWidth / 2.0;
+        p.drawRect(QRectF(dialog->rect()).adjusted(half, half, -half, -half));
+        return true;
+    }
+
+private:
+    bool m_painting = false;
+};
+
 void applyPalettes(const QPalette &app, const QPalette &toolBar, const QPalette &header, const QFont &font)
 {
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
@@ -312,6 +353,11 @@ void applyPalettes(const QPalette &app, const QPalette &toolBar, const QPalette 
     // Dialogs (Contacts, Settings, message boxes ...) are tinted, so one
     // lying over the main window doesn't blend into it.
     QApplication::setPalette(dialogPalette(app), QDialog::staticMetaObject.className());
+    static QPointer<DialogFrame> frame;
+    if (!frame) {
+        frame = new DialogFrame(qApp);
+        qApp->installEventFilter(frame);
+    }
     // Only themes with a UI font touch the font (and the next theme puts the
     // default back), so switching built-in themes doesn't relayout.
     static bool themeFont = false;

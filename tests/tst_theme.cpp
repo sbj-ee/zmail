@@ -314,10 +314,22 @@ private slots:
             QVERIFY2(contrastRatio(dialog.palette().color(QPalette::WindowText), window) >= 4.5, name.constData());
             QVERIFY2(contrastRatio(button->palette().color(QPalette::ButtonText),
                                    button->palette().color(QPalette::Button)) >= 4.5, name.constData());
-            QCOMPARE(dialog.palette().color(QPalette::Base), app.color(QPalette::Base));
-            qInfo("%s: window %s, dialog %s, text contrast %.2f", name.constData(),
+            // Lists and fields are most of a dialog: they are tinted too, less.
+            const QColor base = dialog.palette().color(QPalette::Base);
+            QVERIFY2(base != app.color(QPalette::Base), name.constData());
+            QVERIFY2(contrastRatio(dialog.palette().color(QPalette::Text), base) >= 7.0, name.constData());
+            QVERIFY2(contrastRatio(dialog.palette().color(QPalette::PlaceholderText), base) >= 3.0, name.constData());
+            // And the window has a frame in the selection colour.
+            dialog.resize(300, 200);
+            const QImage shot = dialog.grab().toImage();
+            QCOMPARE(shot.pixelColor(1, 100).rgb(), app.color(QPalette::Highlight).rgb());
+            QCOMPARE(shot.pixelColor(298, 100).rgb(), app.color(QPalette::Highlight).rgb());
+            QCOMPARE(shot.pixelColor(150, 100).rgb(), window.rgb());
+            qInfo("%s: window %s -> %s (text %.2f), base %s -> %s (text %.2f)", name.constData(),
                   qPrintable(app.color(QPalette::Window).name()), qPrintable(window.name()),
-                  contrastRatio(dialog.palette().color(QPalette::WindowText), window));
+                  contrastRatio(dialog.palette().color(QPalette::WindowText), window),
+                  qPrintable(app.color(QPalette::Base).name()), qPrintable(base.name()),
+                  contrastRatio(dialog.palette().color(QPalette::Text), base));
         }
         applyTheme(ThemeMode::Light);
     }

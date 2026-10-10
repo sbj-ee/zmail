@@ -36,11 +36,17 @@ QPalette brandToolBarPalette(const sbj::brand::Theme &t);
 QPalette brandHeaderPalette(const sbj::brand::Theme &t);
 
 // The palette of every QDialog (a class palette, set by applyTheme()): the
-// application palette with Window and Button tinted toward Highlight, so a
-// dialog over the main window stands out from it. Text and Base are as in
-// the application palette.
-inline constexpr double kDialogTint = 0.15;
+// application palette tinted toward Highlight, so a dialog over the main
+// window stands out from it. Window and Button take kDialogTint; Base and
+// AlternateBase (lists and fields, most of a dialog like Contacts) take the
+// lighter kDialogBaseTint, or the dialog was as white as the list behind it.
+// Text colours are as in the application palette.
+inline constexpr double kDialogTint = 0.28;
+inline constexpr double kDialogBaseTint = 0.10;
 QPalette dialogPalette(const QPalette &app);
+// Every dialog window also gets a frame in the Highlight colour, this wide
+// (drawn inside its edge, in the layout's margin). Installed by applyTheme().
+inline constexpr int kDialogFrameWidth = 3;
 
 // Palettes from the shared roles (ThemeFile.h); the brand palettes above are
 // these for the brand theme's roles.

@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.16: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.17: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -76,7 +76,9 @@ time, Out is called Sent, and the Trash and Drafts counts are right.
 0.6.13: an All Mail mailbox. New in 0.6.14: Ctrl+click opens a
 folder's menu, for when there is no mouse. New in 0.6.15: dialogs
 are tinted, to stand out from the main window. New in 0.6.16: a
-Queue mailbox for mail that is waiting to be sent. See
+Queue mailbox for mail that is waiting to be sent. 0.6.17 makes
+dialogs easier to tell from the main window: a stronger tint, lists
+included, and a coloured frame. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -143,7 +145,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.16_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.17_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -283,9 +285,9 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Right-clicking a mailbox in the sidebar acts on that mailbox without
   leaving the one you are in; with no mouse attached, Ctrl+click opens the
   same menu. Empty mailboxes and an empty preview say so.
-- Dialogs (Contacts, Settings, message boxes) have a background tinted with
-  the theme's selection colour, so one lying over the main window stands
-  out from it.
+- Dialogs (Contacts, Settings, message boxes) are tinted with the theme's
+  selection colour, lists and fields included, and have a frame in that
+  colour, so one lying over the main window stands out from it.
 - **Help → Keyboard Shortcuts** (Ctrl+/) lists every key.
 - Search understands `is:flagged` and `flag:red` (or any flag colour).
 - Dates in the message list read `01/01/2026  9:05 AM`.

@@ -211,8 +211,7 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - **All Mail**, below Archive, lists every message in Gmail except Trash
   and Spam, whether or not it is in the Inbox or a folder, so mail that is
   in neither can still be found. It loads as you scroll (or with Load All
-  Messages). Gmail has no total for it, so its count is every message in
-  the account less Trash and Spam.
+  Messages). Its count is every message in the account outside Trash and Spam.
 - Every folder in the sidebar is a folder icon in its own colour: the
   label's Gmail colour if it has one, otherwise one picked from its name.
 - Moving a message into a folder also takes it out of Gmail's **Important**

@@ -1345,8 +1345,8 @@ private slots:
         QVERIFY(shown.contains(f.a) && shown.contains(f.b) && shown.contains(f.c));
         QVERIFY(!shown.contains(binned));
 
-        // Its count is every message in the account less Trash and Spam
-        // (Gmail has no total for All Mail), and follows what changes.
+        // Its count is the profile's messagesTotal, which leaves out Trash
+        // and Spam (Gmail has no label total for All Mail), and follows what changes.
         auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
         const auto allCount = [tree]() {
             for (QTreeWidgetItemIterator it(tree); *it; ++it) {

@@ -488,8 +488,13 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
     }
     const QString rest = path.mid(api.size());
     if (rest == QLatin1String("/profile")) {
+        // As real Gmail: messagesTotal leaves out Trash and Spam.
+        int total = 0;
+        for (const Message &m : m_messages) {
+            total += !m.labels.contains(QStringLiteral("TRASH")) && !m.labels.contains(QStringLiteral("SPAM"));
+        }
         replyJson(s, 200, {{QStringLiteral("emailAddress"), email},
-                           {QStringLiteral("messagesTotal"), int(m_messages.size())},
+                           {QStringLiteral("messagesTotal"), total},
                            {QStringLiteral("historyId"), QString::number(m_historyId)}});
         return;
     }

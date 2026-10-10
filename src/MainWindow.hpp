@@ -278,7 +278,7 @@ private:
     void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
     QMenu *buildFlagMenu(QWidget *parent);
     int trashCount(int gmailTotal) const; // what the sidebar shows for Trash
-    int allMailCount(int trashTotal, int spamTotal) const; // for All Mail: the account's total less those; 0 = unknown
+    int allMailCount() const; // for All Mail: the profile's messagesTotal; 0 = not known yet
     // Archive: a folder (a Gmail label, "Archived", made on first use) with a
     // row of its own in the sidebar.
     QString archiveLabelId() const;

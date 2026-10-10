@@ -91,9 +91,10 @@ public:
     void setMeta(const QString &key, const QString &value);
     qint64 historyId() const { return meta(QStringLiteral("historyId")).toLongLong(); }
     void setHistoryId(qint64 id) { setMeta(QStringLiteral("historyId"), QString::number(id)); }
-    // Every message in the account, Trash and Spam included (the profile's
-    // messagesTotal); 0 until it has been read. All Mail's count is this less
-    // those two labels' totals: Gmail has no total for All Mail itself.
+    // The profile's messagesTotal: every message in the account outside
+    // Trash and Spam (checked against a real account: it equals what
+    // messages.list returns with no label, whatever is in Trash). That is
+    // All Mail's count; Gmail has no label total for it. 0 until read.
     int mailboxTotal() const { return meta(QStringLiteral("messagesTotal")).toInt(); }
     void setMailboxTotal(int total) { setMeta(QStringLiteral("messagesTotal"), QString::number(total)); }
 

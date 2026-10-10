@@ -1297,6 +1297,7 @@ private slots:
         QCOMPARE(f.g.sendCalls, sentBefore + 1);
         back->setConfirmOnClose(false);
         back->close();
+        QTRY_VERIFY(!back); // gone before the window it belongs to
     }
 
     // Archive (Message menu and the list's right-click menu): the first use

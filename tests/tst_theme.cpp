@@ -5,6 +5,10 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDialog>
+#include <QLabel>
+#include <QMainWindow>
+#include <QPushButton>
 #include <QHeaderView>
 #include <QSettings>
 #include <QStyle>
@@ -283,6 +287,37 @@ private slots:
             QVERIFY(ink.isValid());
             QCOMPARE(ink.rgb(), p.color(QPalette::HighlightedText).rgb());
             QVERIFY2(contrastRatio(ink, p.color(QPalette::Highlight)) >= 4.5, qPrintable(themeId(m)));
+        }
+        applyTheme(ThemeMode::Light);
+    }
+
+    // Dialogs are tinted, so one over the main window doesn't blend into it.
+    void dialogsStandOutFromTheMainWindow()
+    {
+        for (ThemeMode m : {ThemeMode::Light, ThemeMode::Dark, ThemeMode::Boilermakers, ThemeMode::Badgers,
+                            ThemeMode::Packers}) {
+            applyTheme(m);
+            const QByteArray name = themeId(m).toLatin1();
+            QMainWindow main;
+            QDialog dialog;
+            auto *label = new QLabel(&dialog); // children take the dialog's palette
+            auto *button = new QPushButton(&dialog);
+            dialog.ensurePolished(); // a window takes its class palette when polished (on show)
+            const QPalette app = QApplication::palette();
+            QCOMPARE(main.palette().color(QPalette::Window), app.color(QPalette::Window));
+            const QColor window = dialog.palette().color(QPalette::Window);
+            QCOMPARE(window, dialogPalette(app).color(QPalette::Window));
+            QVERIFY2(window != app.color(QPalette::Window), name.constData());
+            QCOMPARE(label->palette().color(QPalette::Window), window);
+            QCOMPARE(button->palette().color(QPalette::Button), dialogPalette(app).color(QPalette::Button));
+            // Still readable, and lists and fields inside keep their colours.
+            QVERIFY2(contrastRatio(dialog.palette().color(QPalette::WindowText), window) >= 4.5, name.constData());
+            QVERIFY2(contrastRatio(button->palette().color(QPalette::ButtonText),
+                                   button->palette().color(QPalette::Button)) >= 4.5, name.constData());
+            QCOMPARE(dialog.palette().color(QPalette::Base), app.color(QPalette::Base));
+            qInfo("%s: window %s, dialog %s, text contrast %.2f", name.constData(),
+                  qPrintable(app.color(QPalette::Window).name()), qPrintable(window.name()),
+                  contrastRatio(dialog.palette().color(QPalette::WindowText), window));
         }
         applyTheme(ThemeMode::Light);
     }

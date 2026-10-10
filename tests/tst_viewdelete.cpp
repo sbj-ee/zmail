@@ -1289,6 +1289,59 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(archiveRow()->text(1), QStringLiteral("2"), 10000);
     }
 
+    // An unread message in the preview is marked read only once it has been
+    // there a while: passing over new mail leaves it unread.
+    void previewMarksReadAfterADelay()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}));
+        // Ten seconds in the app; the tests run with ZMAIL_MARK_READ_DELAY_MS=0.
+        QCOMPARE(MainWindow::kMarkReadDelayMs, 10000);
+        qunsetenv("ZMAIL_MARK_READ_DELAY_MS");
+        QCOMPARE(MainWindow::defaultMarkReadDelayMs(), 10000);
+        qputenv("ZMAIL_MARK_READ_DELAY_MS", "0");
+        QCOMPARE(MainWindow::defaultMarkReadDelayMs(), 0);
+        f.w->setMarkReadDelayMs(400);
+        const auto unreadInGmail = [&f](const QString &id) { return f.g.messages().value(id).labels.contains(QStringLiteral("UNREAD")); };
+        const auto select = [&f](const QString &id) {
+            f.list->setCurrentIndex(f.proxy->mapFromSource(f.model->index(f.model->rowForId(id), 0)));
+        };
+        const auto status = [&f](const QString &id) { return f.model->item(f.model->rowForId(id)).status; };
+
+        // Two that arrive now, not yet shown (opening the fixture shows some of its own).
+        const QString glanced = f.seed(QStringLiteral("Delta zebra"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        const QString stayed = f.seed(QStringLiteral("Echo zebra"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        f.session->sync()->pollNow(true);
+        QTRY_VERIFY_WITH_TIMEOUT(f.model->rowForId(glanced) >= 0 && f.model->rowForId(stayed) >= 0, 10000);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QCOMPARE(status(stayed), MailStatus::Unread);
+        // A glance at Delta, then on to Echo: Delta stays unread, Echo
+        // is read once it has been shown for the delay.
+        select(glanced);
+        QTRY_COMPARE(f.w->shownMessageId(), glanced);
+        QTest::qWait(100);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        select(stayed);
+        QTRY_COMPARE(f.w->shownMessageId(), stayed);
+        QCOMPARE(status(stayed), MailStatus::Unread);
+        QTRY_COMPARE_WITH_TIMEOUT(status(stayed), MailStatus::Read, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!unreadInGmail(stayed), 5000);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QVERIFY(unreadInGmail(glanced));
+
+        // Mark as Unread while it is on show is kept: the delay doesn't undo it.
+        select(glanced);
+        QTRY_COMPARE(f.w->shownMessageId(), glanced);
+        f.w->findChild<QAction *>(QStringLiteral("actionMarkUnread"))->trigger();
+        QTest::qWait(700);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QVERIFY(unreadInGmail(glanced));
+
+        // Opened in a window of its own it is read at once.
+        f.w->openMessageWindow(f.proxy->mapFromSource(f.model->index(f.model->rowForId(glanced), 0)));
+        QCOMPARE(status(glanced), MailStatus::Read);
+    }
+
     // All Mail shows what is in neither the Inbox nor a folder (mail that
     // would otherwise be nowhere in the sidebar), and not what is in Trash.
     void allMailShowsMailWithNoFolder()
@@ -1304,6 +1357,19 @@ private slots:
         QVERIFY(shown.contains(f.a) && shown.contains(f.b) && shown.contains(f.c));
         QVERIFY(!shown.contains(binned));
 
+        // Its count is the profile's messagesTotal, which leaves out Trash
+        // and Spam (Gmail has no label total for All Mail), and follows what changes.
+        auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        const auto allCount = [tree]() {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == QLatin1String("All")) {
+                    return (*it)->text(1);
+                }
+            }
+            return QStringLiteral("no row");
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(allCount(), QStringLiteral("3"), 10000); // four in the account, one binned
+
         // They are in no other mailbox; one moved to the Inbox is in both.
         f.selectView(QStringLiteral("In"));
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 0, 5000);
@@ -1311,6 +1377,8 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 1, 10000);
         f.selectView(QStringLiteral("All"));
         QTRY_COMPARE_WITH_TIMEOUT(f.proxy->rowCount(), 3, 5000);
+        f.session->sync()->moveToLabel(f.c, QStringLiteral("TRASH"));
+        QTRY_COMPARE_WITH_TIMEOUT(allCount(), QStringLiteral("2"), 10000);
     }
 
     // Gmail refuses every name: nothing is moved, and the status bar says so.

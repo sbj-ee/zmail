@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.17: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.18: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -78,7 +78,8 @@ folder's menu, for when there is no mouse. New in 0.6.15: dialogs
 are tinted, to stand out from the main window. New in 0.6.16: a
 Queue mailbox for mail that is waiting to be sent. 0.6.17 makes
 dialogs easier to tell from the main window: a stronger tint, lists
-included, and a coloured frame. See
+included, and a coloured frame. New in 0.6.18: All Mail has a count,
+and a message is marked read only after 10 seconds in the preview. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -145,7 +146,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.17_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.18_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -210,7 +211,7 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - **All Mail**, below Archive, lists every message in Gmail except Trash
   and Spam, whether or not it is in the Inbox or a folder, so mail that is
   in neither can still be found. It loads as you scroll (or with Load All
-  Messages) and has no count.
+  Messages). Its count is every message in the account outside Trash and Spam.
 - Every folder in the sidebar is a folder icon in its own colour: the
   label's Gmail colour if it has one, otherwise one picked from its name.
 - Moving a message into a folder also takes it out of Gmail's **Important**
@@ -288,6 +289,9 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Dialogs (Contacts, Settings, message boxes) are tinted with the theme's
   selection colour, lists and fields included, and have a frame in that
   colour, so one lying over the main window stands out from it.
+- An unread message is marked read once it has been in the preview for 10
+  seconds, so arrowing past new mail, or a glance at it, leaves it unread.
+  Opening it in its own window reads it at once.
 - **Help → Keyboard Shortcuts** (Ctrl+/) lists every key.
 - Search understands `is:flagged` and `flag:red` (or any flag colour).
 - Dates in the message list read `01/01/2026  9:05 AM`.

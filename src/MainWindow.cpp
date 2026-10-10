@@ -2075,9 +2075,7 @@ void MainWindow::showMessageIn(MessageView *view, const QString &id)
         });
     }
     if (c.unread()) {
-        sync->markRead(id);
-        m_model->setStatus(row, MailStatus::Read);
-        updateCounts();
+        markReadSoon(view, id);
     }
 }
 

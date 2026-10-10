@@ -193,6 +193,8 @@ private:
     // alone (a labels.get each), a moment later, instead of for every label.
     QSet<QString> m_countsDirty;
     void refreshCounts(const QSet<QString> &labelIds);
+    void refreshMailboxTotal(); // the profile's messagesTotal, for All Mail's count
+    bool m_mailboxTotalFresh = false; // a full sync just read the profile: its label refresh needn't again
     static constexpr int kTargetedCountLabels = 12; // more than this: one full refresh instead
     int m_initialCount = 500;
     int m_pageSize = 100;

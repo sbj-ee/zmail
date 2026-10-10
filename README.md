@@ -132,7 +132,7 @@ shows the sign-in dialog again.
 |---|---|---|
 | ![](docs/screenshots/gmail-setup.png) | ![](docs/screenshots/gmail-signin.png) | ![](docs/screenshots/gmail-synced.png) |
 
-![Replying in zmail 0.3.0 (mock data)](docs/screenshots/compose-send.png)
+![Replying in zmail (mock data)](docs/screenshots/compose-send.png)
 
 ## Build
 

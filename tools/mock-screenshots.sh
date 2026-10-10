@@ -10,7 +10,8 @@ shot() { # <mode> <out.png>
   local wm=$!
   sleep 2
   local log; log="$(mktemp)"
-  HOME="$(mktemp -d)" timeout 60 "$build/tests/zmail_mockshot" "$1" >"$log" 2>&1 &
+  # xcb, or in a Wayland session the window opens on the real desktop, not in Xvfb.
+  HOME="$(mktemp -d)" QT_QPA_PLATFORM=xcb timeout 60 "$build/tests/zmail_mockshot" "$1" >"$log" 2>&1 &
   local app=$!
   for _ in $(seq 1 60); do grep -q READY "$log" && break; sleep 0.5; done
   sleep 1
@@ -23,6 +24,11 @@ shot() { # <mode> <out.png>
     xdotool windowmove "$w" 0 0; sleep 1
   else
     w="$(xdotool search --onlyvisible --name '^Connect your Gmail$' | head -1)"
+  fi
+  if [[ -z $w ]]; then # import with no window waits for a click
+    echo "mock-screenshots: no window for '$1'" >&2
+    kill "$app" "$wm" 2>/dev/null || true
+    return 1
   fi
   import -frame -window "$w" "$2"
   kill "$app" "$wm" 2>/dev/null || true

@@ -460,8 +460,9 @@ QList<SearchTerm> MessageFilterProxy::parseSearch(const QString &text)
 bool MessageFilterProxy::matches(const QList<SearchTerm> &terms, const MailItem &m)
 {
     auto has = [](const QString &hay, const QString &needle) { return hay.contains(needle, Qt::CaseInsensitive); };
-    // Sent-only rows show the recipient in Who (as Eudora's Out mailbox does).
-    const bool whoIsRecipient = m.mailboxes.contains(QStringLiteral("Out")) && !m.mailboxes.contains(QStringLiteral("In"));
+    // Sent-only and queued rows show the recipient in Who (as Eudora's Out mailbox does).
+    const bool whoIsRecipient = m.mailboxes.contains(QStringLiteral("Queue"))
+                                || (m.mailboxes.contains(QStringLiteral("Out")) && !m.mailboxes.contains(QStringLiteral("In")));
     for (const SearchTerm &t : terms) {
         bool hit = false;
         switch (t.field) {
@@ -617,7 +618,7 @@ QList<MailItem> sampleMail()
          "We're reading \"The Long Way Home\". Meeting at the library on the 22nd.", {}});
 
     add({MailStatus::Queued, MailPriority::Normal, false, "Travel", travel, "Marcus Delgado", "marcus.delgado@example.com",
-         QDateTime(now.date().addDays(1), QTime(8, 0)), 2'900, "Tackle list for the lake", {}, false, {"Out"},
+         QDateTime(now.date().addDays(1), QTime(8, 0)), 2'900, "Tackle list for the lake", {}, false, {"Queue"},
          "Scheduled to send tomorrow at 8:00 AM (CT).", {}});
     add({MailStatus::Sent, MailPriority::Normal, false, "Work", work, "Priya Raman", "priya.raman@example.com",
          at(1, 17, 10), 5'100, "Re: Q4 budget kickoff", {}, false, {"Out"}, "Sounds good, I'll review the draft.", {}});

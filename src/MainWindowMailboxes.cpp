@@ -153,12 +153,13 @@ void MainWindow::populateMailboxes()
         auto unread = [&](const QString &id) { return byId.contains(id) ? byId.value(id).unread : 0; };
         add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), total(QStringLiteral("INBOX")),
             unread(QStringLiteral("INBOX")));
-        const int waiting = int(m_session->cache()->queued().size());
+        // Not sent yet: Send Later's messages wait in a mailbox of their own.
+        QTreeWidgetItem *queue = add(nullptr, tr("Queue"), icon(QStringLiteral("send-horizontal")), QStringLiteral("Queue"),
+                                     int(m_session->cache()->queued().size()));
+        queue->setToolTip(0, tr("Messages waiting to be sent (Send Later)"));
         QTreeWidgetItem *out = add(nullptr, tr("Sent"), icon(QStringLiteral("send")), QStringLiteral("Out"),
-                                   total(QStringLiteral("SENT")) + waiting, waiting);
-        out->setToolTip(0, waiting == 0   ? tr("Sent mail (Gmail SENT)")
-                           : waiting == 1 ? tr("Sent mail, and 1 message queued to send")
-                                          : tr("Sent mail, and %1 messages queued to send").arg(waiting));
+                                   total(QStringLiteral("SENT")));
+        out->setToolTip(0, tr("Sent mail (Gmail SENT)"));
         add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"),
             m_session->cache() ? int(m_session->cache()->snoozes(true).size()) : 0);
         if (showJunkFolder) {
@@ -235,8 +236,10 @@ void MainWindow::populateMailboxes()
         return;
     }
     add(nullptr, tr("In"), icon(QStringLiteral("inbox")), QStringLiteral("In"), -1, countFor(QStringLiteral("In"), true));
+    QTreeWidgetItem *queue = add(nullptr, tr("Queue"), icon(QStringLiteral("send-horizontal")), QStringLiteral("Queue"));
+    queue->setToolTip(0, tr("Messages waiting to be sent (Send Later)"));
     QTreeWidgetItem *out = add(nullptr, tr("Sent"), icon(QStringLiteral("send")), QStringLiteral("Out"));
-    out->setToolTip(0, tr("Queued and sent mail"));
+    out->setToolTip(0, tr("Sent mail"));
     add(nullptr, tr("Snoozed"), icon(QStringLiteral("clock")), QStringLiteral("Snoozed"));
     if (showJunkFolder) {
         QTreeWidgetItem *junk = add(nullptr, tr("Junk / Suspicious"),
@@ -311,6 +314,10 @@ void MainWindow::updateMailboxCounts()
             setMailboxCount(*it, int(m_session->cache()->snoozes(true).size()), 0, m_mailboxes->font(), dim);
             continue;
         }
+        if (key == QLatin1String("Queue")) {
+            setMailboxCount(*it, queued, 0, m_mailboxes->font(), dim);
+            continue;
+        }
         const QString label = labelForMailbox(key);
         if (label.isEmpty() || !byId.contains(label)) {
             continue; // headings, Search
@@ -319,8 +326,7 @@ void MainWindow::updateMailboxCounts()
         int total = l.total;
         int unread = l.unread;
         if (key == QLatin1String("Out")) {
-            total += queued; // waiting to go
-            unread = queued;
+            unread = 0;
         } else if (key == QLatin1String("Trash")) {
             total = trashCount(total);
             unread = 0;
@@ -356,7 +362,8 @@ void MainWindow::updateCounts()
         const bool searching = key == QLatin1String("Search") || (m_search && !m_search->text().trimmed().isEmpty());
         m_emptyHint->setText(searching                          ? tr("No messages match your search.")
                              : key == QLatin1String("Trash")    ? tr("Trash is empty.")
-                             : key == QLatin1String("Out")      ? tr("Nothing sent or queued.")
+                             : key == QLatin1String("Out")      ? tr("Nothing sent.")
+                             : key == QLatin1String("Queue")    ? tr("Nothing is waiting to be sent.")
                              : key == QLatin1String("Snoozed")  ? tr("Nothing is snoozed.")
                              : key == QLatin1String("Junk")     ? tr("No junk mail.")
                                                                 : tr("No messages in %1.").arg(box));
@@ -468,6 +475,12 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
                                        [this, key]() { loadAllMessages(key); });
         all->setObjectName(QStringLiteral("actionLoadAllHere"));
         all->setToolTip(tr("Fetch every message in this mailbox, not only the ones scrolled to so far"));
+    }
+    if (key == QLatin1String("Queue")) {
+        if (QAction *send = findChild<QAction *>(QStringLiteral("actionSendQueued"))) {
+            menu->addAction(send);
+            menu->addSeparator();
+        }
     }
     if (live && key == QLatin1String("Trash")) {
         QAction *empty = menu->addAction(icon(QStringLiteral("trash")), tr("&Empty Trash\u2026"), menu,

@@ -3,6 +3,7 @@
 #include "BrandThemes.h"
 
 #include <QApplication>
+#include <QDialog>
 #include <QHeaderView>
 #include <QToolBar>
 #include <QFont>
@@ -181,6 +182,18 @@ QPalette rolesHeaderPalette(const sbj::theme::Roles &r)
     return p;
 }
 
+QPalette dialogPalette(const QPalette &app)
+{
+    QPalette p = app;
+    const QColor tint = app.color(QPalette::Highlight);
+    for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        for (auto role : {QPalette::Window, QPalette::Button}) {
+            p.setColor(group, role, mix(app.color(group, role), tint, kDialogTint));
+        }
+    }
+    return p;
+}
+
 sbj::theme::Roles rolesFromPalette(const QPalette &p)
 {
     using namespace sbj::theme;
@@ -296,6 +309,9 @@ void applyPalettes(const QPalette &app, const QPalette &toolBar, const QPalette 
     // Dark put the plain palette back.
     QApplication::setPalette(toolBar, QToolBar::staticMetaObject.className());
     QApplication::setPalette(header, QHeaderView::staticMetaObject.className());
+    // Dialogs (Contacts, Settings, message boxes ...) are tinted, so one
+    // lying over the main window doesn't blend into it.
+    QApplication::setPalette(dialogPalette(app), QDialog::staticMetaObject.className());
     // Only themes with a UI font touch the font (and the next theme puts the
     // default back), so switching built-in themes doesn't relayout.
     static bool themeFont = false;

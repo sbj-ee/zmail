@@ -4,6 +4,7 @@
 #include <QUrl>
 
 class QCheckBox;
+class QComboBox;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
@@ -52,6 +53,7 @@ private:
 
     NewMailSound *m_sound = nullptr;
     QCheckBox *m_enable = nullptr;
+    QComboBox *m_builtIn = nullptr; // the chime and zmail's other sounds
     QLineEdit *m_path = nullptr;
     QPushButton *m_browse = nullptr;
     QPushButton *m_default = nullptr;

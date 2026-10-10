@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QUrl>
@@ -9,9 +10,8 @@ class QSoundEffect;
 namespace zmail::ui {
 
 // Plays the bundled CC0 chime (assets/sounds/new-mail.wav) when new INBOX
-// mail arrives. A custom WAV from Settings > Sounds replaces it; a missing
-// or unreadable custom file falls back to the built-in sound. Rule-based
-// sounds and imported clips come later.
+// mail arrives. Another built-in sound or a custom WAV from Settings >
+// Sounds replaces it; a missing or unreadable file falls back to the chime.
 class NewMailSound : public QObject
 {
     Q_OBJECT
@@ -36,7 +36,20 @@ public:
     void setEnabled(bool on) { m_enabled = on; }
     bool isEnabled() const { return m_enabled; }
 
-    // Absolute path to a user WAV, or empty for the built-in chime.
+    // The other sounds that come with zmail (assets/sounds/, all CC0), by
+    // name and resource path (":/sounds/bell.wav"). One is chosen the way a
+    // custom file is: its path is the sound file.
+    struct BuiltIn {
+        QString name;
+        QString path;
+    };
+    static QList<BuiltIn> builtIns();
+    static bool isBuiltIn(const QString &path) { return path.startsWith(QLatin1String(":/sounds/")); }
+    // What plays `path`: qrc: for a built-in, file: for a file on disk.
+    static QUrl urlFor(const QString &path);
+
+    // Absolute path to a user WAV, a built-in's resource path, or empty for
+    // the chime.
     void setSoundFile(const QString &path);
     QString soundFile() const { return m_soundFile; }
 

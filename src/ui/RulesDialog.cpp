@@ -293,7 +293,10 @@ void RulesDialog::setSoundChoice(const QString &sound)
     m_sound->clear();
     m_sound->addItem(tr("The usual new-mail sound"), QString());
     m_sound->addItem(tr("No sound"), QString::fromLatin1(kRuleSoundNone));
-    if (!sound.isEmpty() && sound != QLatin1String(kRuleSoundNone)) {
+    for (const NewMailSound::BuiltIn &b : NewMailSound::builtIns()) {
+        m_sound->addItem(b.name, b.path);
+    }
+    if (!sound.isEmpty() && sound != QLatin1String(kRuleSoundNone) && m_sound->findData(sound) < 0) {
         m_sound->addItem(QFileInfo(sound).fileName(), sound);
         m_sound->setItemData(m_sound->count() - 1, sound, Qt::ToolTipRole);
     }

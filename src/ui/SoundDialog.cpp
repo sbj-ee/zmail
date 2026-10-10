@@ -4,6 +4,7 @@
 
 #include <QAudioDevice>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -41,6 +42,25 @@ SoundDialog::SoundDialog(NewMailSound *sound, QWidget *parent)
     note->setWordWrap(true);
     note->setForegroundRole(QPalette::PlaceholderText);
     gl->addWidget(note);
+
+    // The sounds that come with zmail; Browse is for one of your own.
+    auto *pickRow = new QHBoxLayout;
+    auto *pickLabel = new QLabel(tr("&Sound:"), group);
+    m_builtIn = new QComboBox(group);
+    m_builtIn->setObjectName(QStringLiteral("builtInSoundCombo"));
+    m_builtIn->setPlaceholderText(tr("A file of your own"));
+    m_builtIn->addItem(tr("Chime (the usual one)"), QString());
+    for (const NewMailSound::BuiltIn &b : NewMailSound::builtIns()) {
+        m_builtIn->addItem(b.name, b.path);
+    }
+    pickLabel->setBuddy(m_builtIn);
+    pickRow->addWidget(pickLabel);
+    pickRow->addWidget(m_builtIn, 1);
+    gl->addLayout(pickRow);
+    connect(m_builtIn, &QComboBox::activated, this, [this](int index) {
+        setSoundFile(m_builtIn->itemData(index).toString());
+        test(); // hear it as it is picked
+    });
 
     auto *pathRow = new QHBoxLayout;
     auto *pathLabel = new QLabel(tr("Sound &file:"), group);
@@ -149,9 +169,14 @@ void SoundDialog::setSoundFile(const QString &path)
 
 void SoundDialog::updatePathLabel()
 {
+    m_builtIn->setCurrentIndex(m_builtIn->findData(m_file)); // none: a file of your own
     if (m_file.isEmpty()) {
         m_path->setText(tr("Default (built-in chime)"));
         m_path->setToolTip(NewMailSound::resourceUrl());
+    } else if (NewMailSound::isBuiltIn(m_file)) {
+        m_path->setText(tr("Built-in (%1)").arg(m_builtIn->currentIndex() >= 0 ? m_builtIn->currentText()
+                                                                              : QFileInfo(m_file).fileName()));
+        m_path->setToolTip(NewMailSound::urlFor(m_file).toString());
     } else {
         m_path->setText(m_file);
         m_path->setToolTip(m_file);
@@ -160,7 +185,7 @@ void SoundDialog::updatePathLabel()
 
 void SoundDialog::browse()
 {
-    const QString start = m_file.isEmpty() ? QString() : m_file;
+    const QString start = NewMailSound::isBuiltIn(m_file) ? QString() : m_file;
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Choose new-mail sound"), start,
         tr("Wave audio (*.wav);;All files (*)"));
@@ -179,7 +204,7 @@ QUrl SoundDialog::previewSource() const
     if (m_file.isEmpty()) {
         return QUrl(NewMailSound::resourceUrl());
     }
-    return QUrl::fromLocalFile(QFileInfo(m_file).absoluteFilePath());
+    return NewMailSound::urlFor(m_file);
 }
 
 void SoundDialog::test()

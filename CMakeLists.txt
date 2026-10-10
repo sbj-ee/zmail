@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.6.20 LANGUAGES CXX)
+project(zmail VERSION 0.6.21 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -199,11 +199,17 @@ qt_add_resources(zmail_app "zmail_appicon"
   PREFIX "/"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES ${ZMAIL_APP_ICON_FILES})
-# Bundled CC0 sounds (see assets/sounds/LICENSES) as :/sounds/new-mail.wav and :/sounds/sent.wav
+# Bundled CC0 sounds (see assets/sounds/LICENSES) as :/sounds/<name>.wav
 qt_add_resources(zmail_app "zmail_sounds"
   PREFIX "/"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/new-mail.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/bell.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/marimba.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/glass.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/knock.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/drop.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/harp.wav"
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/sent.wav")
 target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"

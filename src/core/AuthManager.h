@@ -28,6 +28,9 @@ public:
     static QStringList scopes();
     // Added later via incremental consent when Contacts sync is enabled.
     static QStringList contactScopes();
+    // ...and when the vacation responder is first changed (reading it needs
+    // nothing more than the sign-in scopes).
+    static QStringList settingsScopes();
 
     using BrowserOpener = std::function<bool(const QUrl &)>;
     using TokenCb = std::function<void(const QString &accessToken, const QString &error)>;
@@ -49,6 +52,11 @@ public:
     // Existing Gmail grants are kept; user is only asked for Contacts.
     void requestContactScopes();
     bool hasContactScopes() const;
+    // The same for any optional scopes: asks only for what is missing, on
+    // top of everything already granted. Emits signedIn() straight away when
+    // nothing is missing.
+    void requestScopes(const QStringList &scopes);
+    bool hasScopes(const QStringList &scopes) const;
     QStringList grantedScopes() const { return m_grantedScopes; }
     void cancelSignIn();
     // How long startSignIn() waits for the browser (0 = the default,
@@ -104,7 +112,7 @@ private:
     QDateTime m_accessExpiry;
     QStringList m_grantedScopes;
     bool m_refreshing = false;
-    bool m_requestingContacts = false;
+    QStringList m_extraScopes; // optional scopes the next startSignIn() asks for
     QList<TokenCb> m_waiters;
 };
 

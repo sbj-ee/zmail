@@ -34,9 +34,16 @@ struct ViewMessage
     bool loading = false;  // body still being fetched
     QString error;
     QString warning;       // HTML for the spam / phishing banner, "" = none
+    // A mailing list that says how to leave it (List-Unsubscribe): the bar
+    // with the Unsubscribe button. unsubscribedOn is set once that was done.
+    bool canUnsubscribe = false;
+    QString unsubscribeTarget; // the list's host or address, for the bar
+    QDateTime unsubscribedOn;
+    QString calendar;      // an iCalendar invitation in the message, "" = none
 };
 
 // Message viewer: header block (From/To/Cc/Date/Subject), attachments row,
+// a card for a calendar invitation, the mailing list's Unsubscribe bar,
 // "remote images blocked" bar, then the body. HTML mail is drawn on a light
 // background like a normal mail client whatever the app theme, optionally
 // in a lightness-inverted dark mode; it's laid out to fill the pane
@@ -54,6 +61,8 @@ public:
 
     SafeHtmlView *body() const { return m_body; }
     QString headerText() const; // header block as plain text (tests, accessibility)
+    // The calendar card as plain text, one fact per line ("" = no card).
+    QString calendarText() const;
 
     qreal zoom() const { return m_zoom; }
     // Zoom actually applied to the last HTML render: zoom() times any
@@ -94,6 +103,7 @@ public:
 signals:
     void zoomChanged(qreal zoom);
     void mailtoRequested(const QUrl &url); // a mailto: link in the body
+    void unsubscribeRequested(const QString &messageId); // the Unsubscribe button
 
 protected:
     bool eventFilter(QObject *obj, QEvent *ev) override;
@@ -102,6 +112,8 @@ protected:
 private:
     void render();
     void renderHeader();
+    void renderCalendar();
+    void renderUnsubscribe();
     void applyBodyPalette();
     int bodyWidth() const;
 
@@ -111,6 +123,11 @@ private:
     QGridLayout *m_headerGrid = nullptr;
     QLabel *m_subject = nullptr;
     QLabel *m_attachments = nullptr;
+    QFrame *m_calendarCard = nullptr;
+    QLabel *m_calendarText = nullptr;
+    QFrame *m_unsubscribeBar = nullptr;
+    QLabel *m_unsubscribeText = nullptr;
+    QPushButton *m_unsubscribe = nullptr;
     QFrame *m_imagesBar = nullptr;
     QLabel *m_imagesText = nullptr;
     QPushButton *m_loadImages = nullptr;

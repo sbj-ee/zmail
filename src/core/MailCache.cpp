@@ -40,15 +40,21 @@ CachedMessage fromRow(const QSqlQuery &q)
     m.replyTo = q.value(17).toString();
     m.messageIdHeader = q.value(18).toString();
     m.references = q.value(19).toString();
+    m.listUnsubscribe = q.value(20).toString();
+    m.listUnsubscribePost = q.value(21).toString();
+    m.calendar = q.value(22).toString();
+    m.extrasVersion = q.value(23).toInt();
+    m.unsubscribedMs = q.value(24).toLongLong();
     return m;
 }
 const char *kCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
                     "size, labels, has_attachment, has_body, body_text, body_html, attachments, cc_addr, reply_to, "
-                    "message_id_hdr, references_hdr";
+                    "message_id_hdr, references_hdr, list_unsubscribe, list_unsubscribe_post, calendar, extras_ver, "
+                    "unsubscribed_ms";
 // The same row without the bodies (fromRow() reads them as empty).
 const char *kListCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
                         "size, labels, has_attachment, has_body, '', '', attachments, cc_addr, reply_to, "
-                        "message_id_hdr, references_hdr";
+                        "message_id_hdr, references_hdr, '', '', '', extras_ver, unsubscribed_ms";
 } // namespace
 
 MailCache::MailCache()
@@ -219,6 +225,21 @@ bool MailCache::migrate()
             return false;
         }
     }
+    // 0.6.19: what the full message says beyond its body (how to unsubscribe,
+    // a calendar invitation). extras_ver 0 marks a body cached before these
+    // were read, so it is fetched once more when next opened.
+    for (const char *col : {"list_unsubscribe", "list_unsubscribe_post", "calendar"}) {
+        if (!have.contains(QLatin1String(col)) &&
+            !exec(QStringLiteral("ALTER TABLE messages ADD COLUMN %1 TEXT").arg(QLatin1String(col)))) {
+            return false;
+        }
+    }
+    for (const char *col : {"extras_ver", "unsubscribed_ms"}) {
+        if (!have.contains(QLatin1String(col)) &&
+            !exec(QStringLiteral("ALTER TABLE messages ADD COLUMN %1 INTEGER NOT NULL DEFAULT 0").arg(QLatin1String(col)))) {
+            return false;
+        }
+    }
     // Snooze table (local; schema meta "2"). CREATE IF NOT EXISTS is in open().
     if (meta(QStringLiteral("schema")).toInt() < 2) {
         if (!exec(QStringLiteral(
@@ -360,15 +381,30 @@ void MailCache::upsert(const CachedMessage &m)
     setLabels(m.id, m.labels);
 }
 
-void MailCache::setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments)
+void MailCache::setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments,
+                        const BodyExtras &extras)
 {
     QSqlQuery q(QSqlDatabase::database(m_conn));
     q.prepare(QStringLiteral("UPDATE messages SET has_body = 1, body_text = ?, body_html = ?, attachments = ?, "
-                             "has_attachment = ? WHERE id = ?"));
+                             "has_attachment = ?, list_unsubscribe = ?, list_unsubscribe_post = ?, calendar = ?, "
+                             "extras_ver = ? WHERE id = ?"));
     q.addBindValue(text);
     q.addBindValue(html);
     q.addBindValue(attachments.join(QLatin1Char('\n')));
     q.addBindValue(attachments.isEmpty() ? 0 : 1);
+    q.addBindValue(extras.listUnsubscribe);
+    q.addBindValue(extras.listUnsubscribePost);
+    q.addBindValue(extras.calendar);
+    q.addBindValue(kExtrasVersion);
+    q.addBindValue(id);
+    q.exec();
+}
+
+void MailCache::setUnsubscribed(const QString &id, qint64 whenMs)
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    q.prepare(QStringLiteral("UPDATE messages SET unsubscribed_ms = ? WHERE id = ?"));
+    q.addBindValue(whenMs);
     q.addBindValue(id);
     q.exec();
 }
@@ -564,8 +600,8 @@ QList<MailCache::Listed> MailCache::listing(int limit) const
         while (q.next()) {
             Listed l;
             l.message = fromRow(q);
-            l.snoozeWakeMs = q.value(20).toLongLong();
-            l.snoozeBadge = q.value(21).toBool() && l.snoozeWakeMs == 0;
+            l.snoozeWakeMs = q.value(25).toLongLong();
+            l.snoozeBadge = q.value(26).toBool() && l.snoozeWakeMs == 0;
             out.append(std::move(l));
         }
     }

@@ -79,6 +79,24 @@ SoundDialog::SoundDialog(NewMailSound *sound, QWidget *parent)
 
     lay->addWidget(group);
 
+    m_sentGroup = new QGroupBox(tr("Sent mail"), this);
+    m_sentGroup->setObjectName(QStringLiteral("sentSoundGroup"));
+    auto *sl = new QHBoxLayout(m_sentGroup);
+    m_sentEnable = new QCheckBox(tr("Play a s&woosh when a message is sent"), m_sentGroup);
+    m_sentEnable->setObjectName(QStringLiteral("sentSoundCheck"));
+    sl->addWidget(m_sentEnable, 1);
+    auto *sentTest = new QPushButton(tr("T&est"), m_sentGroup);
+    sentTest->setObjectName(QStringLiteral("testSentSoundButton"));
+    sentTest->setAutoDefault(false);
+    sl->addWidget(sentTest);
+    connect(sentTest, &QPushButton::clicked, this, [this]() {
+        if (m_sent) {
+            m_sent->playPreview();
+        }
+    });
+    m_sentGroup->hide();
+    lay->addWidget(m_sentGroup);
+
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     lay->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, this, [this]() {
@@ -98,6 +116,13 @@ SoundDialog::SoundDialog(NewMailSound *sound, QWidget *parent)
         setSoundEnabled(true);
         setSoundFile({});
     }
+}
+
+void SoundDialog::setSentSound(SentSound *sent)
+{
+    m_sent = sent;
+    m_sentGroup->setVisible(sent != nullptr);
+    m_sentEnable->setChecked(sent && sent->isEnabled());
 }
 
 bool SoundDialog::soundEnabled() const
@@ -211,6 +236,9 @@ void SoundDialog::showError(const QString &message)
 
 void SoundDialog::save() const
 {
+    if (m_sent) {
+        m_sent->setEnabled(m_sentEnable->isChecked());
+    }
     if (!m_sound) {
         return;
     }

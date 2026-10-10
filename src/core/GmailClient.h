@@ -98,6 +98,10 @@ public:
     void untrashMessage(const QString &id, JsonCb cb); // users.messages.untrash
     void listHistory(const QString &startHistoryId, const QString &pageToken, JsonCb cb);
     void listSendAs(JsonCb cb);
+    // users.settings.getVacation / updateVacation. Reading works with the
+    // sign-in scopes; writing needs gmail.settings.basic (AuthManager).
+    void getVacation(JsonCb cb);
+    void updateVacation(const QJsonObject &settings, JsonCb cb);
     void getAttachment(const QString &messageId, const QString &attachmentId, JsonCb cb);
     void deleteDraft(const QString &draftId, JsonCb cb);
 

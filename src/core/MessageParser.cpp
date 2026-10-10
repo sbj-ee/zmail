@@ -1,5 +1,7 @@
 #include "MessageParser.h"
 
+#include "CalendarInvite.h"
+
 #include <QJsonArray>
 #include <QRegularExpression>
 #include <QStringDecoder>
@@ -54,6 +56,15 @@ void walk(const QJsonObject &part, Body &out, int depth)
         }
         return;
     }
+    const QString data = body.value(QStringLiteral("data")).toString();
+    if (CalendarInvite::isCalendarPart(mime, filename) && out.calendar.isEmpty() && out.calendarAttachmentId.isEmpty()) {
+        if (!data.isEmpty()) {
+            out.calendar = decodeText(decodeBase64Url(data), charsetOf(headers)).left(CalendarInvite::kMaxBytes);
+        } else {
+            out.calendarAttachmentId = body.value(QStringLiteral("attachmentId")).toString();
+            out.calendarAttachmentSize = body.value(QStringLiteral("size")).toInteger();
+        }
+    }
     if (attachment) {
         out.attachments.append(filename.isEmpty() ? QStringLiteral("(unnamed)") : filename);
         AttachmentRef ref;
@@ -67,7 +78,6 @@ void walk(const QJsonObject &part, Body &out, int depth)
         out.attachmentRefs.append(ref);
         return;
     }
-    const QString data = body.value(QStringLiteral("data")).toString();
     if (data.isEmpty()) {
         return;
     }
@@ -131,7 +141,11 @@ CachedMessage fromMetadata(const QJsonObject &msg)
 Body bodyFromFull(const QJsonObject &msg)
 {
     Body b;
-    walk(msg.value(QStringLiteral("payload")).toObject(), b, 0);
+    const QJsonObject payload = msg.value(QStringLiteral("payload")).toObject();
+    walk(payload, b, 0);
+    const QJsonArray headers = payload.value(QStringLiteral("headers")).toArray();
+    b.listUnsubscribe = header(headers, QStringLiteral("List-Unsubscribe")).simplified();
+    b.listUnsubscribePost = header(headers, QStringLiteral("List-Unsubscribe-Post")).simplified();
     return b;
 }
 

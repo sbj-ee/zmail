@@ -4,6 +4,7 @@
 #include <QUrl>
 
 class QCheckBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -12,6 +13,7 @@ class QSoundEffect;
 namespace zmail::ui {
 
 class NewMailSound;
+class SentSound;
 
 // Settings > Sounds. Enable the new-mail chime, pick a custom .wav (or
 // reset to the built-in default), and Test the current choice. Nothing is
@@ -24,6 +26,8 @@ public:
     // sound is the live NewMailSound used by MainWindow; OK saves into it.
     // Test previews through the dialog's own effect and leaves it alone.
     explicit SoundDialog(NewMailSound *sound, QWidget *parent = nullptr);
+    // The swoosh for sent mail: its checkbox and Test (hidden until set).
+    void setSentSound(SentSound *sent);
 
     bool soundEnabled() const;
     void setSoundEnabled(bool on);
@@ -52,6 +56,9 @@ private:
     QPushButton *m_browse = nullptr;
     QPushButton *m_default = nullptr;
     QPushButton *m_test = nullptr;
+    SentSound *m_sent = nullptr;
+    QGroupBox *m_sentGroup = nullptr;
+    QCheckBox *m_sentEnable = nullptr;
     QLabel *m_error = nullptr; // inline "can't play this file"
     // Test's own effect, separate from NewMailSound's: previewing never
     // touches the saved choice, and play() waits for Ready.

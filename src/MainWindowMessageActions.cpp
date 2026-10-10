@@ -7,6 +7,10 @@
 #include "UpdateChecker.hpp"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
+#include "core/Mailto.h"
+#include "core/MimeBuilder.h"
+#include "core/Sender.h"
+#include "core/Unsubscribe.h"
 #include "core/MessageParser.h"
 #include "core/ReplyBuilder.h"
 #include "core/Signatures.h"
@@ -32,7 +36,14 @@
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
+#include "ui/VacationDialog.h"
 #include "version.hpp"
+
+#include <QDesktopServices>
+#include <QMessageBox>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 
 #include <algorithm>
 #include <functional>
@@ -617,4 +628,147 @@ void MainWindow::undoDelete()
     }
     statusBar()->showMessage(
         restored == 1 ? tr("Message restored.") : tr("%1 messages restored.").arg(restored), 4000);
+}
+
+void MainWindow::unsubscribe(const QString &messageId, bool confirm)
+{
+    using Method = zmail::UnsubscribeInfo::Method;
+    const QString id = messageId.isEmpty() ? m_shownId : messageId;
+    zmail::MailCache *cache = m_live && m_session ? m_session->cache() : nullptr;
+    if (!cache || id.isEmpty()) {
+        statusBar()->showMessage(tr("Sign in to Gmail to unsubscribe from mailing lists."), 6000);
+        return;
+    }
+    const zmail::CachedMessage c = cache->message(id);
+    const zmail::UnsubscribeInfo info = zmail::Unsubscribe::parse(c.listUnsubscribe, c.listUnsubscribePost);
+    if (!info.available() || c.labels.contains(QStringLiteral("SPAM"))) {
+        statusBar()->showMessage(c.labels.contains(QStringLiteral("SPAM"))
+                                     ? tr("zmail doesn't unsubscribe from spam: it would tell the sender your address is read.")
+                                     : tr("This message doesn't say how to unsubscribe."),
+                                 8000);
+        return;
+    }
+    const QString sender = c.fromName.isEmpty() ? c.fromAddr : c.fromName;
+    const Method method = info.method();
+    if (confirm) {
+        QString how;
+        switch (method) {
+        case Method::OneClick:
+            how = tr("zmail will tell %1 to take you off the list.").arg(info.target());
+            break;
+        case Method::Mail:
+            how = tr("zmail will send an unsubscribe e-mail from your address to %1.").arg(info.target());
+            break;
+        default:
+            how = tr("This list has no automatic way out. zmail will open its unsubscribe page at %1 in your "
+                     "browser, for you to finish there.")
+                      .arg(info.target());
+            break;
+        }
+        const auto choice = QMessageBox::question(this, tr("Unsubscribe"),
+                                                  tr("Unsubscribe from the mailing list of %1?\n\n%2").arg(sender, how),
+                                                  QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (choice != QMessageBox::Yes) {
+            return;
+        }
+    }
+    QPointer<MainWindow> guard(this);
+    if (method == Method::Web) {
+        const bool opened = m_urlOpener ? m_urlOpener(info.https) : QDesktopServices::openUrl(info.https);
+        statusBar()->showMessage(opened ? tr("Opened the list's unsubscribe page in your browser.")
+                                        : tr("Couldn't open the web browser for the list's unsubscribe page."),
+                                 8000);
+        return; // whether it was finished there, zmail can't tell
+    }
+    statusBar()->showMessage(tr("Unsubscribing from %1\u2026").arg(sender));
+    if (method == Method::OneClick) {
+        // RFC 8058: a POST of exactly this, with nothing that identifies the
+        // user beyond the URL the sender wrote. Redirects aren't followed.
+        QNetworkRequest req(info.https);
+        req.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/x-www-form-urlencoded"));
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        req.setAttribute(QNetworkRequest::CookieLoadControlAttribute, QNetworkRequest::Manual);
+        req.setAttribute(QNetworkRequest::CookieSaveControlAttribute, QNetworkRequest::Manual);
+        req.setTransferTimeout(30000);
+        QNetworkReply *reply = m_session->network()->post(req, QByteArray(zmail::Unsubscribe::kOneClickBody));
+        connect(reply, &QNetworkReply::finished, this, [guard, reply, id]() {
+            reply->deleteLater();
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (guard) {
+                guard->finishUnsubscribe(id, status >= 200 && status < 400,
+                                         status > 0 ? tr("its server answered HTTP %1").arg(status) : reply->errorString());
+            }
+        });
+        return;
+    }
+    zmail::Sender *out = m_session->sender();
+    if (!out) {
+        finishUnsubscribe(id, false, tr("not signed in"));
+        return;
+    }
+    const zmail::MailtoFields f = zmail::Mailto::parse(info.mailto);
+    zmail::OutgoingMessage m;
+    m.from = m_session->fromHeader();
+    m.to = f.to;
+    m.subject = f.subject.isEmpty() ? QStringLiteral("unsubscribe") : f.subject;
+    m.text = f.body.isEmpty() ? QStringLiteral("unsubscribe") : f.body;
+    out->send(zmail::MimeBuilder::build(m), {}, [guard, id](const zmail::Sender::Result &r) {
+        if (guard) {
+            guard->finishUnsubscribe(id, r.ok, r.err.message);
+            if (r.ok && guard->m_session) {
+                guard->m_session->syncSoon();
+            }
+        }
+    });
+}
+
+void MainWindow::finishUnsubscribe(const QString &messageId, bool ok, const QString &message)
+{
+    zmail::MailCache *cache = m_live && m_session ? m_session->cache() : nullptr;
+    if (!ok || !cache) {
+        statusBar()->showMessage(tr("Couldn't unsubscribe: %1.").arg(message.isEmpty() ? tr("unknown error") : message), 10000);
+        return;
+    }
+    cache->setUnsubscribed(messageId, QDateTime::currentMSecsSinceEpoch());
+    const zmail::CachedMessage c = cache->message(messageId);
+    statusBar()->showMessage(tr("Unsubscribed from %1. Mail already on its way may still arrive.")
+                                 .arg(c.fromName.isEmpty() ? c.fromAddr : c.fromName),
+                             10000);
+    // The preview and any window with this message open: the bar now says so.
+    for (QWidget *top : QApplication::topLevelWidgets()) {
+        for (MessageView *v : top->findChildren<MessageView *>()) {
+            if (v->message().id == messageId) {
+                v->setMessage(detail::liveViewMessage(c, false, {}));
+            }
+        }
+    }
+}
+
+VacationDialog *MainWindow::showVacationDialog()
+{
+    if (!m_live || !m_session) {
+        statusBar()->showMessage(tr("Sign in to Gmail to use the vacation responder."), 6000);
+        return nullptr;
+    }
+    auto *dlg = new VacationDialog(m_session, this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &VacationDialog::saved, this, [this](const zmail::VacationSettings &v) {
+        statusBar()->showMessage(v.enabled ? tr("Vacation responder saved: %1.").arg(v.summary())
+                                           : tr("Vacation responder is off."),
+                                 8000);
+    });
+    dlg->show();
+    return dlg;
+}
+
+void MainWindow::updateVacationLabel()
+{
+    if (!m_vacationLabel) {
+        return;
+    }
+    const bool on = m_live && m_session && m_session->vacation().enabled;
+    if (on) {
+        m_vacationLabel->setText(tr("\U0001F334 Vacation reply: %1").arg(m_session->vacation().summary()));
+    }
+    m_vacationLabel->setVisible(on);
 }

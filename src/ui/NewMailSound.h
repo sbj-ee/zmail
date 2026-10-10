@@ -68,4 +68,32 @@ private:
     QString m_soundFile; // empty = built-in
 };
 
+// The bundled CC0 "swoosh" (assets/sounds/sent.wav) as a message leaves:
+// Send, and each message File > Send Queued Messages gets out. On unless
+// Settings > Sounds turns it off (QSettings "notify/sentSound").
+class SentSound : public QObject
+{
+    Q_OBJECT
+
+public:
+    static constexpr const char *kEnabledKey = "notify/sentSound";
+
+    explicit SentSound(QObject *parent = nullptr);
+
+    void play();        // if enabled
+    void playPreview(); // always (Settings > Sounds > Test)
+    int playCount() const { return m_plays; }
+
+    void setEnabled(bool on);
+    bool isEnabled() const { return m_enabled; }
+
+    static QString resourceUrl() { return QStringLiteral("qrc:/sounds/sent.wav"); }
+    static QString resourcePath() { return QStringLiteral(":/sounds/sent.wav"); }
+
+private:
+    QSoundEffect *m_effect = nullptr;
+    int m_plays = 0;
+    bool m_enabled = true;
+};
+
 } // namespace zmail::ui

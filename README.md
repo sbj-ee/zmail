@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.18: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.19: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -79,7 +79,10 @@ are tinted, to stand out from the main window. New in 0.6.16: a
 Queue mailbox for mail that is waiting to be sent. 0.6.17 makes
 dialogs easier to tell from the main window: a stronger tint, lists
 included, and a coloured frame. New in 0.6.18: All Mail has a count,
-and a message is marked read only after 10 seconds in the preview. See
+and a message is marked read only after 10 seconds in the preview. New
+in 0.6.19: one-click unsubscribe from mailing lists, the mark-as-read
+delay as a setting, Gmail's vacation responder, calendar invitations
+shown as a card, and a swoosh when mail is sent. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -146,7 +149,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.18_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.19_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -289,9 +292,28 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Dialogs (Contacts, Settings, message boxes) are tinted with the theme's
   selection colour, lists and fields included, and have a frame in that
   colour, so one lying over the main window stands out from it.
-- An unread message is marked read once it has been in the preview for 10
-  seconds, so arrowing past new mail, or a glance at it, leaves it unread.
-  Opening it in its own window reads it at once.
+- An unread message is marked read once it has been on show for 10
+  seconds, in the preview or in a window of its own, so arrowing past new
+  mail, or a glance at it, leaves it unread. **View → Mark Messages as
+  Read** changes that: immediately, after 3, 10 or 30 seconds, or only when
+  you mark them yourself.
+- Mail from a mailing list that says how to leave it (a `List-Unsubscribe`
+  header) gets an **Unsubscribe** bar above the message (also **Message →
+  Unsubscribe from Mailing List**). zmail asks first, then does it the way
+  the list offers: a one-click request to the list's server (RFC 8058), an
+  unsubscribe e-mail sent from your address, or, when the list has neither,
+  its unsubscribe page in your browser. Only `https` addresses are used,
+  and never for mail in Spam. The bar then says when you unsubscribed.
+- A calendar invitation (a `text/calendar` part or an `.ics` file) shows as
+  a card above the message: what it is (invitation, cancellation, someone's
+  reply), when in your own time zone, where, who organised it and who is
+  invited. zmail only displays it; it does not answer invitations.
+- **Settings → Vacation Responder** turns Gmail's automatic reply on or
+  off: subject, message, optional first and last day, and whether only
+  people in your Contacts get it. Google sends the replies, so it works
+  with zmail closed, and the status bar shows while it is on. The first
+  time you save, Google asks in your browser to let zmail change Gmail
+  settings.
 - **Help → Keyboard Shortcuts** (Ctrl+/) lists every key.
 - Search understands `is:flagged` and `flag:red` (or any flag colour).
 - Dates in the message list read `01/01/2026  9:05 AM`.
@@ -356,6 +378,10 @@ Sounds** turns the chime on or off, lets you **Browse…** for a custom `.wav`,
 **Default** resets to the bundled sound, and **Test** previews the current
 choice. A missing or unreadable custom file falls back to the built-in chime
 (`assets/sounds/new-mail.wav`, also embedded in the binary via Qt resources).
+
+A message that leaves (Send, or File → Send Queued Messages) plays a short
+"swoosh" (`assets/sounds/sent.wav`). **Settings → Sounds → Sent mail** turns
+it off, and has its own **Test**.
 
 ## License
 

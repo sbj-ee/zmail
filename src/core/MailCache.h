@@ -47,6 +47,12 @@ struct CachedMessage
     QString bodyText;
     QString bodyHtml;
     QStringList attachments;
+    // Also from the full message (extrasVersion says whether they were read).
+    QString listUnsubscribe;     // List-Unsubscribe header (RFC 2369)
+    QString listUnsubscribePost; // List-Unsubscribe-Post header (RFC 8058)
+    QString calendar;            // a text/calendar part or .ics attachment, as sent
+    int extrasVersion = 0;
+    qint64 unsubscribedMs = 0;   // when zmail unsubscribed through this message; 0 = never
 
     bool unread() const { return labels.contains(QStringLiteral("UNREAD")); }
     QDateTime date() const { return QDateTime::fromMSecsSinceEpoch(internalDateMs); }
@@ -105,7 +111,17 @@ public:
 
     // Insert or update metadata; keeps an already-fetched body.
     void upsert(const CachedMessage &m);
-    void setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments);
+    struct BodyExtras
+    {
+        QString listUnsubscribe;
+        QString listUnsubscribePost;
+        QString calendar;
+    };
+    // Bodies stored by an older zmail have a lower extras_ver: no extras yet.
+    static constexpr int kExtrasVersion = 1;
+    void setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments,
+                 const BodyExtras &extras = {});
+    void setUnsubscribed(const QString &id, qint64 whenMs);
     void setLabels(const QString &id, const QStringList &labels);
     void modifyLabels(const QString &id, const QStringList &add, const QStringList &remove);
     void remove(const QString &id);

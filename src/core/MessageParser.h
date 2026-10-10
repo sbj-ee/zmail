@@ -27,6 +27,14 @@ struct Body
     QString html;
     QStringList attachments; // file names
     QList<AttachmentRef> attachmentRefs;
+    // List-Unsubscribe / List-Unsubscribe-Post, as sent ("" = none).
+    QString listUnsubscribe;
+    QString listUnsubscribePost;
+    // The first calendar part (text/calendar, *.ics): its text when Gmail
+    // sent it inline, otherwise the attachment to fetch it from.
+    QString calendar;
+    QString calendarAttachmentId;
+    qint64 calendarAttachmentSize = 0;
 };
 // format=full: walk the MIME tree (multipart/alternative, mixed, related),
 // base64url-decode bodies and convert from the part's charset.

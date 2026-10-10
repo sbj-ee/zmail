@@ -91,7 +91,10 @@ public:
     // How long an unread message stays in a preview pane before it counts
     // as read: arrowing past new mail, or a glance at it, leaves it unread.
     // Opening it in a window of its own reads it at once. 0 = at once here too.
+    // ZMAIL_MARK_READ_DELAY_MS overrides it (the tests run with 0, so a read
+    // mark doesn't land ten seconds into whatever they are checking).
     static constexpr int kMarkReadDelayMs = 10000;
+    static int defaultMarkReadDelayMs();
     int markReadDelayMs() const { return m_markReadDelayMs; }
     void setMarkReadDelayMs(int ms) { m_markReadDelayMs = ms; }
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
@@ -364,7 +367,7 @@ private:
     QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
     bool m_keepSyncErrorAcrossIdle = false;
     QString m_shownId;      // message currently in the preview
-    int m_markReadDelayMs = kMarkReadDelayMs;
+    int m_markReadDelayMs = defaultMarkReadDelayMs();
     int m_markReadEpoch = 0; // bumped by Mark as Read / Unread: a pending markReadSoon() is off
     int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
     // A Delete still waiting on Gmail: if it fails, the next reload selects

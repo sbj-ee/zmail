@@ -1295,7 +1295,12 @@ private slots:
     {
         Fixture f;
         QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}));
-        QCOMPARE(f.w->markReadDelayMs(), 10000);
+        // Ten seconds in the app; the tests run with ZMAIL_MARK_READ_DELAY_MS=0.
+        QCOMPARE(MainWindow::kMarkReadDelayMs, 10000);
+        qunsetenv("ZMAIL_MARK_READ_DELAY_MS");
+        QCOMPARE(MainWindow::defaultMarkReadDelayMs(), 10000);
+        qputenv("ZMAIL_MARK_READ_DELAY_MS", "0");
+        QCOMPARE(MainWindow::defaultMarkReadDelayMs(), 0);
         f.w->setMarkReadDelayMs(400);
         const auto unreadInGmail = [&f](const QString &id) { return f.g.messages().value(id).labels.contains(QStringLiteral("UNREAD")); };
         const auto select = [&f](const QString &id) {
@@ -1303,31 +1308,38 @@ private slots:
         };
         const auto status = [&f](const QString &id) { return f.model->item(f.model->rowForId(id)).status; };
 
-        // A glance at Bravo, then on to Charlie: Bravo stays unread, Charlie
+        // Two that arrive now, not yet shown (opening the fixture shows some of its own).
+        const QString glanced = f.seed(QStringLiteral("Delta zebra"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        const QString stayed = f.seed(QStringLiteral("Echo zebra"), {QStringLiteral("INBOX"), QStringLiteral("UNREAD")}, 0);
+        f.session->sync()->pollNow(true);
+        QTRY_VERIFY_WITH_TIMEOUT(f.model->rowForId(glanced) >= 0 && f.model->rowForId(stayed) >= 0, 10000);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QCOMPARE(status(stayed), MailStatus::Unread);
+        // A glance at Delta, then on to Echo: Delta stays unread, Echo
         // is read once it has been shown for the delay.
-        select(f.b);
-        QTRY_COMPARE(f.w->shownMessageId(), f.b);
+        select(glanced);
+        QTRY_COMPARE(f.w->shownMessageId(), glanced);
         QTest::qWait(100);
-        QCOMPARE(status(f.b), MailStatus::Unread);
-        select(f.c);
-        QTRY_COMPARE(f.w->shownMessageId(), f.c);
-        QCOMPARE(status(f.c), MailStatus::Unread);
-        QTRY_COMPARE_WITH_TIMEOUT(status(f.c), MailStatus::Read, 3000);
-        QTRY_VERIFY_WITH_TIMEOUT(!unreadInGmail(f.c), 5000);
-        QCOMPARE(status(f.b), MailStatus::Unread);
-        QVERIFY(unreadInGmail(f.b));
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        select(stayed);
+        QTRY_COMPARE(f.w->shownMessageId(), stayed);
+        QCOMPARE(status(stayed), MailStatus::Unread);
+        QTRY_COMPARE_WITH_TIMEOUT(status(stayed), MailStatus::Read, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!unreadInGmail(stayed), 5000);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QVERIFY(unreadInGmail(glanced));
 
         // Mark as Unread while it is on show is kept: the delay doesn't undo it.
-        select(f.b);
-        QTRY_COMPARE(f.w->shownMessageId(), f.b);
+        select(glanced);
+        QTRY_COMPARE(f.w->shownMessageId(), glanced);
         f.w->findChild<QAction *>(QStringLiteral("actionMarkUnread"))->trigger();
         QTest::qWait(700);
-        QCOMPARE(status(f.b), MailStatus::Unread);
-        QVERIFY(unreadInGmail(f.b));
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QVERIFY(unreadInGmail(glanced));
 
         // Opened in a window of its own it is read at once.
-        f.w->openMessageWindow(f.proxy->mapFromSource(f.model->index(f.model->rowForId(f.b), 0)));
-        QCOMPARE(status(f.b), MailStatus::Read);
+        f.w->openMessageWindow(f.proxy->mapFromSource(f.model->index(f.model->rowForId(glanced), 0)));
+        QCOMPARE(status(glanced), MailStatus::Read);
     }
 
     // All Mail shows what is in neither the Inbox nor a folder (mail that

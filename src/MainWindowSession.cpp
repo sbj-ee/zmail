@@ -411,6 +411,13 @@ void MainWindow::showLiveMessage(int row)
     }
 }
 
+int MainWindow::defaultMarkReadDelayMs()
+{
+    bool ok = false;
+    const int ms = qEnvironmentVariableIntValue("ZMAIL_MARK_READ_DELAY_MS", &ok);
+    return ok && ms >= 0 ? ms : kMarkReadDelayMs;
+}
+
 void MainWindow::markReadNow(const QString &id)
 {
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;

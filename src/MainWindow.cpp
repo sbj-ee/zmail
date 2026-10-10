@@ -254,6 +254,27 @@ protected:
         setDropTarget(nullptr);
         QTreeWidget::dragLeaveEvent(e);
     }
+    // Ctrl+click is a right-click, for a touchpad with no mouse attached: it
+    // opens the row's menu and, like a right-click, doesn't go to the row.
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::LeftButton && e->modifiers() == Qt::ControlModifier) {
+            m_menuClick = true;
+            e->accept();
+            emit customContextMenuRequested(e->position().toPoint());
+            return;
+        }
+        QTreeWidget::mousePressEvent(e);
+    }
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        if (m_menuClick && e->button() == Qt::LeftButton) {
+            m_menuClick = false;
+            e->accept();
+            return;
+        }
+        QTreeWidget::mouseReleaseEvent(e);
+    }
     // The folder a drop would go to is lit while the drag is over it.
     void drawRow(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
     {
@@ -303,6 +324,7 @@ private:
         viewport()->update();
     }
     QPersistentModelIndex m_dropTarget;
+    bool m_menuClick = false;
 
     // The Gmail label a drop on this row moves to; empty: not a drop target.
     static QString dropLabel(const QString &key)

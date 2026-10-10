@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.20: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.21: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -84,7 +84,8 @@ in 0.6.19: one-click unsubscribe from mailing lists, the mark-as-read
 delay as a setting, Gmail's vacation responder, calendar invitations
 shown as a card, and a swoosh when mail is sent. New in 0.6.20: Send
 waits two minutes in Queue first (a setting) and Undo Send takes it
-back, and Send Later's time can be set to the current hour. See
+back, and Send Later's time can be set to the current hour. New in
+0.6.21: six more new-mail sounds to choose from. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -151,7 +152,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.20_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.21_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -382,7 +383,10 @@ format, the file locations and how missing colours are filled in are in
 When new INBOX mail arrives (while zmail is already running), zmail plays a
 short built-in two-note chime once per sync batch. Mute it from **View → Play
 Sound for New Mail**, the toolbar speaker, or **Ctrl+Shift+M**. **Settings →
-Sounds** turns the chime on or off, lets you **Browse…** for a custom `.wav`,
+Sounds** turns the chime on or off, offers six more sounds that come with
+zmail (Bell, Marimba, Glass, Knock, Water Drop, Harp: all original and
+CC0, made by `tools/make-new-mail-sounds.py`; a filter can use one too),
+lets you **Browse…** for a custom `.wav`,
 **Default** resets to the bundled sound, and **Test** previews the current
 choice. A missing or unreadable custom file falls back to the built-in chime
 (`assets/sounds/new-mail.wav`, also embedded in the binary via Qt resources).

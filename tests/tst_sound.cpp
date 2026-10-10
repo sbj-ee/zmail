@@ -11,6 +11,7 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QLabel>
+#include <QComboBox>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
@@ -126,6 +127,43 @@ private slots:
         QVERIFY(QFile::exists(NewMailSound::resourcePath()));
         QCOMPARE(NewMailSound().resolvedSource(), QUrl(NewMailSound::resourceUrl()));
         QVERIFY(!NewMailSound().usingCustomFile());
+    }
+
+    // The other sounds that come with zmail: each is in the binary, and is
+    // chosen (in Settings > Sounds) the way a custom file is.
+    void builtInSoundsAreInResourcesAndCanBeChosen()
+    {
+        const QList<NewMailSound::BuiltIn> all = NewMailSound::builtIns();
+        QCOMPARE(all.size(), 6);
+        for (const NewMailSound::BuiltIn &b : all) {
+            QVERIFY2(NewMailSound::isBuiltIn(b.path) && NewMailSound::isUsableSoundFile(b.path), qPrintable(b.path));
+            QFile f(b.path);
+            QVERIFY(f.open(QIODevice::ReadOnly));
+            QCOMPARE(f.read(4), QByteArray("RIFF"));
+        }
+        NewMailSound s;
+        s.setSoundFile(QStringLiteral(":/sounds/bell.wav"));
+        QCOMPARE(s.resolvedSource(), QUrl(QStringLiteral("qrc:/sounds/bell.wav")));
+        s.setSoundFile(QStringLiteral(":/sounds/no-such.wav")); // gone in a later version: the chime
+        QCOMPARE(s.resolvedSource(), QUrl(NewMailSound::resourceUrl()));
+
+        SoundDialog dlg(&s);
+        auto *combo = dlg.findChild<QComboBox *>(QStringLiteral("builtInSoundCombo"));
+        QVERIFY(combo);
+        QCOMPARE(combo->count(), 7); // the chime, and the six
+        dlg.setSoundFile(QStringLiteral(":/sounds/harp.wav"));
+        QCOMPARE(combo->currentText(), QStringLiteral("Harp"));
+        QCOMPARE(dlg.previewSource(), QUrl(QStringLiteral("qrc:/sounds/harp.wav")));
+        QVERIFY(dlg.findChild<QLineEdit *>(QStringLiteral("soundFileEdit"))->text().contains(QStringLiteral("Harp")));
+        dlg.setSoundFile(QStringLiteral("/tmp/mine.wav"));
+        QCOMPARE(combo->currentIndex(), -1); // a file of your own
+        dlg.setSoundFile({});
+        QCOMPARE(combo->currentIndex(), 0);
+        dlg.setSoundFile(QStringLiteral(":/sounds/drop.wav"));
+        dlg.save();
+        QCOMPARE(s.soundFile(), QStringLiteral(":/sounds/drop.wav"));
+        QCOMPARE(QSettings().value(QLatin1String(NewMailSound::kFileKey)).toString(), QStringLiteral(":/sounds/drop.wav"));
+        QSettings().remove(QLatin1String(NewMailSound::kFileKey));
     }
 
     void missingCustomFileFallsBackToBuiltIn()

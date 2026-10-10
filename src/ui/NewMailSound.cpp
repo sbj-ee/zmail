@@ -28,6 +28,21 @@ bool NewMailSound::isUsableSoundFile(const QString &path)
     return fi.suffix().compare(QStringLiteral("wav"), Qt::CaseInsensitive) == 0;
 }
 
+QList<NewMailSound::BuiltIn> NewMailSound::builtIns()
+{
+    return {{tr("Bell"), QStringLiteral(":/sounds/bell.wav")},
+            {tr("Marimba"), QStringLiteral(":/sounds/marimba.wav")},
+            {tr("Glass"), QStringLiteral(":/sounds/glass.wav")},
+            {tr("Knock"), QStringLiteral(":/sounds/knock.wav")},
+            {tr("Water Drop"), QStringLiteral(":/sounds/drop.wav")},
+            {tr("Harp"), QStringLiteral(":/sounds/harp.wav")}};
+}
+
+QUrl NewMailSound::urlFor(const QString &path)
+{
+    return isBuiltIn(path) ? QUrl(QStringLiteral("qrc") + path) : QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath());
+}
+
 bool NewMailSound::usingCustomFile() const
 {
     return isUsableSoundFile(m_soundFile);
@@ -36,7 +51,7 @@ bool NewMailSound::usingCustomFile() const
 QUrl NewMailSound::resolvedSource() const
 {
     if (usingCustomFile()) {
-        return QUrl::fromLocalFile(QFileInfo(m_soundFile).absoluteFilePath());
+        return urlFor(m_soundFile);
     }
     return QUrl(resourceUrl());
 }
@@ -122,7 +137,7 @@ void NewMailSound::playFile(const QString &path, bool preview)
     }
     ++m_plays;
     ensureEffect();
-    m_effect->setSource(QUrl::fromLocalFile(path));
+    m_effect->setSource(urlFor(path));
     m_effect->play();
 }
 

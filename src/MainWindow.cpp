@@ -1164,6 +1164,14 @@ ThemeEditorDialog *MainWindow::showThemeEditor()
     return dlg;
 }
 
+// Compose windows still open (Quit with a message being written) are
+// children, and would otherwise go in ~QWidget, after m_composers has: each
+// one's destroyed handler takes it out of that list.
+MainWindow::~MainWindow()
+{
+    qDeleteAll(std::exchange(m_composers, {}));
+}
+
 ComposeWindow *MainWindow::openCompose(bool sampleReply)
 {
     auto *c = new ComposeWindow(this);

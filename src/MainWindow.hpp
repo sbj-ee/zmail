@@ -64,6 +64,7 @@ class MainWindow : public QMainWindow
 
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
 
     // Attach a Gmail session. Without one (tests, offline screenshots) the
     // window shows the built-in sample data.

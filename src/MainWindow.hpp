@@ -88,6 +88,12 @@ public:
     ComposeWindow *composeMailto(const QUrl &url);
     QString shownMessageId() const { return m_shownId; }
     QList<ComposeWindow *> composers() const { return m_composers; }
+    // How long an unread message stays in a preview pane before it counts
+    // as read: arrowing past new mail, or a glance at it, leaves it unread.
+    // Opening it in a window of its own reads it at once. 0 = at once here too.
+    static constexpr int kMarkReadDelayMs = 10000;
+    int markReadDelayMs() const { return m_markReadDelayMs; }
+    void setMarkReadDelayMs(int ms) { m_markReadDelayMs = ms; }
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
     static constexpr int kUndoDeleteMs = 8000;
     void selectMailbox(const QString &key);
@@ -223,6 +229,10 @@ private:
     void updateAccountStatus(); // colours the bottom-left account circle
     QString labelForMailbox(const QString &key) const;
     void showLiveMessage(int row);
+    // Marks `id` read once it has been in `view` for markReadDelayMs();
+    // showing something else there, or marking it by hand, calls it off.
+    void markReadSoon(zmail::ui::MessageView *view, const QString &id);
+    void markReadNow(const QString &id);
     void updateMessageActions();
     void showSignatures();
     zmail::ui::ViewMessage sampleViewMessage(int row) const;
@@ -268,6 +278,7 @@ private:
     void emptyLabelFolder(const QString &labelId, const QString &displayName); // its mail goes to Trash
     QMenu *buildFlagMenu(QWidget *parent);
     int trashCount(int gmailTotal) const; // what the sidebar shows for Trash
+    int allMailCount(int trashTotal, int spamTotal) const; // for All Mail: the account's total less those; 0 = unknown
     // Archive: a folder (a Gmail label, "Archived", made on first use) with a
     // row of its own in the sidebar.
     QString archiveLabelId() const;
@@ -353,6 +364,8 @@ private:
     QString m_syncError;    // last SyncEngine::syncError; cleared on a later successful idle
     bool m_keepSyncErrorAcrossIdle = false;
     QString m_shownId;      // message currently in the preview
+    int m_markReadDelayMs = kMarkReadDelayMs;
+    int m_markReadEpoch = 0; // bumped by Mark as Read / Unread: a pending markReadSoon() is off
     int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
     // A Delete still waiting on Gmail: if it fails, the next reload selects
     // the message again, provided the user is still on the neighbour that

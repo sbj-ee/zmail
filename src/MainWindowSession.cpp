@@ -407,10 +407,36 @@ void MainWindow::showLiveMessage(int row)
         });
     }
     if (c.unread()) {
-        sync->markRead(id); // messages.modify removeLabelIds: ["UNREAD"]
-        m_model->setStatus(row, MailStatus::Read);
-        updateCounts();
+        markReadSoon(m_view, id);
     }
+}
+
+void MainWindow::markReadNow(const QString &id)
+{
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    const int row = m_model->rowForId(id);
+    if (!sync || row < 0 || m_model->item(row).status != MailStatus::Unread) {
+        return; // gone, or read some other way meanwhile
+    }
+    sync->markRead(id); // messages.modify removeLabelIds: ["UNREAD"]
+    m_model->setStatus(row, MailStatus::Read);
+    updateCounts();
+}
+
+void MainWindow::markReadSoon(MessageView *view, const QString &id)
+{
+    if (m_markReadDelayMs <= 0) {
+        markReadNow(id);
+        return;
+    }
+    const int epoch = m_markReadEpoch;
+    QPointer<MessageView> guard(view);
+    QTimer::singleShot(m_markReadDelayMs, this, [this, guard, id, epoch]() {
+        // Still the message on show there, in a window that is still open.
+        if (guard && epoch == m_markReadEpoch && guard->message().id == id && guard->window()->isVisible()) {
+            markReadNow(id);
+        }
+    });
 }
 
 void MainWindow::checkMail()

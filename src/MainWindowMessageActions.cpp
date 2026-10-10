@@ -519,6 +519,7 @@ void MainWindow::setCurrentRead(bool read)
         }
         rows.append(m_proxy->mapToSource(cur).row());
     }
+    ++m_markReadEpoch; // said by hand: the preview's delayed mark-as-read doesn't undo it
     zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
     for (int row : rows) {
         const MailItem &m = m_model->item(row);

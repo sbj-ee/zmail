@@ -132,8 +132,27 @@ void SyncEngine::touchCounts(const QStringList &labelIds)
     }
 }
 
+void SyncEngine::refreshMailboxTotal()
+{
+    if (std::exchange(m_mailboxTotalFresh, false)) {
+        return;
+    }
+    const int gen = m_generation;
+    m_api->getProfile([this, gen](const QJsonObject &profile, const ApiError &err) {
+        if (gen != m_generation || err.isError || !profile.contains(QStringLiteral("messagesTotal"))) {
+            return; // the count stays as it was; the next refresh tries again
+        }
+        const int total = profile.value(QStringLiteral("messagesTotal")).toInt();
+        if (total != m_cache->mailboxTotal()) {
+            m_cache->setMailboxTotal(total);
+            emit countsChanged();
+        }
+    });
+}
+
 void SyncEngine::refreshCounts(const QSet<QString> &labelIds)
 {
+    refreshMailboxTotal(); // a folder's count changed: All Mail's may have too
     const int gen = m_generation;
     auto left = std::make_shared<int>(int(labelIds.size()));
     for (const QString &id : labelIds) {
@@ -213,6 +232,7 @@ void SyncEngine::refreshLabels(std::function<void()> then, bool force)
             finishRefresh();
             return;
         }
+        refreshMailboxTotal();
         auto labels = std::make_shared<QList<CachedLabel>>();
         for (const auto &v : json.value(QStringLiteral("labels")).toArray()) {
             const QJsonObject o = v.toObject();
@@ -319,6 +339,10 @@ void SyncEngine::fullSync(const QString &reason)
         }
         // Take historyId *before* listing so nothing between is missed.
         const qint64 startHistory = profile.value(QStringLiteral("historyId")).toString().toLongLong();
+        if (profile.contains(QStringLiteral("messagesTotal"))) {
+            m_cache->setMailboxTotal(profile.value(QStringLiteral("messagesTotal")).toInt());
+            m_mailboxTotalFresh = true;
+        }
         // Snoozes are local-only: keep their rows (and messages) across the wipe.
         m_cache->clearMessages(/*keepSnoozed=*/true);
         m_cache->setMeta(QStringLiteral("pageToken:") + kInbox, {});

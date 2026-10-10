@@ -183,8 +183,10 @@ void MainWindow::populateMailboxes()
         arch->setData(0, Qt::UserRole + 2, byId.value(archive).name);
         arch->setToolTip(0, tr("Archive \u00b7 drag mail here, or right-click a message and choose Archive"));
         // Everything, filed or not: mail that is in neither the Inbox nor a
-        // folder shows nowhere else. No count: Gmail has none for it.
-        QTreeWidgetItem *everything = add(nullptr, tr("All Mail"), icon(QStringLiteral("mail")), QStringLiteral("All"), 0);
+        // folder shows nowhere else. Gmail has no total for it: the count is
+        // the whole account's less Trash and Spam.
+        QTreeWidgetItem *everything = add(nullptr, tr("All Mail"), icon(QStringLiteral("mail")), QStringLiteral("All"),
+                                          allMailCount(total(QStringLiteral("TRASH")), total(QStringLiteral("SPAM"))));
         everything->setToolTip(0, tr("Every message in Gmail except Trash and Spam, whether or not it is in the Inbox or a folder"));
         add(nullptr, tr("Trash"), icon(QStringLiteral("trash")), QStringLiteral("Trash"), trashCount(total(QStringLiteral("TRASH"))));
 
@@ -297,6 +299,12 @@ int MainWindow::trashCount(int gmailTotal) const
     return std::max(gmailTotal - int(cache->purged().size()), cache->unpurgedTrash());
 }
 
+int MainWindow::allMailCount(int trashTotal, int spamTotal) const
+{
+    const int everything = m_live && m_session && m_session->cache() ? m_session->cache()->mailboxTotal() : 0;
+    return everything > 0 ? std::max(0, everything - trashTotal - spamTotal) : 0;
+}
+
 void MainWindow::updateMailboxCounts()
 {
     if (!(m_live && m_session && m_session->cache()) || !m_mailboxes) {
@@ -316,6 +324,11 @@ void MainWindow::updateMailboxCounts()
         }
         if (key == QLatin1String("Queue")) {
             setMailboxCount(*it, queued, 0, m_mailboxes->font(), dim);
+            continue;
+        }
+        if (key == QLatin1String("All")) {
+            setMailboxCount(*it, allMailCount(byId.value(QStringLiteral("TRASH")).total, byId.value(QStringLiteral("SPAM")).total),
+                            0, m_mailboxes->font(), dim);
             continue;
         }
         const QString label = labelForMailbox(key);

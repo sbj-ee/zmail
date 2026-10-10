@@ -181,6 +181,27 @@ private slots:
         QVERIFY(w.findChild<QAction *>(QStringLiteral("actionMarkRead"))->isVisible());
     }
 
+    // Ctrl+click on a sidebar row is a right-click (no mouse, just a touchpad).
+    void mailboxCtrlClickMenu()
+    {
+        MainWindow w;
+        w.show();
+        auto *tree = w.findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+        QVERIFY(tree);
+        QTreeWidgetItem *before = tree->currentItem();
+        QTreeWidgetItem *other = tree->topLevelItem(1);
+        QVERIFY(other && other != before);
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::ControlModifier, tree->visualItemRect(other).center());
+        QMenu *menu = waitMenu("mailboxMenu");
+        QVERIFY(menu);
+        QVERIFY(actionNames(menu).contains(QStringLiteral("actionMarkAllRead")));
+        menu->close();
+        QCOMPARE(tree->currentItem(), before); // the menu is about the row; you stay where you are
+        // A plain click still goes there.
+        QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier, tree->visualItemRect(other).center());
+        QCOMPARE(tree->currentItem(), other);
+    }
+
     void mailboxContextMenu()
     {
         MainWindow w;

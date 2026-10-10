@@ -65,6 +65,11 @@ class MainWindow : public QMainWindow
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
+    // File > Quit. Closing the main window is quitting: messages still being
+    // written are asked about first (Save draft?), one at a time. Cancel on
+    // any of them and zmail stays open; Save, and it quits once the draft
+    // is in Drafts.
+    void quit();
 
     // Attach a Gmail session. Without one (tests, offline screenshots) the
     // window shows the built-in sample data.
@@ -383,6 +388,7 @@ private:
     QMenu *m_transferMenu = nullptr;
     void rebuildMailboxMenus();
     bool m_sendingQueue = false;
+    bool m_quitAfterSave = false; // quitting, once the compose window saving its draft has gone
     void sendNextQueued(int sent, int failed, QList<qint64> left);
     zmail::Rules m_rules;
     bool applyRule(const zmail::Rule &rule, const QString &messageId); // its flag / move / mark read

@@ -50,7 +50,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.15"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.6.16"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -365,8 +365,8 @@ private slots:
             top << tree->topLevelItem(i)->text(0);
         }
         // Hide Spam (default) omits Junk; labels are still under Gmail Labels.
-        QCOMPARE(top, (QStringList{"In", "Sent", "Snoozed", "Archive", "Trash", "Folders"}));
-        QVERIFY(tree->topLevelItem(5)->childCount() >= 4);
+        QCOMPARE(top, (QStringList{"In", "Queue", "Sent", "Snoozed", "Archive", "Trash", "Folders"}));
+        QVERIFY(tree->topLevelItem(6)->childCount() >= 4);
     }
 
     void listAbovePreview()

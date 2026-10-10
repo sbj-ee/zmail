@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.6.15: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.6.16: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -75,7 +75,8 @@ time, Out is called Sent, and the Trash and Drafts counts are right.
 0.6.12 fixes Archive, whose folder Gmail refused to create. New in
 0.6.13: an All Mail mailbox. New in 0.6.14: Ctrl+click opens a
 folder's menu, for when there is no mouse. New in 0.6.15: dialogs
-are tinted, to stand out from the main window. See
+are tinted, to stand out from the main window. New in 0.6.16: a
+Queue mailbox for mail that is waiting to be sent. See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -142,7 +143,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.6.15_amd64.deb
+cd build && cpack -G DEB   # zmail_0.6.16_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -214,7 +215,9 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   (which Gmail assigns by itself); Undo puts it back. **Mailbox → Clear
   Important from Filed Mail** does the same, once, for everything already
   in a folder.
-- The mailbox for sent and queued mail is called **Sent** (it was Out).
+- The mailbox for sent mail is called **Sent** (it was Out). Mail that
+  hasn't gone yet is in **Queue**, just above it, not mixed in with what
+  was sent.
 - **Mailbox → Load All Messages** (or right-click a mailbox) fetches every
   message in it, not only the ones scrolled to so far, with progress in the
   status bar and Stop Loading to interrupt. Deleting a large selection goes
@@ -233,7 +236,8 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   subject are used where the message has none.
 - **Send Later** in the compose window (Ctrl+Shift+Enter) asks when: at a
   date and time you pick, or held, as in Eudora, until you choose **File →
-  Send Queued Messages**. Either way the message waits in Sent, marked Q. A
+  Send Queued Messages**. Either way the message waits in **Queue**, the
+  mailbox above Sent, marked Q; its count is how many are waiting. A
   timed one goes at its time if zmail is running, and otherwise the next
   time zmail starts. **File → Send Queued Messages** (Ctrl+T) sends
   everything waiting, timed or not, oldest first; one that Gmail refuses stays queued with the reason. Delete

@@ -97,8 +97,8 @@ void MainWindow::setSession(zmail::MailSession *session)
         reloadFromCache();
         populateMailboxes(); // the account's folders, not the sample ones, without waiting for a label refresh
         if (const int n = queuedCount(); n > 0) {
-            statusBar()->showMessage(n == 1 ? tr("1 message is queued in Sent. File \u203a Send Queued Messages sends it.")
-                                            : tr("%1 messages are queued in Sent. File \u203a Send Queued Messages sends them.").arg(n),
+            statusBar()->showMessage(n == 1 ? tr("1 message is waiting in Queue. File \u203a Send Queued Messages sends it.")
+                                            : tr("%1 messages are waiting in Queue. File \u203a Send Queued Messages sends them.").arg(n),
                                      10000);
         }
         selectMailbox(QStringLiteral("In"));
@@ -311,7 +311,7 @@ void MainWindow::reloadFromCache()
         m.attachments = c.attachments;
         items.append(std::move(m));
     }
-    // The queue: written, set aside with Send Later, waiting in Out.
+    // The queue: written, set aside with Send Later, waiting in Queue.
     for (const zmail::MailCache::QueuedMessage &q : cache->queued()) {
         MailItem m;
         m.id = QStringLiteral("queued:%1").arg(q.id);
@@ -324,7 +324,7 @@ void MainWindow::reloadFromCache()
         m.date = QDateTime::fromMSecsSinceEpoch(q.sendAtMs > 0 ? q.sendAtMs : q.createdMs).toLocalTime();
         m.sizeBytes = q.size;
         m.subject = q.subject.isEmpty() ? tr("(no subject)") : q.subject;
-        m.mailboxes = {QStringLiteral("Out")};
+        m.mailboxes = {QStringLiteral("Queue")};
         m.preview = q.text;
         items.append(std::move(m));
     }

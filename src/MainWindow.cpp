@@ -1005,7 +1005,7 @@ ViewMessage MainWindow::sampleViewMessage(int row) const
     const MailItem &m = m_model->item(row);
     ViewMessage v;
     v.id = QStringLiteral("sample-%1").arg(row);
-    const bool outgoing = m.mailboxes.contains(QStringLiteral("Out"));
+    const bool outgoing = m.mailboxes.contains(QStringLiteral("Out")) || m.mailboxes.contains(QStringLiteral("Queue"));
     const QString who = QStringLiteral("%1 <%2>").arg(m.who, m.address);
     const QString me = QStringLiteral("Alex Morgan <alex.morgan@example.com>");
     v.from = outgoing ? me : who;
@@ -1118,10 +1118,10 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
             populateMailboxes();
             const QString key = findChild<QAction *>(QStringLiteral("actionSendQueued"))->shortcut().toString(QKeySequence::NativeText);
             statusBar()->showMessage(
-                sendAtMs > 0 ? tr("Waiting in Sent, to go %1.")
+                sendAtMs > 0 ? tr("Waiting in Queue, to go %1.")
                                    .arg(QLocale().toString(QDateTime::fromMSecsSinceEpoch(sendAtMs).toLocalTime(),
                                                            QStringLiteral("MM/dd/yyyy h:mm AP")))
-                             : tr("Queued in Sent. File \u203a Send Queued Messages (%1) sends it.").arg(key),
+                             : tr("Waiting in Queue. File \u203a Send Queued Messages (%1) sends it.").arg(key),
                 8000);
             sendDueQueued(); // a time already past: now
         });
@@ -1952,7 +1952,7 @@ QDialog *MainWindow::showShortcuts()
     row(tr("Zoom the message"), tr("Ctrl+Wheel"));
     heading(tr("Writing a message"));
     row(tr("Send"), tr("Ctrl+Enter, Ctrl+E"));
-    row(tr("Send Later (at a time, or queued in Sent)"), tr("Ctrl+Shift+Enter"));
+    row(tr("Send Later (at a time, or held in Queue)"), tr("Ctrl+Shift+Enter"));
     row(tr("Save Draft"), QKeySequence(QKeySequence::Save).toString(QKeySequence::NativeText));
     row(tr("Attach"), tr("Ctrl+H"));
     row(tr("Insert link"), tr("Ctrl+K"));
@@ -2396,8 +2396,8 @@ void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
         m_sendingQueue = false;
         QString text = sent == 1 ? tr("Sent 1 queued message.") : tr("Sent %1 queued messages.").arg(sent);
         if (failed > 0) {
-            text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Sent.")
-                                                    : tr("%1 could not be sent and are still in Sent.").arg(failed));
+            text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Queue.")
+                                                    : tr("%1 could not be sent and are still in Queue.").arg(failed));
         }
         statusBar()->showMessage(text, 8000);
         reloadFromCache();

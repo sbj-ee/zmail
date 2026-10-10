@@ -482,7 +482,7 @@ private slots:
         QSettings().remove(QStringLiteral("viewer/plainText"));
     }
 
-    // The queue, as in Eudora: Send Later puts a message in Out, Send
+    // The queue, as in Eudora: Send Later puts a message in Queue, Send
     // Queued Messages delivers what is waiting, and nothing goes sooner.
     void sendLaterQueuesAndSendQueuedDelivers()
     {
@@ -515,8 +515,25 @@ private slots:
         QCOMPARE(f.w->queuedCount(), 2);
         QCOMPARE(f.g.count(sendPath), 0); // nothing has gone anywhere
 
-        // They wait in Out, marked Q, and can be read there.
+        // They wait in Queue, marked Q, and can be read there. Sent has
+        // only what went; Queue's count is what is waiting.
         f.selectView(QStringLiteral("Out"));
+        for (int r = 0; r < f.proxy->rowCount(); ++r) {
+            QVERIFY(f.proxy->index(r, MessageListModel::Status).data().toString() != QLatin1String("Q"));
+        }
+        {
+            auto *tree = f.w->findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+            QTreeWidgetItem *queue = nullptr;
+            for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+                if (tree->topLevelItem(i)->data(0, Qt::UserRole).toString() == QLatin1String("Queue")) {
+                    queue = tree->topLevelItem(i);
+                    QCOMPARE(tree->topLevelItem(i + 1)->data(0, Qt::UserRole).toString(), QStringLiteral("Out")); // just above Sent
+                }
+            }
+            QVERIFY(queue);
+            QCOMPARE(queue->text(1), QStringLiteral("2"));
+        }
+        f.selectView(QStringLiteral("Queue"));
         QTRY_COMPARE(f.proxy->rowCount(), 2);
         f.list->sortByColumn(MessageListModel::Subject, Qt::AscendingOrder);
         QCOMPARE(f.proxy->index(0, MessageListModel::Status).data().toString(), QStringLiteral("Q"));
@@ -864,7 +881,7 @@ private slots:
         QCOMPARE(byCommand.value(QStringLiteral("Mark as Junk")), QStringLiteral("Ctrl+J"));
         QCOMPARE(byCommand.value(QStringLiteral("Send Queued Messages")), QStringLiteral("Ctrl+T"));
         QVERIFY(byCommand.value(QStringLiteral("Delete")).contains(QStringLiteral("Ctrl+D")));
-        QVERIFY(byCommand.contains(QStringLiteral("In")) && byCommand.contains(QStringLiteral("Send Later (at a time, or queued in Sent)")));
+        QVERIFY(byCommand.contains(QStringLiteral("In")) && byCommand.contains(QStringLiteral("Send Later (at a time, or held in Queue)")));
         QVERIFY(!byCommand.contains(QStringLiteral("Account"))); // not built: not listed
         keys->close();
 

@@ -21,14 +21,14 @@ struct MailItem
     bool hasAttachment = false;
     QString label;          // Gmail label shown as a colour swatch ("" = none)
     QColor labelColor;
-    QString who;            // sender (or recipient in Out)
+    QString who;            // sender (or recipient in Queue and Out)
     QString address;
     QDateTime date;
     qint64 sizeBytes = 0;
     QString subject;
     QColor ruleColor;       // colour from the first matching rule (invalid = none)
     bool suspicious = false;
-    QStringList mailboxes;  // "In", "Out", "Junk", "Trash", "Snoozed"
+    QStringList mailboxes;  // "In", "Queue", "Out", "Junk", "Trash", "Snoozed"
     QString preview;        // plain-text body for the preview pane
     QStringList attachments;
     // Live Gmail data (empty for sample data).

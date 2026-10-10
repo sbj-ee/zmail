@@ -165,7 +165,7 @@ public:
     // mailbox has on show.
     int unpurgedTrash() const;
 
-    // The queue, as in Eudora: messages written and set aside in Out with
+    // The queue, as in Eudora: messages written and set aside in Queue with
     // "Send Later", delivered by File > Send Queued Messages. Each is kept
     // as the finished MIME message, with what the list and preview show.
     struct QueuedMessage {

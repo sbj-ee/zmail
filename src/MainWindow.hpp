@@ -152,7 +152,7 @@ public:
     // selection (a mailbox window's right-click).
     QMenu *buildMenuFor(const QStringList &messageIds, QWidget *parent);
     void transferSelected(const QString &target);
-    // File > Send Queued Messages: everything waiting in Out, oldest first.
+    // File > Send Queued Messages: everything waiting in Queue, oldest first.
     // One that Gmail refuses stays queued, with the reason.
     void sendQueued();
     void sendDueQueued(); // Send Later's timed ones, when their time has come

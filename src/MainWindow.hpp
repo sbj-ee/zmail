@@ -183,6 +183,9 @@ public:
     // One that Gmail refuses stays queued, with the reason.
     void sendQueued();
     void sendDueQueued(); // Send Later's timed ones, when their time has come
+    // Edit > Undo Send, while a sent message is still waiting out the send
+    // delay: out of the queue and back into a compose window, unsent.
+    ComposeWindow *undoSend(qint64 queuedId);
     int queuedCount() const;
     // Open a queued message ("queued:N") in a compose window to change it.
     ComposeWindow *editQueued(const QString &queuedRowId);

@@ -1486,9 +1486,29 @@ void ComposeWindow::fail(const QString &message)
     emit sendFailed(message);
 }
 
+int ComposeWindow::sendDelayMs()
+{
+    bool ok = false;
+    const int ms = qEnvironmentVariableIntValue("ZMAIL_SEND_DELAY_MS", &ok);
+    if (ok && ms >= 0) {
+        return ms;
+    }
+    return qMax(0, QSettings().value(QStringLiteral("compose/sendDelayMs"), kSendDelayMs).toInt());
+}
+
+void ComposeWindow::markModified()
+{
+    m_body->document()->setModified(true);
+}
+
 void ComposeWindow::send()
 {
     if (m_busy) {
+        return;
+    }
+    // With a send delay it waits in Queue first, where it can be taken back.
+    if (const int delay = sendDelayMs(); delay > 0 && m_session && m_session->cache() && m_session->sender()) {
+        queue(QDateTime::currentMSecsSinceEpoch() + delay, true);
         return;
     }
     m_lastError.clear();
@@ -1590,7 +1610,9 @@ void ComposeWindow::sendLater()
     edit->setObjectName(QStringLiteral("sendLaterDateTime"));
     edit->setCalendarPopup(true);
     edit->setDisplayFormat(QStringLiteral("MM/dd/yyyy h:mm AP")); // as in the message list
-    edit->setMinimumDateTime(QDateTime::currentDateTime());
+    // Today at any hour: a minimum of this minute would refuse the hour on
+    // its way down (6:00 PM to 5:00 PM at 5:03), before the minutes are set.
+    edit->setMinimumDateTime(QDateTime::currentDateTime().date().startOfDay());
     lay->addWidget(edit);
     auto *held = new QRadioButton(tr("&Hold it until I choose File \u203a Send Queued Messages"), &dlg);
     held->setObjectName(QStringLiteral("sendLaterHold"));
@@ -1603,7 +1625,18 @@ void ComposeWindow::sendLater()
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     buttons->button(QDialogButtonBox::Ok)->setText(tr("Send Later"));
     lay->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    auto *past = new QLabel(tr("That time has already passed."), &dlg);
+    past->setObjectName(QStringLiteral("sendLaterPast"));
+    past->setVisible(false);
+    lay->insertWidget(lay->indexOf(buttons), past);
+    connect(edit, &QDateTimeEdit::dateTimeChanged, past, [past]() { past->setVisible(false); });
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, [&dlg, at, edit, past]() {
+        if (at->isChecked() && edit->dateTime() < QDateTime::currentDateTime()) {
+            past->setVisible(true); // a slip, not a wish to send it this second
+            return;
+        }
+        dlg.accept();
+    });
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     if (dlg.exec() != QDialog::Accepted) {
         return;
@@ -1613,7 +1646,7 @@ void ComposeWindow::sendLater()
 
 // The finished message goes into the queue. Checked exactly as Send checks
 // it, so nothing waits in the queue that can't be sent.
-void ComposeWindow::queue(qint64 sendAtMs)
+void ComposeWindow::queue(qint64 sendAtMs, bool delayedSend)
 {
     if (m_busy) {
         return;
@@ -1657,7 +1690,8 @@ void ComposeWindow::queue(qint64 sendAtMs)
     q.text = m.text;
     q.state = saveState();
     q.sendAtMs = sendAtMs;
-    if (cache->addQueued(q) <= 0) {
+    const qint64 id = cache->addQueued(q);
+    if (id <= 0) {
         fail(tr("Couldn't put the message in the queue."));
         return;
     }
@@ -1666,7 +1700,11 @@ void ComposeWindow::queue(qint64 sendAtMs)
         m_queuedId = 0;
     }
     m_sent = true; // nothing left to save or ask about on close
-    emit queued(sendAtMs);
+    if (delayedSend) {
+        emit sendDelayed(id, sendAtMs);
+    } else {
+        emit queued(sendAtMs);
+    }
     close();
 }
 

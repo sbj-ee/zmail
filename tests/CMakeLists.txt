@@ -12,7 +12,7 @@ function(zmail_add_test name)
   add_test(NAME ${name} COMMAND ${name})
   # Headless: no display needed in CI. Never touch the real keyring/config.
   set_tests_properties(${name} PROPERTIES ENVIRONMENT
-    "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config;ZMAIL_MARK_READ_DELAY_MS=0")
+    "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config;ZMAIL_MARK_READ_DELAY_MS=0;ZMAIL_SEND_DELAY_MS=0")
 endfunction()
 
 zmail_add_test(tst_version)

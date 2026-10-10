@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "CalendarInvite.h"
 #include "GmailClient.h"
 #include "Log.h"
 #include "MessageParser.h"
@@ -738,24 +739,43 @@ void SyncEngine::fetchBody(const QString &id, MessageCb cb)
 {
     const CachedMessage cached = m_cache->message(id);
     // Bodies cached by 0.2.0 lack Message-ID/References; refetch for replies.
-    if (cached.hasBody && !cached.messageIdHeader.isEmpty()) {
+    const bool usable = cached.hasBody && !cached.messageIdHeader.isEmpty();
+    // ...and ones cached before 0.6.19 were stored without what the message
+    // says about unsubscribing or a calendar invitation.
+    if (usable && cached.extrasVersion >= MailCache::kExtrasVersion) {
         cb(cached, {});
         return;
     }
-    m_api->getMessageFull(id, [this, id, cb](const QJsonObject &json, const ApiError &err) {
+    m_api->getMessageFull(id, [this, id, cb, usable](const QJsonObject &json, const ApiError &err) {
         if (err.isError) {
-            cb(m_cache->message(id), err.message.isEmpty() ? tr("HTTP %1").arg(err.httpStatus) : err.message);
+            // A body that is already here is still the message: show it.
+            cb(m_cache->message(id), usable ? QString()
+                                            : (err.message.isEmpty() ? tr("HTTP %1").arg(err.httpStatus) : err.message));
             return;
         }
         CachedMessage meta = MessageParser::fromMetadata(json);
         const MessageParser::Body body = MessageParser::bodyFromFull(json);
         meta.hasAttachment = !body.attachments.isEmpty();
-        {
-            const MailCache::Batch batch(*m_cache);
-            m_cache->upsert(meta);
-            m_cache->setBody(id, body.text, body.html, body.attachments);
+        auto store = [this, id, cb, meta, body](const QString &calendar) {
+            {
+                const MailCache::Batch batch(*m_cache);
+                m_cache->upsert(meta);
+                m_cache->setBody(id, body.text, body.html, body.attachments,
+                                 {body.listUnsubscribe, body.listUnsubscribePost, calendar});
+            }
+            cb(m_cache->message(id), {});
+        };
+        if (!body.calendar.isEmpty() || body.calendarAttachmentId.isEmpty() ||
+            body.calendarAttachmentSize > CalendarInvite::kMaxBytes) {
+            store(body.calendar);
+            return;
         }
-        cb(m_cache->message(id), {});
+        // An .ics sent as a file: Gmail hands attachments over separately.
+        m_api->getAttachment(id, body.calendarAttachmentId, [store](const QJsonObject &att, const ApiError &attErr) {
+            const QByteArray raw = attErr.isError ? QByteArray()
+                                                  : MessageParser::decodeBase64Url(att.value(QStringLiteral("data")).toString());
+            store(QString::fromUtf8(raw).left(CalendarInvite::kMaxBytes));
+        });
     });
 }
 

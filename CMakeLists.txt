@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.6.18 LANGUAGES CXX)
+project(zmail VERSION 0.6.19 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -82,6 +82,14 @@ add_library(zmail_app STATIC
   src/core/MailCache.h
   src/core/MailSession.cpp
   src/core/MailSession.h
+  src/core/CalendarInvite.cpp
+  src/core/CalendarInvite.h
+  src/core/Unsubscribe.cpp
+  src/core/Unsubscribe.h
+  src/core/Vacation.cpp
+  src/core/Vacation.h
+  src/ui/VacationDialog.cpp
+  src/ui/VacationDialog.h
   src/core/Mailto.cpp
   src/core/Mailto.h
   src/core/Markdown.cpp
@@ -191,11 +199,12 @@ qt_add_resources(zmail_app "zmail_appicon"
   PREFIX "/"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
   FILES ${ZMAIL_APP_ICON_FILES})
-# Bundled CC0 new-mail chime (see assets/sounds/LICENSES) as :/sounds/new-mail.wav
+# Bundled CC0 sounds (see assets/sounds/LICENSES) as :/sounds/new-mail.wav and :/sounds/sent.wav
 qt_add_resources(zmail_app "zmail_sounds"
   PREFIX "/"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-  FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/new-mail.wav")
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/new-mail.wav"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/sounds/sent.wav")
 target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${ZMAIL_GENERATED_DIR}")

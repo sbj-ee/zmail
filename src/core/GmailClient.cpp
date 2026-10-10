@@ -195,6 +195,17 @@ void GmailClient::listSendAs(JsonCb cb)
     call("GET", QStringLiteral("/settings/sendAs"), {}, {}, 1, std::move(cb));
 }
 
+void GmailClient::getVacation(JsonCb cb)
+{
+    call("GET", QStringLiteral("/settings/vacation"), {}, {}, 1, std::move(cb));
+}
+
+void GmailClient::updateVacation(const QJsonObject &settings, JsonCb cb)
+{
+    call("PUT", QStringLiteral("/settings/vacation"), {}, QJsonDocument(settings).toJson(QJsonDocument::Compact), 5,
+         std::move(cb));
+}
+
 void GmailClient::getAttachment(const QString &messageId, const QString &attachmentId, JsonCb cb)
 {
     call("GET", QStringLiteral("/messages/%1/attachments/%2").arg(messageId, attachmentId), {}, {}, 5, std::move(cb));

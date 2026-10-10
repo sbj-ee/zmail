@@ -324,6 +324,8 @@ QJsonObject MockGoogle::messageJson(const Message &m, const QString &format) con
     opt("Reply-To", m.replyTo);
     opt("References", m.references);
     opt("In-Reply-To", m.inReplyTo);
+    opt("List-Unsubscribe", m.listUnsubscribe);
+    opt("List-Unsubscribe-Post", m.listUnsubscribePost);
     const bool mixed = !m.attachments.isEmpty();
     headers.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("Content-Type")},
                                {QStringLiteral("value"), mixed ? QStringLiteral("multipart/mixed; boundary=x")
@@ -343,6 +345,9 @@ QJsonObject MockGoogle::messageJson(const Message &m, const QString &format) con
         QJsonArray alt{textPart(QStringLiteral("text/plain"), m.text)};
         if (!m.html.isEmpty()) {
             alt.append(textPart(QStringLiteral("text/html"), m.html));
+        }
+        if (!m.calendar.isEmpty()) {
+            alt.append(textPart(QStringLiteral("text/calendar"), m.calendar));
         }
         QJsonArray parts;
         if (mixed) {
@@ -439,6 +444,7 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
                 return;
             }
             m_refreshRevoked = false;
+            grantedScope = grantGmailScope ? p.scope : QStringLiteral("openid email");
             replyJson(s, 200, {{QStringLiteral("access_token"), issueAccessToken()},
                                {QStringLiteral("expires_in"), accessTokenLifetime},
                                {QStringLiteral("refresh_token"), QString::fromLatin1(kRefreshToken)},
@@ -464,6 +470,18 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
     if (path == QLatin1String("/revoke")) {
         m_refreshRevoked = true;
         reply(s, 200, "{}");
+        return;
+    }
+
+    // --- A mailing list's one-click unsubscribe endpoint (no credentials) ----
+    if (path.startsWith(QLatin1String("/unsubscribe/"))) {
+        if (method != "POST") {
+            reply(s, 405, "POST only", "text/plain");
+            return;
+        }
+        unsubscribePosts.append(path + QLatin1Char('|') + QString::fromLatin1(headers.value("content-type")) +
+                                QLatin1Char('|') + QString::fromUtf8(body));
+        reply(s, unsubscribeStatus, "ok", "text/plain");
         return;
     }
 
@@ -654,6 +672,19 @@ void MockGoogle::handle(QTcpSocket *s, const QByteArray &method, const QUrl &url
             o.insert(QStringLiteral("nextPageToken"), QString::number(offset + max));
         }
         replyJson(s, 200, o);
+        return;
+    }
+    if (rest == QLatin1String("/settings/vacation")) {
+        if (method == "PUT") {
+            if (!grantedScope.contains(QLatin1String("https://www.googleapis.com/auth/gmail.settings.basic"))) {
+                replyJson(s, 403, gerror(403, QStringLiteral("PERMISSION_DENIED"),
+                                         QStringLiteral("Request had insufficient authentication scopes.")));
+                return;
+            }
+            ++vacationPuts;
+            vacation = QJsonDocument::fromJson(body).object();
+        }
+        replyJson(s, 200, vacation);
         return;
     }
     if (rest == QLatin1String("/settings/sendAs")) {

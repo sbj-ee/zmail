@@ -1337,9 +1337,10 @@ private slots:
         QCOMPARE(status(glanced), MailStatus::Unread);
         QVERIFY(unreadInGmail(glanced));
 
-        // Opened in a window of its own it is read at once.
+        // In a window of its own it is read after the same delay (0.6.19).
         f.w->openMessageWindow(f.proxy->mapFromSource(f.model->index(f.model->rowForId(glanced), 0)));
-        QCOMPARE(status(glanced), MailStatus::Read);
+        QCOMPARE(status(glanced), MailStatus::Unread);
+        QTRY_COMPARE_WITH_TIMEOUT(status(glanced), MailStatus::Read, 3000);
     }
 
     // All Mail shows what is in neither the Inbox nor a folder (mail that

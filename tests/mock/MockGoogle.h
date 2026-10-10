@@ -46,6 +46,9 @@ public:
         QString inReplyTo;
         QByteArray raw;            // as uploaded (sent messages / drafts)
         QList<QByteArray> attachmentData; // served by attachments.get (default: generated)
+        QString listUnsubscribe;     // List-Unsubscribe header, "" = none
+        QString listUnsubscribePost; // List-Unsubscribe-Post header
+        QString calendar;            // a text/calendar part beside the text (an invitation)
     };
     struct Label
     {
@@ -115,6 +118,18 @@ public:
     qint64 failUploadAfterBytes = -1; // next resumable PUT stores this many bytes, then 503
     static constexpr qint64 kUploadMaxBytes = 36'700'160; // Gmail discovery mediaUpload.maxSize
     QString lastUploadId;
+
+    // A mailing list's RFC 8058 endpoint: POSTs to /unsubscribe/<anything>
+    // are recorded as "path|content-type|body" and answered with this status.
+    QUrl unsubscribeUrl(const QString &token) const { return baseUrl().resolved(QUrl(QStringLiteral("/unsubscribe/") + token)); }
+    QStringList unsubscribePosts;
+    int unsubscribeStatus = 200;
+
+    // users.settings.vacation. Writing it needs gmail.settings.basic in the
+    // scopes last granted at the token endpoint (403 otherwise), as at Google.
+    QJsonObject vacation{{QStringLiteral("enableAutoReply"), false}};
+    int vacationPuts = 0;
+    QString grantedScope; // the scope string of the last code exchanged
 
     // Failure injection
     void addFault(const Fault &f) { m_faults.append(f); }

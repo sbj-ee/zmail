@@ -49,6 +49,11 @@ QStringList AuthManager::contactScopes()
             QStringLiteral("https://www.googleapis.com/auth/contacts.other.readonly")};
 }
 
+QStringList AuthManager::settingsScopes()
+{
+    return {QStringLiteral("https://www.googleapis.com/auth/gmail.settings.basic")};
+}
+
 AuthManager::AuthManager(ClientConfig config, TokenStore *store, QNetworkAccessManager *nam, QObject *parent)
     : QObject(parent)
     , m_config(std::move(config))
@@ -67,6 +72,7 @@ bool AuthManager::signInInProgress() const
 
 void AuthManager::startSignIn(const QString &loginHint)
 {
+    const QStringList extraScopes = std::exchange(m_extraScopes, {});
     cancelSignIn();
     if (!m_config.isValid()) {
         emit signInFailed(tr("No OAuth client is configured."));
@@ -105,8 +111,14 @@ void AuthManager::startSignIn(const QString &loginHint)
     q.addQueryItem(QStringLiteral("redirect_uri"), m_redirect.toString());
     q.addQueryItem(QStringLiteral("response_type"), QStringLiteral("code"));
     QStringList want = scopes();
-    if (m_requestingContacts) {
-        want += contactScopes();
+    if (!extraScopes.isEmpty()) {
+        // Named again along with the new ones, so the grant that comes back
+        // lists them all whatever include_granted_scopes does.
+        for (const QString &s : contactScopes() + settingsScopes()) {
+            if ((m_grantedScopes.contains(s) || extraScopes.contains(s)) && !want.contains(s)) {
+                want.append(s);
+            }
+        }
         q.addQueryItem(QStringLiteral("include_granted_scopes"), QStringLiteral("true"));
     }
     q.addQueryItem(QStringLiteral("scope"), want.join(QLatin1Char(' ')));
@@ -124,7 +136,6 @@ void AuthManager::startSignIn(const QString &loginHint)
     qCInfo(lcAuth).noquote() << "Sign-in: waiting for the browser redirect on port" << m_listenPort << "(for up to"
                              << describeTimeout(m_loopback->timeoutMs()) + ')';
     emit signInStarted(url);
-    m_requestingContacts = false;
     if (!m_open(url)) {
         cancelSignIn(); // nothing will come back; don't leave the port open
         emit signInFailed(tr("Couldn't open the web browser for Google sign-in."));
@@ -133,23 +144,33 @@ void AuthManager::startSignIn(const QString &loginHint)
 
 void AuthManager::requestContactScopes()
 {
-    if (hasContactScopes()) {
+    requestScopes(contactScopes());
+}
+
+bool AuthManager::hasContactScopes() const
+{
+    return hasScopes(contactScopes());
+}
+
+void AuthManager::requestScopes(const QStringList &scopes)
+{
+    if (hasScopes(scopes)) {
         emit signedIn(m_account);
         return;
     }
     if (signInInProgress()) {
         return;
     }
-    m_requestingContacts = true;
+    m_extraScopes = scopes;
     startSignIn(m_account);
 }
 
-bool AuthManager::hasContactScopes() const
+bool AuthManager::hasScopes(const QStringList &scopes) const
 {
     if (m_grantedScopes.isEmpty()) {
         return false;
     }
-    for (const QString &s : contactScopes()) {
+    for (const QString &s : scopes) {
         if (!m_grantedScopes.contains(s)) {
             return false;
         }
@@ -264,14 +285,16 @@ void AuthManager::exchangeCode(const QString &code)
             return;
         }
         const QString granted = o.value(QStringLiteral("scope")).toString();
-        if (!granted.isEmpty()) {
-            m_grantedScopes = granted.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            QSettings().setValue(QStringLiteral("auth/grantedScopes"), m_grantedScopes);
-        }
         if (!granted.isEmpty() && !granted.contains(QLatin1String("https://www.googleapis.com/auth/gmail.modify"))) {
             emit signInFailed(tr("Gmail access wasn't granted. On Google's consent screen, tick the box that "
                                  "lets zmail read, compose and send your email, then try again."));
             return;
+        }
+        if (!granted.isEmpty()) {
+            // Only once the grant is one zmail keeps: a refused one leaves the
+            // tokens in use, and what they allow, as they were.
+            m_grantedScopes = granted.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            QSettings().setValue(QStringLiteral("auth/grantedScopes"), m_grantedScopes);
         }
         const QString refreshToken = o.value(QStringLiteral("refresh_token")).toString();
         if (refreshToken.isEmpty()) {

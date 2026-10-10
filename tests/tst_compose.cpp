@@ -50,7 +50,7 @@ private slots:
         ComposeWindow c;
         c.loadSampleReply();
         QVERIFY(c.windowTitle().startsWith(QStringLiteral("Re: Q4 budget review")));
-        QVERIFY(c.windowTitle().endsWith(QStringLiteral("zmail 0.6.18")));
+        QVERIFY(c.windowTitle().endsWith(QStringLiteral("zmail 0.6.19")));
     }
 
     void sizeMeterLevelsAndSendBlocking()

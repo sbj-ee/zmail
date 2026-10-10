@@ -6,6 +6,7 @@
 #include "UpdateChecker.hpp"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
+#include "core/Unsubscribe.h"
 #include "core/MessageParser.h"
 #include "core/ReplyBuilder.h"
 #include "core/Signatures.h"
@@ -38,6 +39,7 @@
 #include "ui/StripesDialog.h"
 #include "ui/Theme.h"
 #include "ui/ThemeEditorDialog.h"
+#include "ui/VacationDialog.h"
 #include "version.hpp"
 
 #include <algorithm>
@@ -365,6 +367,16 @@ ViewMessage zmail::ui::detail::liveViewMessage(const zmail::CachedMessage &c, bo
     v.bodyText = c.bodyText;
     v.loading = loading;
     v.error = error;
+    v.calendar = c.calendar;
+    if (c.unsubscribedMs > 0) {
+        v.unsubscribedOn = QDateTime::fromMSecsSinceEpoch(c.unsubscribedMs);
+    }
+    // Never for spam: answering it only tells the sender the address is read.
+    if (!c.labels.contains(QStringLiteral("SPAM"))) {
+        const zmail::UnsubscribeInfo info = zmail::Unsubscribe::parse(c.listUnsubscribe, c.listUnsubscribePost);
+        v.canUnsubscribe = info.available();
+        v.unsubscribeTarget = info.target();
+    }
     if (c.labels.contains(QStringLiteral("SPAM"))) {
         v.warning = QStringLiteral("<b>\u26a0 %1</b> %2")
                         .arg(esc(QObject::tr("Gmail put this message in Spam.")),
@@ -409,6 +421,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_proxy->setHideSpam(QSettings().value(QStringLiteral("mail/hideSpam"), true).toBool());
 
     m_sound = new NewMailSound(this);
+    m_sentSound = new SentSound(this);
     m_reloadTimer = new QTimer(this);
     m_reloadTimer->setSingleShot(true);
     m_reloadTimer->setInterval(150);
@@ -577,6 +590,25 @@ void MainWindow::buildMenus()
     notify->setChecked(m_notify);
     notify->setToolTip(tr("Show a desktop notification when mail arrives and zmail isn't in front"));
     connect(notify, &QAction::toggled, this, &MainWindow::setNotifyOn);
+    QMenu *readDelay = view->addMenu(tr("&Mark Messages as Read"));
+    readDelay->setObjectName(QStringLiteral("menuMarkReadDelay"));
+    auto *markReadGroup = new QActionGroup(this);
+    const QList<QPair<int, QString>> delays = {{0, tr("&Immediately")},
+                                               {3000, tr("After &3 Seconds")},
+                                               {10000, tr("After &10 Seconds")},
+                                               {30000, tr("After 3&0 Seconds")},
+                                               {kMarkReadNever, tr("&Only When I Mark Them")}};
+    for (const auto &d : delays) {
+        QAction *a = readDelay->addAction(d.second, this, [this, ms = d.first]() { chooseMarkReadDelay(ms); });
+        a->setObjectName(QStringLiteral("actionMarkReadDelay%1").arg(d.first < 0 ? QStringLiteral("Never")
+                                                                                 : QString::number(d.first)));
+        a->setData(d.first);
+        a->setCheckable(true);
+        a->setChecked(d.first == m_markReadDelayMs);
+        markReadGroup->addAction(a);
+    }
+    readDelay->setToolTipsVisible(true);
+    readDelay->menuAction()->setToolTip(tr("How long a message is on show before it stops being unread"));
     view->addSeparator();
     m_hideSpamAction = view->addAction(tr("&Hide Spam from Folders"));
     m_hideSpamAction->setObjectName(QStringLiteral("actionHideSpam"));
@@ -669,6 +701,9 @@ void MainWindow::buildMenus()
     QAction *addContact = message->addAction(tr("Add Sender to &Contacts"), this, &MainWindow::addSenderToContacts);
     addContact->setObjectName(QStringLiteral("actionAddSenderToContacts"));
     addContact->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K)); // Eudora's Make Nickname
+    QAction *unsub = message->addAction(tr("Unsu&bscribe from Mailing List"), this, [this]() { unsubscribe(); });
+    unsub->setObjectName(QStringLiteral("menuActionUnsubscribe"));
+    unsub->setToolTip(tr("Tell the mailing list this message came from to stop sending to you"));
     QAction *junk = message->addAction(icon(QStringLiteral("shield-alert")), tr("Mark as &Junk"), this,
                                        [this]() { junkSelected(); });
     junk->setObjectName(QStringLiteral("menuActionJunk"));
@@ -717,6 +752,9 @@ void MainWindow::buildMenus()
         }
     });
     syncContacts->setObjectName(QStringLiteral("actionSyncContacts"));
+    QAction *vacation = settings->addAction(tr("&Vacation Responder\u2026"), this, [this]() { showVacationDialog(); });
+    vacation->setObjectName(QStringLiteral("actionVacation"));
+    vacation->setToolTip(tr("Gmail's automatic reply while you are away"));
     settings->addSeparator();
     m_stripes = stripeStrengthFromSetting(QSettings().value(QStringLiteral("ui/rowStripes")));
     QAction *stripes = settings->addAction(tr("Row Stri&pes\u2026"), this, [this]() { showSettings(QStringLiteral("stripes")); });
@@ -896,6 +934,7 @@ void MainWindow::buildPanes()
     m_view->setObjectName(QStringLiteral("messageView"));
     m_view->body()->setObjectName(QStringLiteral("previewPane"));
     connect(m_view, &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
+    connect(m_view, &MessageView::unsubscribeRequested, this, [this](const QString &id) { unsubscribe(id); });
     connect(m_list, &QTreeView::doubleClicked, this, [this](const QModelIndex &i) { openMessageWindow(i); });
     // A click in the flag column flags the message (in the colour used last)
     // or clears its flag.
@@ -979,7 +1018,12 @@ void MainWindow::buildStatusBar()
     lay->addWidget(m_syncLabel, 1);
     m_countLabel = new QLabel(this);
     m_countLabel->setObjectName(QStringLiteral("countLabel"));
+    m_vacationLabel = new QLabel(this);
+    m_vacationLabel->setObjectName(QStringLiteral("vacationLabel"));
+    m_vacationLabel->setToolTip(tr("Gmail is answering your mail automatically. Settings \u203a Vacation Responder changes it."));
+    m_vacationLabel->hide();
     statusBar()->addWidget(row, 1);
+    statusBar()->addPermanentWidget(m_vacationLabel);
     statusBar()->addPermanentWidget(m_countLabel);
     updateSyncLabel();
 }
@@ -1110,6 +1154,7 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
         connect(c, &QObject::destroyed, this, [this, c]() { m_composers.removeAll(c); });
         connect(c, &ComposeWindow::sent, this, [this]() {
             statusBar()->showMessage(tr("Message sent"), 6000);
+            m_sentSound->play();
             reloadFromCache(); // it may have been in the queue
             populateMailboxes();
         });
@@ -1180,7 +1225,8 @@ void MainWindow::updateMessageActions()
     // empty mailbox), in sample mode too. Multi-select keeps a current index.
     const bool selected = m_list && m_list->currentIndex().isValid() && (!m_live || !m_shownId.isEmpty());
     for (const char *n : {"actionDelete", "menuActionDelete", "menuActionArchive", "actionMarkRead", "actionMarkUnread",
-                          "actionJunk", "menuActionJunk", "menuActionNotJunk", "menuActionUnsnooze"}) {
+                          "actionJunk", "menuActionJunk", "menuActionNotJunk", "menuActionUnsnooze",
+                          "menuActionUnsubscribe"}) {
         if (QAction *a = findChild<QAction *>(QString::fromLatin1(n))) {
             a->setEnabled(selected);
         }
@@ -1451,6 +1497,7 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex, int 
     connect(w, &MessageWindow::composeRequested, this,
             [this](const QString &id, int kind) { composeReply(kind, id); });
     connect(w, &MessageWindow::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
+    connect(w->view(), &MessageView::unsubscribeRequested, this, [this](const QString &id) { unsubscribe(id); });
     connect(w, &MessageWindow::deleteRequested, this, [this, w](const QString &id) {
         trashMessage(id);
         w->close();
@@ -1462,7 +1509,7 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex, int 
         const QString id = item.id;
         const zmail::CachedMessage c = cache->message(id);
         w->setMessage(detail::liveViewMessage(c, !c.hasBody, {}));
-        if (!c.hasBody) {
+        if (detail::needsFetch(c)) {
             QPointer<MessageWindow> guard(w);
             sync->fetchBody(id, [guard](const zmail::CachedMessage &full, const QString &err) {
                 if (guard) {
@@ -1471,9 +1518,7 @@ MessageWindow *MainWindow::openMessageWindow(const QModelIndex &proxyIndex, int 
             });
         }
         if (c.unread()) {
-            sync->markRead(id);
-            m_model->setStatus(row, MailStatus::Read);
-            updateCounts();
+            markReadSoon(w->view(), id);
         }
     } else {
         w->setMessage(sampleViewMessage(row));
@@ -1588,6 +1633,7 @@ PrivacyDialog *MainWindow::showPrivacyDialog()
 SoundDialog *MainWindow::showSoundDialog()
 {
     auto *dlg = new SoundDialog(m_sound, this);
+    dlg->setSentSound(m_sentSound);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &QDialog::accepted, this, [this]() {
         // Keep View/toolbar mute in step with Settings > Sounds.
@@ -2066,7 +2112,7 @@ void MainWindow::showMessageIn(MessageView *view, const QString &id)
     }
     const zmail::CachedMessage c = cache->message(id);
     view->setMessage(detail::liveViewMessage(c, !c.hasBody, {}));
-    if (!c.hasBody) {
+    if (detail::needsFetch(c)) {
         QPointer<MessageView> guard(view);
         sync->fetchBody(id, [guard, id](const zmail::CachedMessage &full, const QString &err) {
             if (guard && guard->message().id == id) { // still the one on show
@@ -2162,6 +2208,7 @@ MailboxWindow *MainWindow::openMailboxWindow(const QString &keyIn)
         menu->popup(at);
     });
     connect(w->preview(), &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
+    connect(w->preview(), &MessageView::unsubscribeRequested, this, [this](const QString &id) { unsubscribe(id); });
     const QString label = labelForMailbox(key);
     if (m_live && m_session && m_session->sync() && !label.isEmpty()) {
         m_session->sync()->ensureLabel(label); // its first page, if it was never opened
@@ -2393,6 +2440,9 @@ void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
     if (left.isEmpty() || !m_session || !m_session->cache() || !m_session->sender()) {
         m_sendingQueue = false;
         QString text = sent == 1 ? tr("Sent 1 queued message.") : tr("Sent %1 queued messages.").arg(sent);
+        if (sent > 0) {
+            m_sentSound->play(); // one for the batch
+        }
         if (failed > 0) {
             text += QLatin1Char(' ') + (failed == 1 ? tr("1 could not be sent and is still in Queue.")
                                                     : tr("%1 could not be sent and are still in Queue.").arg(failed));

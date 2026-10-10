@@ -37,6 +37,8 @@ class MessageListModel;
 class MessageFilterProxy;
 class NewMailSound;
 class SoundDialog;
+class SentSound;
+class VacationDialog;
 class ThemeEditorDialog;
 class SafeHtmlView;
 class MessageView;
@@ -90,13 +92,29 @@ public:
     QList<ComposeWindow *> composers() const { return m_composers; }
     // How long an unread message stays in a preview pane before it counts
     // as read: arrowing past new mail, or a glance at it, leaves it unread.
-    // Opening it in a window of its own reads it at once. 0 = at once here too.
-    // ZMAIL_MARK_READ_DELAY_MS overrides it (the tests run with 0, so a read
-    // mark doesn't land ten seconds into whatever they are checking).
+    // The same goes for a message opened in a window of its own. 0 = at once;
+    // kMarkReadNever = only Message > Mark as Read does it. Chosen in View >
+    // Mark Messages as Read (QSettings viewer/markReadDelayMs, 10 s unless
+    // set). ZMAIL_MARK_READ_DELAY_MS overrides it (the tests run with 0, so a
+    // read mark doesn't land ten seconds into whatever they are checking).
     static constexpr int kMarkReadDelayMs = 10000;
+    static constexpr int kMarkReadNever = -1;
     static int defaultMarkReadDelayMs();
     int markReadDelayMs() const { return m_markReadDelayMs; }
-    void setMarkReadDelayMs(int ms) { m_markReadDelayMs = ms; }
+    void setMarkReadDelayMs(int ms); // this window only; not remembered
+    void chooseMarkReadDelay(int ms); // the menu's: remembered
+    // Message > Unsubscribe (and the bar's button): tell the mailing list the
+    // message came from to stop, the way its List-Unsubscribe header says:
+    // a one-click POST, an e-mail, or its web page in the browser. Asks first
+    // unless confirm is false. "" = the message in the preview.
+    void unsubscribe(const QString &messageId = {}, bool confirm = true);
+    // Where "open in the browser" goes (the tests look instead of opening).
+    using UrlOpener = std::function<bool(const QUrl &)>;
+    void setUrlOpener(UrlOpener opener) { m_urlOpener = std::move(opener); }
+    // Settings > Vacation Responder (shown; returned for tests; null when
+    // not signed in).
+    zmail::ui::VacationDialog *showVacationDialog();
+    zmail::ui::SentSound *sentSound() const { return m_sentSound; }
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
     static constexpr int kUndoDeleteMs = 8000;
     void selectMailbox(const QString &key);
@@ -318,6 +336,7 @@ private:
     QList<ComposeWindow *> m_composers;
     zmail::MailSession *m_session = nullptr;
     zmail::ui::NewMailSound *m_sound = nullptr;
+    zmail::ui::SentSound *m_sentSound = nullptr;
     QAction *m_soundAction = nullptr;
     QAction *soundAction();
     void addSoundButton(QToolBar *tb);
@@ -368,6 +387,10 @@ private:
     bool m_keepSyncErrorAcrossIdle = false;
     QString m_shownId;      // message currently in the preview
     int m_markReadDelayMs = defaultMarkReadDelayMs();
+    UrlOpener m_urlOpener;
+    QLabel *m_vacationLabel = nullptr; // status bar: the vacation responder is on
+    void updateVacationLabel();
+    void finishUnsubscribe(const QString &messageId, bool ok, const QString &message);
     int m_markReadEpoch = 0; // bumped by Mark as Read / Unread: a pending markReadSoon() is off
     int m_selectRowAfterReload = -1; // selectPastRemoved()'s row if its message vanished too
     // A Delete still waiting on Gmail: if it fails, the next reload selects

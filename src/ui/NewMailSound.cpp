@@ -126,4 +126,34 @@ void NewMailSound::playFile(const QString &path, bool preview)
     m_effect->play();
 }
 
+SentSound::SentSound(QObject *parent)
+    : QObject(parent)
+    , m_enabled(QSettings().value(QLatin1String(kEnabledKey), true).toBool())
+{
+}
+
+void SentSound::setEnabled(bool on)
+{
+    m_enabled = on;
+    QSettings().setValue(QLatin1String(kEnabledKey), on);
+}
+
+void SentSound::play()
+{
+    if (m_enabled) {
+        playPreview();
+    }
+}
+
+void SentSound::playPreview()
+{
+    ++m_plays;
+    if (!m_effect) {
+        m_effect = new QSoundEffect(this);
+        m_effect->setSource(QUrl(resourceUrl()));
+    }
+    m_effect->setVolume(NewMailSound::outputVolume());
+    m_effect->play();
+}
+
 } // namespace zmail::ui

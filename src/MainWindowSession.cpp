@@ -105,6 +105,10 @@ void MainWindow::setSession(zmail::MailSession *session)
         sessionStateChanged();
     });
     connect(session, &zmail::MailSession::stateChanged, this, &MainWindow::sessionStateChanged);
+    connect(session, &zmail::MailSession::vacationChanged, this, &MainWindow::updateVacationLabel);
+    connect(session, &zmail::MailSession::scopeRequestFailed, this, [this](const QString &reason) {
+        statusBar()->showMessage(tr("Google didn't give zmail the extra access: %1").arg(reason), 10000);
+    });
     installSignInBanner();
     connect(session, &zmail::MailSession::reauthRequired, this,
             [this](const QString &reason) { showConnectDialog(reason); });
@@ -128,6 +132,7 @@ void MainWindow::sessionStateChanged()
     }
     updateMessageActions();
     updateSyncLabel();
+    updateVacationLabel();
 }
 
 void MainWindow::attachSync()
@@ -398,7 +403,7 @@ void MainWindow::showLiveMessage(int row)
 
     const zmail::CachedMessage c = cache->message(id);
     render(c, !c.hasBody, {});
-    if (!c.hasBody) {
+    if (detail::needsFetch(c)) {
         QPointer<MainWindow> guard(this);
         sync->fetchBody(id, [guard, id, render](const zmail::CachedMessage &full, const QString &err) {
             if (guard && guard->m_shownId == id) {
@@ -415,7 +420,28 @@ int MainWindow::defaultMarkReadDelayMs()
 {
     bool ok = false;
     const int ms = qEnvironmentVariableIntValue("ZMAIL_MARK_READ_DELAY_MS", &ok);
-    return ok && ms >= 0 ? ms : kMarkReadDelayMs;
+    if (ok && ms >= 0) {
+        return ms;
+    }
+    const int saved = QSettings().value(QStringLiteral("viewer/markReadDelayMs"), kMarkReadDelayMs).toInt();
+    return saved < 0 ? kMarkReadNever : saved;
+}
+
+void MainWindow::setMarkReadDelayMs(int ms)
+{
+    m_markReadDelayMs = ms < 0 ? kMarkReadNever : ms;
+    ++m_markReadEpoch; // a mark already counting down under the old setting is off
+    if (QMenu *menu = findChild<QMenu *>(QStringLiteral("menuMarkReadDelay"))) {
+        for (QAction *a : menu->actions()) {
+            a->setChecked(a->data().toInt() == m_markReadDelayMs);
+        }
+    }
+}
+
+void MainWindow::chooseMarkReadDelay(int ms)
+{
+    setMarkReadDelayMs(ms);
+    QSettings().setValue(QStringLiteral("viewer/markReadDelayMs"), m_markReadDelayMs);
 }
 
 void MainWindow::markReadNow(const QString &id)
@@ -432,7 +458,10 @@ void MainWindow::markReadNow(const QString &id)
 
 void MainWindow::markReadSoon(MessageView *view, const QString &id)
 {
-    if (m_markReadDelayMs <= 0) {
+    if (m_markReadDelayMs < 0) {
+        return; // only when the user marks it
+    }
+    if (m_markReadDelayMs == 0) {
         markReadNow(id);
         return;
     }

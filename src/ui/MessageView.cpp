@@ -4,6 +4,7 @@
 #include "RemoteImages.h"
 #include "SafeHtmlView.h"
 #include "Theme.h"
+#include "core/CalendarInvite.h"
 
 #include <QApplication>
 #include <QEvent>
@@ -128,6 +129,42 @@ MessageView::MessageView(QWidget *parent)
     m_attachments->hide();
     lay->addWidget(m_attachments);
 
+    m_calendarCard = new QFrame(this);
+    m_calendarCard->setObjectName(QStringLiteral("calendarCard"));
+    m_calendarCard->setFrameShape(QFrame::StyledPanel);
+    m_calendarCard->setAutoFillBackground(true);
+    m_calendarCard->setBackgroundRole(QPalette::Base);
+    auto *cl = new QHBoxLayout(m_calendarCard);
+    cl->setContentsMargins(12, 8, 12, 8);
+    m_calendarText = new QLabel(m_calendarCard);
+    m_calendarText->setObjectName(QStringLiteral("calendarCardText"));
+    m_calendarText->setTextFormat(Qt::RichText);
+    m_calendarText->setForegroundRole(QPalette::Text); // the card is on Base
+    m_calendarText->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_calendarText->setWordWrap(true);
+    cl->addWidget(m_calendarText, 1);
+    m_calendarCard->hide();
+    lay->addWidget(m_calendarCard);
+
+    m_unsubscribeBar = new QFrame(this);
+    m_unsubscribeBar->setObjectName(QStringLiteral("unsubscribeBar"));
+    m_unsubscribeBar->setAutoFillBackground(true);
+    m_unsubscribeBar->setBackgroundRole(QPalette::AlternateBase);
+    auto *ub = new QHBoxLayout(m_unsubscribeBar);
+    ub->setContentsMargins(12, 2, 8, 4);
+    m_unsubscribeText = new QLabel(m_unsubscribeBar);
+    m_unsubscribeText->setObjectName(QStringLiteral("unsubscribeText"));
+    m_unsubscribeText->setTextFormat(Qt::PlainText);
+    m_unsubscribeText->setWordWrap(true);
+    ub->addWidget(m_unsubscribeText, 1);
+    m_unsubscribe = new QPushButton(tr("Unsubscribe"), m_unsubscribeBar);
+    m_unsubscribe->setObjectName(QStringLiteral("unsubscribeButton"));
+    m_unsubscribe->setToolTip(tr("Tell this mailing list to stop sending to you"));
+    ub->addWidget(m_unsubscribe);
+    connect(m_unsubscribe, &QPushButton::clicked, this, [this]() { emit unsubscribeRequested(m_msg.id); });
+    m_unsubscribeBar->hide();
+    lay->addWidget(m_unsubscribeBar);
+
     m_imagesBar = new QFrame(this);
     m_imagesBar->setObjectName(QStringLiteral("remoteImagesBar"));
     m_imagesBar->setFrameShape(QFrame::StyledPanel);
@@ -242,6 +279,8 @@ void MessageView::clear()
     m_warning->hide();
     m_header->hide();
     m_attachments->hide();
+    m_calendarCard->hide();
+    m_unsubscribeBar->hide();
     m_imagesBar->hide();
     m_layoutBar->hide();
     m_simplified = false;
@@ -264,6 +303,8 @@ void MessageView::setMessage(const ViewMessage &m)
     m_empty = false;
     m_body->setPlaceholderText(QString()); // a message with nothing in it is just empty
     renderHeader();
+    renderCalendar();
+    renderUnsubscribe();
     render();
     if (!same) {
         m_body->verticalScrollBar()->setValue(0);
@@ -356,6 +397,83 @@ void MessageView::renderHeader()
         m_attachments->setText((n == 1 ? tr("\U0001F4CE 1 attachment:  ") : tr("\U0001F4CE %1 attachments:  ").arg(n)) +
                                m_msg.attachments.join(QStringLiteral("  \u00b7  ")));
         m_attachments->show();
+    }
+}
+
+namespace {
+// The card's rows: what it is, then when, where and who.
+QList<QPair<QString, QString>> calendarRows(const zmail::CalendarEvent &ev)
+{
+    QList<QPair<QString, QString>> rows;
+    const auto add = [&rows](const QString &key, const QString &value) {
+        if (!value.trimmed().isEmpty()) {
+            rows.append({key, value});
+        }
+    };
+    add(MessageView::tr("When:"), ev.recurrence.isEmpty() ? ev.whenText()
+                                                           : QStringLiteral("%1 \u00b7 %2").arg(ev.whenText(), ev.recurrence));
+    add(MessageView::tr("Where:"), ev.location);
+    add(MessageView::tr("Organizer:"), ev.organizerText());
+    add(MessageView::tr("Guests:"), ev.attendeesText());
+    return rows;
+}
+
+QString calendarTitle(const zmail::CalendarEvent &ev)
+{
+    return QStringLiteral("%1: %2").arg(ev.kindText(), ev.summary.isEmpty() ? MessageView::tr("(no title)") : ev.summary);
+}
+} // namespace
+
+void MessageView::renderCalendar()
+{
+    const zmail::CalendarEvent ev = zmail::CalendarInvite::parse(m_msg.calendar);
+    if (!ev.valid) {
+        m_calendarText->clear();
+        m_calendarCard->hide();
+        return;
+    }
+    const bool cancelled = ev.kind() == zmail::CalendarEvent::Kind::Cancelled;
+    QString html = QStringLiteral("<div style='font-size:large'><b>\U0001F4C5 %1</b></div>")
+                       .arg(cancelled ? QStringLiteral("<s>%1</s>").arg(esc(calendarTitle(ev))) : esc(calendarTitle(ev)));
+    html += QStringLiteral("<table cellspacing='0' cellpadding='2'>");
+    for (const auto &row : calendarRows(ev)) {
+        html += QStringLiteral("<tr><td align='right'><b>%1</b>&nbsp;</td><td>%2</td></tr>").arg(esc(row.first), esc(row.second));
+    }
+    html += QStringLiteral("</table>");
+    m_calendarText->setText(html);
+    m_calendarCard->show();
+}
+
+QString MessageView::calendarText() const
+{
+    const zmail::CalendarEvent ev = zmail::CalendarInvite::parse(m_msg.calendar);
+    if (m_empty || !ev.valid) {
+        return {};
+    }
+    QStringList out{calendarTitle(ev)};
+    for (const auto &row : calendarRows(ev)) {
+        out << row.first + QLatin1Char(' ') + row.second;
+    }
+    return out.join(QLatin1Char('\n'));
+}
+
+void MessageView::renderUnsubscribe()
+{
+    if (m_msg.unsubscribedOn.isValid()) {
+        m_unsubscribeText->setText(
+            tr("You unsubscribed from this mailing list on %1.")
+                .arg(QLocale(QLocale::English, QLocale::UnitedStates)
+                         .toString(m_msg.unsubscribedOn.toLocalTime().date(), QStringLiteral("MMMM d, yyyy"))));
+        m_unsubscribe->hide();
+        m_unsubscribeBar->show();
+    } else if (m_msg.canUnsubscribe) {
+        m_unsubscribeText->setText(m_msg.unsubscribeTarget.isEmpty()
+                                       ? tr("This message is from a mailing list.")
+                                       : tr("This message is from a mailing list (%1).").arg(m_msg.unsubscribeTarget));
+        m_unsubscribe->show();
+        m_unsubscribeBar->show();
+    } else {
+        m_unsubscribeBar->hide();
     }
 }
 
@@ -511,6 +629,12 @@ QTextDocument *MessageView::printableDocument() const
     }
     if (!m_msg.attachments.isEmpty()) {
         row(tr("Attachments:"), m_msg.attachments.join(QStringLiteral(", ")));
+    }
+    if (const zmail::CalendarEvent ev = zmail::CalendarInvite::parse(m_msg.calendar); ev.valid) {
+        row(ev.kindText() + QLatin1Char(':'), ev.summary);
+        for (const auto &r : calendarRows(ev)) {
+            row(r.first, r.second);
+        }
     }
     head += QStringLiteral("</table><hr>");
     QTextCursor top(doc);

@@ -69,8 +69,17 @@ void MailSession::buildAuth()
             QSettings().setValue(kAccountKey, account);
         }
         startAccount(account);
+        if (const auto done = std::exchange(m_scopesDone, nullptr)) {
+            done(m_auth->hasScopes(m_scopesWanted)
+                     ? QString()
+                     : tr("Google didn't grant the extra access. Tick its box on the consent screen and try again."));
+        }
     });
     connect(m_auth.get(), &AuthManager::signInFailed, this, [this](const QString &reason) {
+        if (const auto done = std::exchange(m_scopesDone, nullptr)) {
+            done(reason); // only the extra access failed: still signed in
+            return;
+        }
         setState(State::SignedOut);
         emit signInFailed(reason);
     });
@@ -204,6 +213,8 @@ void MailSession::startAccount(const QString &account)
             }
         }
     });
+    m_vacation = {};
+    loadVacation([](const VacationSettings &, const QString &) {});
     setState(State::SignedIn);
     emit ready();
     m_sync->start();
@@ -239,22 +250,84 @@ void MailSession::stopAccount()
     m_cache.reset();
 }
 
+void MailSession::requestScopes(const QStringList &scopes, std::function<void(const QString &error)> done)
+{
+    if (!m_auth) {
+        done(tr("Not signed in."));
+        return;
+    }
+    if (m_auth->hasScopes(scopes)) {
+        done({});
+        return;
+    }
+    if (m_auth->signInInProgress()) {
+        done(tr("A Google sign-in is already waiting in your browser. Finish that one first."));
+        return;
+    }
+    m_scopesWanted = scopes;
+    m_scopesDone = std::move(done);
+    m_auth->requestScopes(scopes);
+}
+
 void MailSession::enableContactsSync()
 {
     if (!m_auth || !m_contactsSync) {
         return;
     }
-    if (m_auth->hasContactScopes()) {
-        m_contactsSync->sync();
-        return;
-    }
     // Incremental consent; sync once the new scopes are granted.
-    connect(m_auth.get(), &AuthManager::signedIn, this, [this](const QString &) {
-        if (m_auth->hasContactScopes() && m_contactsSync) {
+    requestScopes(AuthManager::contactScopes(), [this](const QString &error) {
+        if (!error.isEmpty()) {
+            emit scopeRequestFailed(error);
+        } else if (m_contactsSync) {
             m_contactsSync->sync();
         }
-    }, Qt::SingleShotConnection);
-    m_auth->requestContactScopes();
+    });
+}
+
+namespace {
+QString apiErrorText(const ApiError &err)
+{
+    return err.message.isEmpty() ? MailSession::tr("HTTP %1").arg(err.httpStatus) : err.message;
+}
+} // namespace
+
+void MailSession::loadVacation(VacationCb cb)
+{
+    if (!m_api) {
+        cb({}, tr("Not signed in."));
+        return;
+    }
+    m_api->getVacation([this, cb](const QJsonObject &json, const ApiError &err) {
+        if (err.isError) {
+            cb(m_vacation, apiErrorText(err));
+            return;
+        }
+        const VacationSettings now = VacationSettings::fromJson(json);
+        if (now != m_vacation) {
+            m_vacation = now;
+            emit vacationChanged();
+        }
+        cb(m_vacation, {});
+    });
+}
+
+void MailSession::saveVacation(const VacationSettings &settings, VacationCb cb)
+{
+    requestScopes(AuthManager::settingsScopes(), [this, settings, cb](const QString &error) {
+        if (!error.isEmpty() || !m_api) {
+            cb(settings, error.isEmpty() ? tr("Not signed in.") : error);
+            return;
+        }
+        m_api->updateVacation(settings.toJson(), [this, settings, cb](const QJsonObject &json, const ApiError &err) {
+            if (err.isError) {
+                cb(settings, apiErrorText(err));
+                return;
+            }
+            m_vacation = VacationSettings::fromJson(json);
+            emit vacationChanged();
+            cb(m_vacation, {});
+        });
+    });
 }
 
 } // namespace zmail

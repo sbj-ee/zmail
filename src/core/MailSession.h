@@ -2,6 +2,7 @@
 
 #include "AuthManager.h"
 #include "ClientConfig.h"
+#include "Vacation.h"
 
 #include <QObject>
 #include <QUrl>
@@ -73,6 +74,15 @@ public:
     PeopleClient *people() const { return m_people.get(); }
     SyncEngine *sync() const { return m_sync.get(); }
     void enableContactsSync(); // incremental consent if needed, then sync
+
+    // Gmail's vacation responder. loadVacation() asks Google; vacation() is
+    // what it last said (read once when the account starts). saveVacation()
+    // first sends the browser for Google's consent to change settings, the
+    // first time, and reports what Google stored.
+    using VacationCb = std::function<void(const VacationSettings &settings, const QString &error)>;
+    void loadVacation(VacationCb cb);
+    void saveVacation(const VacationSettings &settings, VacationCb cb);
+    const VacationSettings &vacation() const { return m_vacation; }
     QNetworkAccessManager *network() const { return m_nam; }
     Sender *sender() const { return m_sender.get(); }
 
@@ -89,12 +99,19 @@ signals:
     void ready(); // cache open and sync started
     void clientChanged();
     void identityChanged();
+    void vacationChanged();
+    // Google's consent for something extra (Contacts) was refused or timed
+    // out. The account stays signed in.
+    void scopeRequestFailed(const QString &reason);
 
 private:
     void buildAuth();
     void setState(State s);
     void startAccount(const QString &account);
     void stopAccount();
+    // Incremental consent for optional scopes; done("") once they are
+    // granted (at once if they already are), else done(why not).
+    void requestScopes(const QStringList &scopes, std::function<void(const QString &error)> done);
 
     SessionOptions m_opts;
     QString m_clientPath;
@@ -109,6 +126,9 @@ private:
     std::unique_ptr<SyncEngine> m_sync;
     std::unique_ptr<Sender> m_sender;
     QString m_displayName;
+    VacationSettings m_vacation;
+    QStringList m_scopesWanted;
+    std::function<void(const QString &error)> m_scopesDone; // set while consent is in the browser
     State m_state = State::NeedsClient;
 };
 

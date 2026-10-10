@@ -1246,6 +1246,22 @@ private slots:
         QCOMPARE(left, (QStringList{QStringLiteral("In two days"), QStringLiteral("Held")}));
     }
 
+    // Quit with a message still being written: the compose window goes with
+    // the main window, and its going must not touch what the main window
+    // has already let go of (under ASan this was a use-after-free).
+    void mainWindowGoesWithAComposeWindowStillOpen()
+    {
+        QPointer<ComposeWindow> c;
+        {
+            Fixture f;
+            QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+            c = f.w->openCompose();
+            f.w->openCompose();
+            QCOMPARE(f.w->composers().size(), 2);
+        }
+        QVERIFY(!c);
+    }
+
     // Send waits out the send delay in Queue, then goes by itself. Until
     // then Undo Send takes it back: out of the queue, open again, unsent.
     void sendWaitsOutTheDelayAndCanBeUndone()

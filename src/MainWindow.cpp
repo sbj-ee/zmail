@@ -522,7 +522,8 @@ void MainWindow::buildMenus()
     print->setObjectName(QStringLiteral("actionPrint"));
     print->setShortcut(QKeySequence::Print);
     file->addSeparator();
-    QAction *quit = file->addAction(tr("&Quit"), qApp, &QApplication::quit);
+    QAction *quit = file->addAction(tr("&Quit"), this, &MainWindow::quit);
+    quit->setObjectName(QStringLiteral("actionQuit"));
     quit->setShortcut(QKeySequence::Quit);
 
     QMenu *edit = addMenu("menuEdit", tr("&Edit"));
@@ -1179,7 +1180,13 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
     if (m_live && m_session) {
         c->setSession(m_session);
         c->setAttribute(Qt::WA_DeleteOnClose, true);
-        connect(c, &QObject::destroyed, this, [this, c]() { m_composers.removeAll(c); });
+        connect(c, &QObject::destroyed, this, [this, c]() {
+            m_composers.removeAll(c);
+            if (m_quitAfterSave) { // its draft is saved: on with the quit
+                QTimer::singleShot(0, this, &MainWindow::quit);
+            }
+        });
+        connect(c, &ComposeWindow::sendFailed, this, [this]() { m_quitAfterSave = false; }); // the save failed: it stays, and so does zmail
         connect(c, &ComposeWindow::sent, this, [this]() {
             statusBar()->showMessage(tr("Message sent"), 6000);
             m_sentSound->play();
@@ -1217,6 +1224,7 @@ ComposeWindow *MainWindow::openCompose(bool sampleReply)
         c->loadSampleReply();
     }
     m_composers.append(c);
+    c->markModified(false); // setting it up is not writing in it: closing it untouched asks nothing
     c->show();
     return c;
 }
@@ -1499,8 +1507,31 @@ void MainWindow::saveSplitters()
     st.setValue(QStringLiteral("ui/mainSplitter"), m_splitter->saveState());
 }
 
+void MainWindow::quit()
+{
+    if (close()) {
+        qApp->quit();
+    }
+}
+
 void MainWindow::closeEvent(QCloseEvent *ev)
 {
+    // The compose windows go with this one, and without being asked: each
+    // gets its say first, or what was being written is lost.
+    m_quitAfterSave = false;
+    const QList<ComposeWindow *> open = m_composers;
+    for (const QPointer<ComposeWindow> c : open) {
+        if (!c || !c->isVisible()) {
+            continue;
+        }
+        c->raise(); // the one the question is about
+        c->activateWindow();
+        if (!c->close()) {
+            m_quitAfterSave = c && c->closesAfterSave(); // Save: back here when it has; Cancel: not at all
+            ev->ignore();
+            return;
+        }
+    }
     saveSplitters();
     QMainWindow::closeEvent(ev);
 }

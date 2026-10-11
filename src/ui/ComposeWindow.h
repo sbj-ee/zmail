@@ -79,7 +79,8 @@ public:
     void setQueuedId(qint64 id) { m_queuedId = id; }
     qint64 queuedId() const { return m_queuedId; }
     // Unsaved work, as far as closing goes (a send taken back with Undo Send).
-    void markModified();
+    // Or, with false, nothing worth asking about yet (a window just opened).
+    void markModified(bool on = true);
     // Send waits this long in Queue before it goes, so a slip can be taken
     // back: Settings > Send Delay (QSettings compose/sendDelayMs, 2 minutes
     // unless set; 0 = at once). ZMAIL_SEND_DELAY_MS overrides it (the tests
@@ -133,6 +134,9 @@ public:
     QString lastError() const { return m_lastError; }
     bool isSent() const { return m_sent; }
     void setConfirmOnClose(bool on) { m_confirmClose = on; }
+    // Asked to close, it is saving its draft first and closes once that is
+    // done (or stays, with the reason, if the save fails).
+    bool closesAfterSave() const { return m_closeAfterSave; }
 
     zmail::SpellChecker *spellChecker() const { return m_spell; }
 

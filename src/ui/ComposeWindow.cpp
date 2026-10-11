@@ -1496,9 +1496,9 @@ int ComposeWindow::sendDelayMs()
     return qMax(0, QSettings().value(QStringLiteral("compose/sendDelayMs"), kSendDelayMs).toInt());
 }
 
-void ComposeWindow::markModified()
+void ComposeWindow::markModified(bool on)
 {
-    m_body->document()->setModified(true);
+    m_body->document()->setModified(on);
 }
 
 void ComposeWindow::send()

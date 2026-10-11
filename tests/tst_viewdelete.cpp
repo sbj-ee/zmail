@@ -53,6 +53,7 @@
 #include <QRadioButton>
 #include <QDateTimeEdit>
 #include <QDialogButtonBox>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTimer>
 #include <QTreeWidget>
@@ -1260,6 +1261,67 @@ private slots:
             QCOMPARE(f.w->composers().size(), 2);
         }
         QVERIFY(!c);
+    }
+
+    // Quit (or the main window's close button) with a message still being
+    // written asks about it first: Cancel keeps zmail open, Discard lets it
+    // go, and Save puts it in Drafts and then quits.
+    void quitAsksAboutAMessageStillBeingWritten()
+    {
+        Fixture f;
+        QVERIFY(f.open(QStringLiteral("In"), {QStringLiteral("INBOX")}));
+        const auto compose = [&f]() {
+            ComposeWindow *c = f.w->openCompose();
+            c->findChild<QLineEdit *>(QStringLiteral("fieldTo"))->setText(QStringLiteral("dana@example.org"));
+            c->findChild<QLineEdit *>(QStringLiteral("fieldSubject"))->setText(QStringLiteral("Half written"));
+            c->findChild<QTextEdit *>(QStringLiteral("composeBody"))->setPlainText(QStringLiteral("Dear Dana,"));
+            c->markModified();
+            return c;
+        };
+        int asked = 0;
+        const auto answer = [&asked](QMessageBox::StandardButton b) {
+            QTimer::singleShot(300, qApp, [&asked, b]() {
+                if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                    ++asked;
+                    box->button(b)->click();
+                }
+            });
+        };
+        QAction *quit = f.w->findChild<QAction *>(QStringLiteral("actionQuit"));
+        QVERIFY(quit);
+        const int draftsBefore = f.g.drafts().size();
+
+        QPointer<ComposeWindow> c = compose();
+        answer(QMessageBox::Cancel);
+        quit->trigger();
+        QCOMPARE(asked, 1);
+        QVERIFY(f.w->isVisible());
+        QVERIFY(c && c->isVisible());
+
+        answer(QMessageBox::Save);
+        QVERIFY(!f.w->close()); // not yet: the draft first
+        QCOMPARE(asked, 2);
+        QVERIFY(f.w->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(!f.w->isVisible(), 10000); // saved, and then it went
+        QVERIFY(!c);
+        QCOMPARE(f.g.drafts().size(), draftsBefore + 1);
+
+        f.w->show();
+        c = compose();
+        answer(QMessageBox::Discard);
+        QVERIFY(f.w->close());
+        QCOMPARE(asked, 3);
+        QVERIFY(!f.w->isVisible());
+        QTRY_VERIFY(!c);
+        QCOMPARE(f.g.drafts().size(), draftsBefore + 1);
+
+        // Nothing being written: nothing asked.
+        f.w->show();
+        c = f.w->openCompose();
+        answer(QMessageBox::Cancel); // nothing to answer; a question here would leave zmail open
+        QVERIFY(f.w->close());
+        QCOMPARE(asked, 3);
+        QTRY_VERIFY(!c);
     }
 
     // Send waits out the send delay in Queue, then goes by itself. Until

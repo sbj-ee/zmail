@@ -438,7 +438,7 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
     const QString key = item ? item->data(0, Qt::UserRole).toString() : QString();
     const QString meta = item ? item->data(0, Qt::UserRole + 1).toString() : QString();
     const bool live = m_live && m_session && m_session->sync();
-    const bool userLabel = key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"));
+    const bool userLabel = isUserFolderKey(key);
     const bool labelsRoot = meta == QLatin1String("labels-root");
     const bool folderPrefix = meta.startsWith(QLatin1String("folder-prefix:"));
 
@@ -823,4 +823,36 @@ void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QStrin
                                                     : tr("%1 messages moved back.").arg(before.size()),
                                  4000);
     });
+}
+
+QString MainWindow::newFolderPrefixForTests(const QString &key) const
+{
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == key) {
+            const bool userLabel = isUserFolderKey(key);
+            const QString full = (*it)->data(0, Qt::UserRole + 2).toString();
+            return userLabel && !full.isEmpty() ? full + QLatin1Char('/') : QString();
+        }
+    }
+    return {};
+}
+
+// A sidebar key for a user folder: "gmail:" + the id of a label of type
+// "user". The Gmail API names them Label_12; over IMAP (app-password
+// accounts) the id is the folder's own name, e.g. "Finance/Bills".
+bool MainWindow::isUserFolderKey(const QString &key) const
+{
+    if (!key.startsWith(QLatin1String("gmail:")) || !(m_session && m_session->cache())) {
+        return false;
+    }
+    const QString id = key.mid(6);
+    if (id.startsWith(QLatin1String("Label_"))) {
+        return true;
+    }
+    for (const zmail::CachedLabel &l : m_session->cache()->labels()) {
+        if (l.id == id) {
+            return l.type == QLatin1String("user");
+        }
+    }
+    return false;
 }

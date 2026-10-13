@@ -5,11 +5,21 @@
 //                                    imap-mainwindow.png, imap-idle-newmail.png
 //   zmail_dialogshot <outdir> imap-actions   changing mail over IMAP: imap-starred-trashed.png,
 //                                    imap-search.png (X-GM-RAW), imap-attachment.png
+//   zmail_dialogshot <outdir> imap-send   SMTP + drafts: imap-compose.png, imap-drafts.png,
+//                                    imap-send-queued.png (with a fake SMTP server)
 #include "core/MailSession.h"
 #include "core/TokenStore.h"
 #include "core/ConnectionTester.h"
 #include "mock/FakeMailServer.h"
 #include "mock/FakeImapServer.h"
+#include "mock/FakeSmtpServer.h"
+#include "core/MailCache.h"
+#include "core/ReplyBuilder.h"
+#include "core/Sender.h"
+#include "ui/ComposeWindow.h"
+#include <QTextEdit>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include "MainWindow.hpp"
 #include "core/SyncEngine.h"
 #include "core/MailCache.h"
@@ -64,8 +74,9 @@ int main(int argc, char *argv[])
     MemoryTokenStore store;
 
     const QString mode = argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString();
-    if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions")) {
+    if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions") || mode == QLatin1String("imap-send")) {
         const bool actions = mode == QLatin1String("imap-actions");
+        const bool sending = mode == QLatin1String("imap-send");
         test::FakeImapServer imap;
         imap.seedDemo(24);
         store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password); // the fake's made-up one
@@ -73,6 +84,9 @@ int main(int argc, char *argv[])
         a.email = imap.user;
         a.imapHost = QStringLiteral("127.0.0.1");
         a.imapPort = imap.port();
+        test::FakeSmtpServer smtp(&imap);
+        a.smtpHost = QStringLiteral("127.0.0.1");
+        a.smtpPort = smtp.port();
         {
             QSettings s;
             s.clear();
@@ -108,6 +122,67 @@ int main(int argc, char *argv[])
             w.grab().save(path);
             std::printf("%s\n", qPrintable(path));
         };
+        auto openBox = [&](const QString &key) { // as a click in the mailbox tree
+            auto *tree = w.findChild<QTreeWidget *>(QStringLiteral("mailboxTree"));
+            for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+                if ((*it)->data(0, Qt::UserRole).toString() == key) {
+                    tree->setCurrentItem(*it);
+                }
+            }
+            QTest::qWait(1800);
+        };
+        if (sending) {
+            {
+                ComposeWindow c;
+                c.setSession(&session);
+                ComposeDraft d;
+                d.to = QStringLiteral("Priya Raman <priya@northwind.example>");
+                d.cc = QStringLiteral("dana@whitfield.example");
+                d.subject = QStringLiteral("Budget notes for the Q4 schedule");
+                c.setDraft(d);
+                c.findChild<QTextEdit *>(QStringLiteral("composeBody"))
+                    ->setPlainText(QStringLiteral("Priya,\n\nRough numbers below; I'll finish them tomorrow. Saved to "
+                                                  "[Gmail]/Drafts over IMAP so it shows on the phone too.\n\nAlex"));
+                c.resize(820, 560);
+                c.show();
+                QSignalSpy saved(&c, &ComposeWindow::draftSaved);
+                c.saveDraft();
+                saved.wait(5000);
+                QTest::qWait(600);
+                c.grab().save(out + QStringLiteral("/imap-compose.png"));
+                std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-compose.png")));
+                c.close();
+            }
+            openBox(QStringLiteral("gmail:DRAFT"));
+            QTest::qWait(1200);
+            if (list && list->model()->rowCount() > 0) {
+                list->setCurrentIndex(list->model()->index(0, 0));
+            }
+            w.statusBar()->showMessage(QStringLiteral("Draft saved to [Gmail]/Drafts (IMAP APPEND)"));
+            snap("imap-drafts.png");
+            for (const char *subj : {"Site visit moved to Thursday", "Invoice 4471 follow-up"}) {
+                MailCache::QueuedMessage q;
+                q.mime = QByteArray("From: Alex Morgan <alex.morgan@gmail.com>\r\nTo: Marcus Lee <marcus.lee@example.org>\r\n"
+                                    "Subject: ") + subj + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n"
+                                    "Sent with File > Send Queued Messages over SMTP.\r\n";
+                q.subject = QString::fromLatin1(subj);
+                q.to = QStringLiteral("Marcus Lee <marcus.lee@example.org>");
+                session.cache()->addQueued(q);
+            }
+            w.findChild<QAction *>(QStringLiteral("actionSendQueued"))->trigger();
+            QTest::qWaitFor([&] { return smtp.delivered.size() == 2 && session.cache()->queued().isEmpty(); }, 10000);
+            QTest::qWait(1500);
+            const QString status = w.statusBar()->currentMessage();
+            openBox(QStringLiteral("Out"));
+            QTest::qWait(1500);
+            if (list && list->model()->rowCount() > 0) {
+                list->setCurrentIndex(list->model()->index(0, 0));
+            }
+            w.statusBar()->showMessage(status.isEmpty() ? QStringLiteral("2 messages sent over SMTP") : status);
+            snap("imap-send-queued.png");
+            QSettings().clear();
+            return 0;
+        }
         if (actions) {
             auto *sync = session.sync();
             auto idOf = [&](const char *subject) {

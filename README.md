@@ -139,6 +139,67 @@ directory 0700). **File → Sign Out** forgets the token and revokes it at Googl
 If Google ever rejects the saved sign-in (revoked, password changed), zmail
 shows the sign-in dialog again.
 
+### Or: connect with an app password (IMAP + SMTP)
+
+No Google Cloud project needed. zmail talks to Gmail over IMAP
+(`imap.gmail.com:993`) and SMTP (`smtp.gmail.com:465`), signing in with a
+16-letter **app password**. You don't hit the 7-day token expiry that OAuth
+clients get while their app is in "Testing".
+
+1. Turn on **2-Step Verification** for your Google account. App passwords
+   need it.
+2. Make an app password at
+   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+   (Google's help: [Sign in with app passwords](https://support.google.com/accounts/answer/185833)).
+   Name it `zmail` and copy the 16 letters.
+3. In zmail's **Connect your Gmail** dialog, click **Use a Gmail app
+   password instead…**. Enter your name (optional; it's shown in From), your Gmail
+   address and the app password, then click **Test** and **Save**.
+
+The app password goes only to your system keyring (QtKeychain). There's no
+plaintext fallback, and zmail never logs it. **File → Sign Out** removes it
+from the keyring. To stop zmail's access altogether, revoke the app password
+on the same Google page. If Google refuses the password (revoked, or your
+Google password changed), zmail says so and **stops retrying**, because
+repeated failed logins can get the account locked. Enter a new one in the
+account dialog. **Settings → Your Name…** changes the From name later.
+
+| Account dialog | App-password mailbox (fake server) | Gmail-syntax search over IMAP |
+|---|---|---|
+| ![](docs/screenshots/apppassword-ok.png) | ![](docs/screenshots/imap-mainwindow.png) | ![](docs/screenshots/imap-search.png) |
+
+What works the same as with OAuth: reading, IDLE push for new mail, folders
+and labels (create, rename, delete, move), archive, Trash with Undo, Junk,
+flags/stars, read/unread, bulk actions, Gmail search syntax (`from:`,
+`has:attachment`, … sent to Gmail as `X-GM-RAW`), attachments, sending
+(including **Send Later** and **Send Queued**), drafts kept in
+`[Gmail]/Drafts`, and snooze.
+
+**Limitations of app-password accounts:**
+
+- **No vacation responder.** Gmail's auto-reply is only reachable through the
+  Gmail API. Set it in Gmail on the web (Settings → General → Vacation
+  responder). **Settings → Vacation Responder** in zmail says so.
+- **No Google Contacts sync** (People API). The local address book still
+  learns addresses from your mail.
+- **No folder colours.** IMAP folders have none. Colours set in Gmail on the
+  web aren't shown.
+- **Snooze is local to zmail**, as it is with OAuth: the message leaves the
+  Inbox and comes back at the chosen time *while zmail is running*. The
+  Gmail web and phone apps don't show it as snoozed.
+- **Send-as aliases aren't used.** Mail goes out from the account's own
+  address, with the name you entered.
+- **Gmail's limits apply.**
+  - IMAP allows 15 connections per account, plus daily bandwidth caps.
+  - SMTP has a daily sending limit.
+  - On *too many connections*, *bandwidth / throttled*, *temporarily
+    unavailable* or *try again later*, zmail backs off with jitter and tries
+    again: about 1 → 15 minutes for connections, 10 → 60 minutes for
+    bandwidth, and 2 s → 5 minutes for temporary errors.
+  - A message that hits the daily sending limit stays in **Queue**.
+- Requires 2-Step Verification. Some Workspace admins turn app passwords
+  off; in that case use the OAuth setup above.
+
 `zmail --offline` shows the built-in sample mailbox without connecting.
 
 | First run | Sign in | Synced mailbox (mock data) |

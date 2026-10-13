@@ -7,6 +7,8 @@
 //                                    imap-search.png (X-GM-RAW), imap-attachment.png
 //   zmail_dialogshot <outdir> imap-send   SMTP + drafts: imap-compose.png, imap-drafts.png,
 //                                    imap-send-queued.png (with a fake SMTP server)
+//   zmail_dialogshot <outdir> imap-extras   imap-throttled.png (Gmail's connection limit, backing off),
+//                                    imap-snoozed.png, imap-from-name.png
 #include "core/MailSession.h"
 #include "core/TokenStore.h"
 #include "core/ConnectionTester.h"
@@ -17,6 +19,9 @@
 #include "core/ReplyBuilder.h"
 #include "core/Sender.h"
 #include "ui/ComposeWindow.h"
+#include "core/ImapSyncEngine.h"
+#include "core/ServerLimits.h"
+#include <QDateTime>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -54,6 +59,7 @@ void shoot(QWidget *w, const QString &path)
 }
 void fill(ui::AppPasswordDialog &d, const QString &pw)
 {
+    d.findChild<QLineEdit *>(QStringLiteral("displayNameEdit"))->setText(QStringLiteral("Alex Morgan"));
     d.findChild<QLineEdit *>(QStringLiteral("emailEdit"))->setText(QStringLiteral("alex.morgan@gmail.com"));
     d.findChild<QLineEdit *>(QStringLiteral("appPasswordEdit"))->setText(pw);
 }
@@ -74,7 +80,9 @@ int main(int argc, char *argv[])
     MemoryTokenStore store;
 
     const QString mode = argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString();
-    if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions") || mode == QLatin1String("imap-send")) {
+    if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions") || mode == QLatin1String("imap-send")
+        || mode == QLatin1String("imap-extras")) {
+        const bool extras = mode == QLatin1String("imap-extras");
         const bool actions = mode == QLatin1String("imap-actions");
         const bool sending = mode == QLatin1String("imap-send");
         test::FakeImapServer imap;
@@ -87,6 +95,10 @@ int main(int argc, char *argv[])
         test::FakeSmtpServer smtp(&imap);
         a.smtpHost = QStringLiteral("127.0.0.1");
         a.smtpPort = smtp.port();
+        if (extras) {
+            a.displayName = QStringLiteral("Alex Morgan");
+            imap.loginRefusals = {"NO [ALERT] Too many simultaneous connections. (Failure)"};
+        }
         {
             QSettings s;
             s.clear();
@@ -105,6 +117,14 @@ int main(int argc, char *argv[])
         w.resize(1180, 740);
         w.show();
         session.restoreSaved();
+        if (extras) {
+            auto *eng = qobject_cast<ImapSyncEngine *>(session.sync());
+            eng->setBackoffScaleForTests(0.05); // 60 s -> 3 s, time for the shot
+            QTest::qWaitFor([&] { return eng->lastLimit() == ServerLimits::Kind::TooManyConnections; }, 5000);
+            QTest::qWait(400);
+            w.grab().save(out + QStringLiteral("/imap-throttled.png"));
+            std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-throttled.png")));
+        }
         QSignalSpy idle(session.sync(), &SyncEngine::idle);
         if (!idle.wait(10000)) {
             return 2;
@@ -131,6 +151,37 @@ int main(int argc, char *argv[])
             }
             QTest::qWait(1800);
         };
+        if (extras) {
+            auto *sync = session.sync();
+            const auto inbox = session.cache()->messages(QStringLiteral("INBOX"));
+            const qint64 tomorrow = QDateTime::currentDateTime().addDays(1).date().startOfDay().addSecs(8 * 3600).toMSecsSinceEpoch();
+            for (int i = 1; i < 3 && i < inbox.size(); ++i) {
+                sync->snooze(inbox.at(i).id, tomorrow);
+            }
+            QTest::qWaitFor([&] { return !sync->isBusy(); }, 5000);
+            openBox(QStringLiteral("Snoozed"));
+            if (list && list->model()->rowCount() > 0) {
+                list->setCurrentIndex(list->model()->index(0, 0));
+            }
+            w.statusBar()->showMessage(QStringLiteral("Snoozed 2 until tomorrow 8:00 AM (out of the Inbox on imap.gmail.com)"));
+            snap("imap-snoozed.png");
+            ComposeWindow c;
+            c.setSession(&session);
+            ComposeDraft d;
+            d.to = QStringLiteral("Priya Raman <priya@northwind.example>");
+            d.subject = QStringLiteral("From line with your name");
+            c.setDraft(d);
+            c.findChild<QTextEdit *>(QStringLiteral("composeBody"))
+                ->setPlainText(QStringLiteral("From now shows \u201cAlex Morgan <alex.morgan@gmail.com>\u201d: set in the account "
+                                              "dialog or Settings \u2192 Your Name\u2026"));
+            c.resize(820, 420);
+            c.show();
+            QTest::qWait(700);
+            c.grab().save(out + QStringLiteral("/imap-from-name.png"));
+            std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-from-name.png")));
+            QSettings().clear();
+            return 0;
+        }
         if (sending) {
             {
                 ComposeWindow c;

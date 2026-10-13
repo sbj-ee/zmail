@@ -118,13 +118,14 @@ private slots:
         imap.seedDemo(4);
         imap.loginRefusals = {"NO [ALERT] Too many simultaneous connections. (Failure)"};
         Engine e(imap, imap.password);
+        e.sync->setBackoffScaleForTests(0.02); // 60 s -> ~1.2 s: long enough to look at, even on a busy CI box
         QSignalSpy errors(e.sync.get(), &SyncEngine::syncError);
         QSignalSpy idle(e.sync.get(), &SyncEngine::idle);
         e.sync->start();
         QTRY_COMPARE(e.sync->lastLimit(), Kind::TooManyConnections);
         QVERIFY(!errors.isEmpty());
         QVERIFY(errors.last().first().toString().contains(QLatin1String("too many connections")));
-        QVERIFY(e.sync->retryInMs() > 0 && e.sync->retryInMs() <= 72); // 60 s, scaled
+        QVERIFY(e.sync->retryInMs() > 0 && e.sync->retryInMs() <= 1440); // 60 s +-20%, scaled
         QVERIFY(idle.wait(5000));                                       // then it gets in
         QCOMPARE(imap.refusedLogins, 1);
         QCOMPARE(imap.logins, 1);

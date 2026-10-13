@@ -238,6 +238,7 @@ void ImapSyncEngine::start()
     m_retryAttempt = 0;
     m_lastTickMs = 0;
     m_clock->start();
+    m_startPending = true;
     connectAndSync(true);
 }
 
@@ -513,7 +514,12 @@ void ImapSyncEngine::connectAndSync(bool full)
                                 }
                                 m_lastAllCountsMs = QDateTime::currentMSecsSinceEpoch();
                                 refreshCounts([this, full, done] {
-                                    if (full) {
+                                    // The first connection after start(), whichever try
+                                    // gets through: the cache is checked then, not only
+                                    // when the very first try does.
+                                    const bool fresh = full || m_startPending;
+                                    m_startPending = false;
+                                    if (fresh) {
                                         ++m_fullSyncs;
                                         // Nothing is thrown away yet: what an earlier run cached
                                         // stays on show, and in doubt, until the server has been
@@ -530,7 +536,7 @@ void ImapSyncEngine::connectAndSync(bool full)
                                             f.uidToId.clear();
                                         }
                                     }
-                                    syncFolder(QStringLiteral("INBOX"), full, [this, done] {
+                                    syncFolder(QStringLiteral("INBOX"), fresh, [this, done] {
                                         // The Inbox has been read: whatever it didn't show may have
                                         // been deleted since, so it leaves the cache, as everything
                                         // used to. Its body is kept for when a folder shows it again.

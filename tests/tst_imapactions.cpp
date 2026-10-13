@@ -690,6 +690,30 @@ private slots:
         QCOMPARE(r.cache.keptBodies(), 0);
     }
 
+    // The server can't be reached when zmail starts and is a moment later:
+    // the cache is checked against it all the same.
+    void startThatConnectsLateStillCatchesUp()
+    {
+        Rig r;
+        QVERIFY(r.settle());
+        r.sync->setBackoffScaleForTests(0.01);
+        const quint64 deleted = r.msgid("Lunch on Thursday?");
+        const quint64 kept = r.msgid("Spare parts order");
+        r.sync->stop();
+        r.server.expunge(deleted);
+        r.server.byeGreetings = {"* BYE [UNAVAILABLE] Temporary System Error"};
+        const int attempts = r.server.connectAttempts;
+
+        QSignalSpy idle(r.sync.get(), &SyncEngine::idle);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+        QVERIFY(r.server.connectAttempts >= attempts + 2); // turned away once, then in
+        QCOMPARE(r.sync->fullSyncs(), 2);
+        QVERIFY(!r.cache.contains(Rig::hex(deleted)));
+        QVERIFY(r.cache.contains(Rig::hex(kept)));
+    }
+
     void snoozedMailSurvivesARestart()
     {
         Rig r;

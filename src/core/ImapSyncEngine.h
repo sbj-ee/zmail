@@ -197,6 +197,7 @@ private:
     // again. What the Inbox doesn't vouch for is set aside once it is read.
     QSet<QString> m_unverified;
     bool m_sweepPending = false; // start() has yet to set the unverified aside
+    bool m_startPending = false; // start() has yet to reach the server (it may take some tries)
 
     AppPasswordAccount m_account;
     PasswordProvider m_password;

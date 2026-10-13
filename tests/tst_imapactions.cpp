@@ -324,6 +324,104 @@ private slots:
         QCOMPARE(refs.first().inlineData, pdf);
         QVERIFY(!r.flags(id).contains(QStringLiteral("\\Seen"))); // fetched with PEEK
     }
+
+    // After each change the engine goes back to INBOX. A second change begun
+    // while that SELECT is still on the wire must not take INBOX for All Mail:
+    // the two number their messages differently, so the wrong one would move.
+    void changeDuringReturnToInboxHitsTheRightMessage()
+    {
+        Rig r;
+        auto mk = [](const char *subject) {
+            return FakeImapServer::makeMessage(QStringLiteral("Sam Ortiz"), QStringLiteral("sam@example.org"),
+                                               QString::fromLatin1(subject), QStringLiteral("text"));
+        };
+        QVERIFY(r.settle()); // idling, so the server announces what arrives
+        // One archived message puts All Mail's UIDs a step ahead of INBOX's.
+        const quint64 archived = r.server.deliver(mk("Archived note"), {}, {QStringLiteral("\\Seen")});
+        const quint64 first = r.server.deliver(mk("First of two"));
+        const quint64 second = r.server.deliver(mk("Second of two"));
+        QVERIFY(QTest::qWaitFor([&] { return r.cache.contains(Rig::hex(second)); }, 10000));
+        QVERIFY(r.settle());
+        QVERIFY(r.server.find(first)->uid.value(QStringLiteral("INBOX"))
+                != r.server.find(first)->uid.value(QStringLiteral("[Gmail]/All Mail")));
+
+        const int base = int(r.server.commands.size());
+        r.sync->markRead(Rig::hex(first)); // leaves All Mail selected
+        // The server has just read the engine's SELECT "INBOX"; its answer is
+        // on the wire and the engine hasn't seen it yet.
+        QVERIFY(QTest::qWaitFor([&] {
+            bool stored = false;
+            for (int i = base; i < r.server.commands.size(); ++i) {
+                stored = stored || r.server.commands.at(i).contains("STORE");
+            }
+            return stored && r.server.commands.last().startsWith("SELECT \"INBOX\"");
+        }, 10000));
+        r.sync->trash(Rig::hex(second));
+        QVERIFY(r.settle());
+
+        QVERIFY(r.labels(second).contains(QStringLiteral("\\Trash")));
+        QVERIFY(!r.labels(second).contains(QStringLiteral("\\Inbox")));
+        QVERIFY(!r.labels(first).contains(QStringLiteral("\\Trash")));
+        QVERIFY(!r.labels(archived).contains(QStringLiteral("\\Trash")));
+        QVERIFY(r.labels(first).contains(QStringLiteral("\\Inbox")));
+    }
+
+    // A lost connection takes the changes still waiting with it: each one is
+    // undone in the cache and reported, as a refusal would be.
+    void lostConnectionUndoesPendingChanges()
+    {
+        Rig r;
+        r.sync->setBackoffScaleForTests(0.01);
+        const quint64 a = r.msgid("Lunch on Thursday?");
+        const quint64 b = r.msgid("Spare parts order");
+        QSignalSpy failed(r.sync.get(), &SyncEngine::trashFailed);
+        QSignalSpy succeeded(r.sync.get(), &SyncEngine::trashSucceeded);
+        const int logins = r.server.logins;
+        r.sync->trash(Rig::hex(a)); // under way
+        r.sync->trash(Rig::hex(b)); // waiting behind it
+        QVERIFY(r.cache.summary(Rig::hex(b)).labels.contains(QStringLiteral("TRASH")));
+        r.server.dropConnections();
+        QVERIFY(QTest::qWaitFor([&] { return r.server.logins > logins; }, 10000));
+        QVERIFY(r.settle());
+
+        QCOMPARE(succeeded.size(), 0);
+        QCOMPARE(failed.size(), 2);
+        for (const quint64 id : {a, b}) {
+            QVERIFY(!r.labels(id).contains(QStringLiteral("\\Trash")));
+            const QStringList cached = r.cache.summary(Rig::hex(id)).labels;
+            QVERIFY(!cached.contains(QStringLiteral("TRASH")));
+            QVERIFY(cached.contains(QStringLiteral("INBOX")));
+        }
+        // ...and Undo has nothing left to undo.
+        QVERIFY(!r.sync->untrash(Rig::hex(a)));
+    }
+
+    // Whoever asked for a message or a search hears back when the connection goes.
+    void lostConnectionAnswersWaitingRequests()
+    {
+        Rig r;
+        r.sync->setBackoffScaleForTests(0.01);
+        const QString id = Rig::hex(r.msgid("Lunch on Thursday?"));
+        int bodies = 0;
+        QString bodyError;
+        int searches = 0;
+        QString searchError;
+        r.sync->fetchBody(id, [&](const CachedMessage &, const QString &error) {
+            ++bodies;
+            bodyError = error;
+        });
+        r.sync->serverSearch(QStringLiteral("subject:lunch"), [&](const QStringList &, const QString &error) {
+            ++searches;
+            searchError = error;
+        });
+        r.server.dropConnections();
+        QVERIFY(QTest::qWaitFor([&] { return bodies > 0 && searches > 0; }, 10000));
+        QVERIFY(r.settle());
+        QCOMPARE(bodies, 1);
+        QCOMPARE(searches, 1);
+        QVERIFY(!bodyError.isEmpty());
+        QVERIFY(!searchError.isEmpty());
+    }
 };
 
 QTEST_MAIN(TstImapActions)

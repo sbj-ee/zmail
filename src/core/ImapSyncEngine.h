@@ -138,9 +138,16 @@ private:
     };
     using Done = std::function<void()>;
     using Op = std::function<void(Done)>;
+    // aborted: called instead of (or part-way through) run when the connection
+    // goes, so the op can undo its change or answer whoever is waiting.
+    struct QueuedOp
+    {
+        Op run;
+        std::function<void()> aborted;
+    };
 
     void connectAndSync(bool full);
-    void enqueue(Op op, bool front = false);
+    void enqueue(Op op, bool front = false, std::function<void()> aborted = {});
     void runNext();
     void afterOps();          // queue empty: back to INBOX and IDLE
     void listFolders(Done then);
@@ -153,6 +160,7 @@ private:
     void notYet(const QString &what);
     Folder *folder(const QString &labelId);
     QByteArray selectCmd(const Folder &f) const;
+    void select(const Folder &f, ImapClient::ReplyCb cb);
     void applySelect(Folder *f, const ImapClient::Reply &r, bool *uidValidityChanged);
     void loadAllStep();
     using Located = QHash<QString, QHash<QString, qint64>>; // folder label -> id -> UID
@@ -171,6 +179,7 @@ private:
     void idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
                                                                 const QHash<qint64, QStringList> &gmLabels)> then);
     void dropAndRetry(const QString &reason);
+    void scheduleRetry(const QString &reason);
     void removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then);
     QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
 
@@ -179,7 +188,8 @@ private:
     MailCache *m_cache;
     ImapClient m_imap;
     QList<Folder> m_folders;
-    std::deque<Op> m_ops;
+    std::deque<QueuedOp> m_ops;
+    std::function<void()> m_runningAbort; // the running op's, until it is done
     bool m_opRunning = false;
     bool m_running = false;
     bool m_busy = false;

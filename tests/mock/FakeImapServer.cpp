@@ -312,6 +312,8 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
     } else if (cmd == "IDLE") {
         s->idleTag = tag;
         reply(s, "+ idling\r\n");
+    } else if (cmd == "LIST" && refuseList) {
+        reply(s, tag + " NO [SERVERBUG] LIST failed (fake)\r\n");
     } else if (cmd == "LIST") {
         QByteArray out;
         for (const Folder &f : folders()) {

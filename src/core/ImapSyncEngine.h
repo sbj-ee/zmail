@@ -23,7 +23,8 @@ namespace zmail {
 //    X-GM-LABELS, X-GM-MSGID, X-GM-THRID, INTERNALDATE, RFC822.SIZE)
 //  - ids: hex X-GM-MSGID / X-GM-THRID, the same as the Gmail API's
 //  - bodies: BODY.PEEK[] found in All Mail by X-GM-MSGID (never sets \Seen)
-//  - staying current: IDLE on INBOX (re-issued every 25 min, under Gmail's 29);
+//  - staying current: IDLE on INBOX (re-issued every 5 min: well under Gmail's
+//    29, and soon enough to notice a connection that died without a word);
 //    on a wake-up, new UIDs past the last one seen, CONDSTORE CHANGEDSINCE for
 //    flag / label changes, and UID SEARCH for what was expunged. Servers
 //    without IDLE are polled with the same incremental sync.
@@ -48,6 +49,9 @@ public:
 
     void setPlaintextForTests(bool on) { m_imap.setPlaintextForTests(on); }
     void setIdleRenewMs(int ms) { m_idleRenewMs = ms; }
+    // A poll asks every folder for its counts at most this often; in between,
+    // only the folders it read.
+    void setAllCountsEveryMs(int ms) { m_allCountsEveryMs = ms; }
     // Reconnect / throttle backoff (ServerLimits::backoffMs), shrunk for tests.
     void setBackoffScaleForTests(double scale) { m_backoffScale = scale; }
     ServerLimits::Kind lastLimit() const { return m_lastLimit; }
@@ -120,6 +124,10 @@ public:
     // One FETCH response -> the cache's row. folderLabel is added (Gmail
     // leaves the selected folder's own label out of X-GM-LABELS).
     static CachedMessage messageFromFetch(const ImapValue &attrs, const QString &folderLabel);
+    // UIDs as IMAP sequence sets ("3:9,12,20:31"), each short enough for one
+    // command line. Given `present` (every UID in the folder), a run also
+    // spans the gaps between neighbours: no message has those UIDs.
+    static QList<QByteArray> uidSets(QList<qint64> uids, QList<qint64> present = {}, int maxBytes = 1000);
 
 private:
     struct Folder
@@ -151,7 +159,8 @@ private:
     void runNext();
     void afterOps();          // queue empty: back to INBOX and IDLE
     void listFolders(Done then);
-    void refreshCounts(Done then);
+    void refreshCounts(Done then, const QStringList &only = {}); // only: these labels' folders
+    void checkConnection();
     void syncFolder(const QString &labelId, bool full, Done then);
     void fetchRange(Folder *f, const QByteArray &range, bool byUid, std::function<void(QStringList newIds)> then);
     void handleUntagged(const ImapUntagged &u);
@@ -200,8 +209,12 @@ private:
     int m_pageSize = 100;
     int m_fullSyncs = 0;
     int m_incrementals = 0;
-    int m_idleRenewMs = 25 * 60 * 1000;
+    int m_idleRenewMs = 5 * 60 * 1000;
+    int m_allCountsEveryMs = 60 * 1000;
     qint64 m_lastPollMs = 0;
+    qint64 m_lastAllCountsMs = 0;
+    qint64 m_lastTickMs = 0;
+    bool m_listed = false;   // the last LIST was answered
     QString m_loadAllLabel;
     QString m_loadAllName;
     bool m_loadAllStop = false;
@@ -209,6 +222,7 @@ private:
     QTimer *m_poll;          // fallback polling when the server has no IDLE; reconnect backoff
     QTimer *m_idleRenew;
     QTimer *m_wake;          // debounces IDLE notifications
+    QTimer *m_clock;         // notices the computer having slept
     QTimer *m_retry = new QTimer(this);
     int m_retryAttempt = 0;
     double m_backoffScale = 1.0;

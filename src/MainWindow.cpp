@@ -219,6 +219,9 @@ class MailboxTree : public QTreeWidget
 {
 public:
     std::function<void(const QString &labelId, const QStringList &ids)> onDrop;
+    // True for a sidebar key that is a user folder ("gmail:<label id>").
+    // Gmail API ids look like Label_12; over IMAP the id is the folder name.
+    std::function<bool(const QString &key)> isUserFolder;
 
     explicit MailboxTree(QWidget *parent = nullptr) : QTreeWidget(parent)
     {
@@ -329,14 +332,14 @@ private:
     bool m_menuClick = false;
 
     // The Gmail label a drop on this row moves to; empty: not a drop target.
-    static QString dropLabel(const QString &key)
+    QString dropLabel(const QString &key) const
     {
         if (key == QLatin1String("In")) {
             return QStringLiteral("INBOX");
         }
-        // User labels have Gmail ids like Label_12. System rows under Gmail
-        // Labels (STARRED, …) are not folder drop targets.
-        if (key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"))) {
+        // User folders only; system rows under Folders (STARRED, …) are
+        // not drop targets.
+        if (isUserFolder && isUserFolder(key)) {
             return key.mid(6);
         }
         return {};
@@ -901,6 +904,7 @@ void MainWindow::buildPanes()
     mailboxTree->onDrop = [this](const QString &labelId, const QStringList &ids) {
         moveMessagesToLabel(ids, labelId);
     };
+    mailboxTree->isUserFolder = [this](const QString &key) { return isUserFolderKey(key); };
 
     m_listSplitter = new QSplitter(Qt::Vertical, m_splitter);
     m_listSplitter->setObjectName(QStringLiteral("listPreviewSplitter"));
@@ -2388,14 +2392,14 @@ void MainWindow::rebuildMailboxMenus()
     unimportant->setObjectName(QStringLiteral("actionClearImportantFiled"));
     unimportant->setToolTip(tr("Take Gmail's Important marker off everything already in a folder"));
     m_mailboxMenu->addSeparator();
-    const auto target = [](const QString &key) -> QString {
+    const auto target = [this](const QString &key) -> QString {
         if (key == QLatin1String("In")) {
             return QStringLiteral("INBOX");
         }
         if (key == QLatin1String("Trash")) {
             return QStringLiteral("TRASH");
         }
-        if (key.startsWith(QLatin1String("gmail:Label_"))) {
+        if (isUserFolderKey(key)) {
             return key.mid(6);
         }
         return {};

@@ -129,6 +129,15 @@ struct Rig
         QApplication::sendEvent(tree->viewport(), &drop);
         return drop.isAccepted();
     }
+    // ZMAIL_SHOT_DIR=/some/dir saves the window for the PR; off in CI.
+    void shot(const char *name)
+    {
+        const QString dir = qEnvironmentVariable("ZMAIL_SHOT_DIR");
+        if (!dir.isEmpty()) {
+            QTest::qWait(300);
+            w->grab().save(dir + QLatin1Char('/') + QLatin1String(name) + QStringLiteral(".png"));
+        }
+    }
     quint64 msgid(const char *subject)
     {
         for (quint64 id = 0x18f3a0c2b4d50001ULL; id < 0x18f3a0c2b4d50000ULL + 500; ++id) {
@@ -169,6 +178,8 @@ private slots:
         QCOMPARE(bills->parent(), r.item(QStringLiteral("gmail:Finance"))); // nested under Finance
         // and a sub-folder of the sub-folder works the same way
         QCOMPARE(r.w->newFolderPrefixForTests(QStringLiteral("gmail:Finance/Bills")), QStringLiteral("Finance/Bills/"));
+        r.tree->setCurrentItem(bills);
+        r.shot("imap-nested-finance-bills");
         QVERIFY(r.settle());
     }
 
@@ -197,6 +208,10 @@ private slots:
         QVERIFY(r.drag(hex, QStringLiteral("gmail:Finance/Bills")));
         QTRY_VERIFY_WITH_TIMEOUT(r.imap.find(id)->labels.contains(QStringLiteral("Finance/Bills")), 10000);
         QTRY_VERIFY_WITH_TIMEOUT(!r.imap.find(id)->labels.contains(QStringLiteral("Bills")), 10000);
+        QVERIFY(r.settle());
+        r.w->selectMailbox(QStringLiteral("gmail:Finance/Bills"));
+        QTRY_VERIFY_WITH_TIMEOUT(!r.item(QStringLiteral("gmail:Finance/Bills"))->text(1).isEmpty(), 10000);
+        r.shot("imap-drag-into-finance-bills");
         QVERIFY(r.drag(hex, QStringLiteral("In")));
         QTRY_VERIFY_WITH_TIMEOUT(r.imap.find(id)->labels.contains(QStringLiteral("\\Inbox")), 10000);
         QVERIFY(r.settle());

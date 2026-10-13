@@ -1755,9 +1755,18 @@ void ImapSyncEngine::renameLabel(const QString &id, const QString &newName)
                 return;
             }
             {
+                // Gmail renames the sub-folders with it: Finance/Bills
+                // becomes Money/Bills when Finance becomes Money.
                 const MailCache::Batch batch(*m_cache);
-                for (const QString &messageId : m_cache->messageIds(id)) {
-                    m_cache->modifyLabels(messageId, {to}, {id});
+                const QString childPrefix = id + QLatin1Char('/');
+                for (const CachedLabel &l : m_cache->labels()) {
+                    if (l.id != id && !l.id.startsWith(childPrefix)) {
+                        continue;
+                    }
+                    const QString renamed = to + l.id.mid(id.size());
+                    for (const QString &messageId : m_cache->messageIds(l.id)) {
+                        m_cache->modifyLabels(messageId, {renamed}, {l.id});
+                    }
                 }
             }
             listFolders([this, done] {

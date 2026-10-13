@@ -511,11 +511,30 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
     } else if (cmd == "RENAME" && v.size() >= 3) {
         const QString from = ImapClient::decodeMailboxName(v.at(1).text);
         const QString to = ImapClient::decodeMailboxName(v.at(2).text);
-        userFolders.removeAll(from);
-        userFolders.append(to);
+        // Like Gmail: sub-folders (from/...) move with their parent.
+        const auto renamed = [&](const QString &n) -> QString {
+            if (n == from) {
+                return to;
+            }
+            return n.startsWith(from + QLatin1Char('/')) ? to + n.mid(from.size()) : QString();
+        };
+        for (QString &f : userFolders) {
+            if (const QString r = renamed(f); !r.isEmpty()) {
+                f = r;
+            }
+        }
+        if (!userFolders.contains(to)) {
+            userFolders.append(to);
+        }
         for (Msg &m : m_msgs) {
-            if (m.labels.removeAll(from) > 0) {
-                m.labels.append(to);
+            bool changed = false;
+            for (QString &l : m.labels) {
+                if (const QString r = renamed(l); !r.isEmpty()) {
+                    l = r;
+                    changed = true;
+                }
+            }
+            if (changed) {
                 m.modseq = ++m_modseq;
             }
         }

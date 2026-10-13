@@ -301,6 +301,7 @@ private:
     void installListActions();
     QMenu *buildListMenu();
     QMenu *buildMailboxMenu(QTreeWidgetItem *item);
+    bool isUserFolderKey(const QString &key) const;
     void showListMenu(const QPoint &pos);
     void showMailboxMenu(const QPoint &pos);
     int unreadIn(const QString &key) const;

@@ -124,6 +124,8 @@ public:
     // How long "Moved to Trash. [Undo]" (and Edit > Undo Delete) stays offered.
     static constexpr int kUndoDeleteMs = 8000;
     void selectMailbox(const QString &key);
+    // Settings > Your Name (app-password accounts). answerForTests skips the prompt.
+    bool editDisplayName(const QString *answerForTests = nullptr);
     // View > Hide Spam from Folders (QSettings mail/hideSpam, default on).
     bool hideSpam() const;
     void setHideSpam(bool hide);

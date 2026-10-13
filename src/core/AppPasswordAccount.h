@@ -19,6 +19,7 @@ enum class AccountKind { GmailOAuth, GmailAppPassword };
 struct AppPasswordAccount
 {
     QString email;
+    QString displayName; // shown in From: "Alex Morgan <alex@gmail.com>" (optional)
     QString imapHost = QStringLiteral("imap.gmail.com");
     int imapPort = 993;
     QString smtpHost = QStringLiteral("smtp.gmail.com");

@@ -118,6 +118,7 @@ add_library(zmail_app STATIC
   src/core/SearchQuery.h
   src/core/Sender.cpp
   src/core/SmtpSender.cpp
+  src/core/ServerLimits.cpp
   src/core/Sender.h
   src/core/Signatures.cpp
   src/core/Signatures.h

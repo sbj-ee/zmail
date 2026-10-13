@@ -753,6 +753,9 @@ void MainWindow::buildMenus()
         }
     });
     syncContacts->setObjectName(QStringLiteral("actionSyncContacts"));
+    QAction *yourName = settings->addAction(tr("Your &Name\u2026"), this, [this]() { editDisplayName(); });
+    yourName->setObjectName(QStringLiteral("actionDisplayName"));
+    yourName->setToolTip(tr("The name recipients see in From (app-password accounts)"));
     QAction *vacation = settings->addAction(tr("&Vacation Responder\u2026"), this, [this]() { showVacationDialog(); });
     vacation->setObjectName(QStringLiteral("actionVacation"));
     vacation->setToolTip(tr("Gmail's automatic reply while you are away"));

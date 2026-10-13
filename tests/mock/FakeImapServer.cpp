@@ -25,6 +25,12 @@ FakeImapServer::FakeImapServer(QObject *parent)
             auto *s = new Session;
             s->socket = sock;
             m_sessions.append(s);
+            ++connectAttempts;
+            if (!byeGreetings.isEmpty()) { // e.g. "* BYE [UNAVAILABLE] Temporary System Error"
+                sock->write(byeGreetings.takeFirst() + "\r\n");
+                sock->disconnectFromHost();
+                return;
+            }
             sock->write("* OK Gimap ready for requests from 127.0.0.1\r\n");
             connect(sock, &QTcpSocket::readyRead, this, [this, s] {
                 if (!s->socket) {
@@ -283,7 +289,10 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
         }
         reply(s, "* CAPABILITY " + caps + "\r\n" + tag + " OK Thats all she wrote!\r\n");
     } else if (cmd == "LOGIN") {
-        if (v.size() >= 3 && v.at(1).str() == user && v.at(2).str() == password) {
+        if (!loginRefusals.isEmpty()) { // Gmail's limits: "NO [ALERT] Too many simultaneous connections. (Failure)"
+            ++refusedLogins;
+            reply(s, tag + ' ' + loginRefusals.takeFirst() + "\r\n");
+        } else if (v.size() >= 3 && v.at(1).str() == user && v.at(2).str() == password) {
             s->authed = true;
             ++logins;
             reply(s, tag + " OK " + user.toLatin1() + " authenticated (Success)\r\n");
@@ -292,6 +301,9 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
         }
     } else if (!s->authed) {
         reply(s, tag + " BAD not authenticated\r\n");
+    } else if (throttleCommands > 0 && cmd != "LOGOUT" && cmd != "IDLE" && cmd != "CAPABILITY") {
+        --throttleCommands;
+        reply(s, tag + " NO [THROTTLED] Account exceeded command or bandwidth limits. (Failure)\r\n");
     } else if (cmd == "LOGOUT") {
         reply(s, "* BYE LOGOUT Requested\r\n" + tag + " OK 73 good day (Success)\r\n");
         s->socket->disconnectFromHost();

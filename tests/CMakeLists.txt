@@ -38,6 +38,7 @@ zmail_add_test(tst_apppassword) # Gmail (app password): keyring, Test button, ac
 zmail_add_test(tst_imap) # Gmail (app password): IMAP read path, IDLE, CONDSTORE (fake server)
 zmail_add_test(tst_imapactions) # Gmail (app password): changing mail, folders, X-GM-RAW search, attachments
 zmail_add_test(tst_smtp) # Gmail (app password): SMTP send, Send Queued, drafts in [Gmail]/Drafts
+zmail_add_test(tst_imapextras) # Gmail (app password): snooze, Gmail limits + backoff, display name, no vacation
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)

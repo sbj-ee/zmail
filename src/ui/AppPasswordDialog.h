@@ -48,6 +48,7 @@ private:
 
     zmail::TokenStore *m_store;
     zmail::ConnectionTester *m_tester;
+    QLineEdit *m_displayName = nullptr;
     QLineEdit *m_email = nullptr;
     QLineEdit *m_password = nullptr;
     QGroupBox *m_servers = nullptr;

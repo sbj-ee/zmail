@@ -248,6 +248,7 @@ void ImapClient::open(const QString &host, int port, const QString &user, const 
     m_buffer.clear();
     m_caps.clear();
     m_selected.clear();
+    m_bye.clear();
     auto doneShared = std::make_shared<std::function<void(bool, const QString &)>>(std::move(done));
     auto finish = [doneShared](bool ok, const QString &err) {
         if (*doneShared) {
@@ -258,8 +259,10 @@ void ImapClient::open(const QString &host, int port, const QString &user, const 
     const QByteArray login = "LOGIN " + quote(user) + ' ' + quote(password);
     m_greeting = [this, finish, login](const QByteArray &line) {
         if (!line.startsWith("* OK") && !line.startsWith("* PREAUTH")) {
-            finish(false, tr("Unexpected IMAP greeting."));
-            fail(tr("Unexpected IMAP greeting."));
+            // e.g. "* BYE [ALERT] Too many simultaneous connections." (no secrets in a greeting)
+            const QString why = tr("Unexpected IMAP greeting: %1").arg(QString::fromUtf8(line.left(200)));
+            finish(false, why);
+            fail(why);
             return;
         }
         command(login, [this, finish](const Reply &r) {
@@ -283,8 +286,11 @@ void ImapClient::open(const QString &host, int port, const QString &user, const 
         fail(why);
     });
     connect(sock, &QAbstractSocket::disconnected, this, [this, finish] {
-        finish(false, tr("The IMAP server closed the connection."));
-        fail(tr("The IMAP server closed the connection."));
+        // Say why if the server did (BYE [UNAVAILABLE] ..., bandwidth limits, ...).
+        const QString why = m_bye.isEmpty() ? tr("The IMAP server closed the connection.")
+                                            : tr("The IMAP server closed the connection: %1").arg(m_bye);
+        finish(false, why);
+        fail(why);
     });
     m_timer->start(m_timeoutMs);
     if (m_plaintext) {
@@ -509,6 +515,9 @@ void ImapClient::handleResponse(const QByteArray &respIn)
                 u.keyword = u.values.at(0).text.toUpper();
             }
         }
+        if (u.keyword == "BYE") {
+            m_bye = QString::fromUtf8(u.raw.mid(6).left(200));
+        }
         if (u.keyword == "CAPABILITY") {
             m_caps.clear();
             for (int i = 1; i < u.values.size(); ++i) {
@@ -544,6 +553,10 @@ void ImapClient::handleResponse(const QByteArray &respIn)
         r.ok = status == "OK";
         r.text = text;
         r.untagged = std::exchange(m_collected, {});
+        if (!r.ok && (text.contains(QLatin1String("[THROTTLED]")) || text.contains(QLatin1String("bandwidth"), Qt::CaseInsensitive)
+                      || text.contains(QLatin1String("exceeded command"), Qt::CaseInsensitive))) {
+            emit throttled(text.left(200));
+        }
         const Pending done = std::exchange(m_current, {});
         m_inFlight = false;
         QPointer<ImapClient> self(this);

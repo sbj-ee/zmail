@@ -100,6 +100,9 @@ public:
     // "Display Name <address>" from the default send-as identity
     // (users.settings.sendAs), or just the address until that arrives.
     QString fromHeader() const;
+    QString displayName() const { return m_displayName; }
+    // App-password accounts: the name in From (Gmail API accounts take it from Gmail's send-as).
+    void setAppPasswordDisplayName(const QString &name);
     // After a send: pull the new message into Sent right away.
     void syncSoon();
 

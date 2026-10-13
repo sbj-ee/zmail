@@ -48,7 +48,13 @@ public:
     QList<QByteArray> commands;         // every command line after LOGIN (tags stripped)
     int logins = 0;
     bool refuseChanges = false;
-    QList<QByteArray> appended;         // every APPEND's message bytes          // STORE / MOVE answer NO (to test rollback)
+    QList<QByteArray> appended;
+    // Gmail's limits, for the backoff tests.
+    QList<QByteArray> byeGreetings;     // next connections are greeted with these and dropped
+    QList<QByteArray> loginRefusals;    // next LOGINs answer these ("NO [ALERT] Too many ...")
+    int throttleCommands = 0;           // next commands answer NO [THROTTLED]
+    int connectAttempts = 0;
+    int refusedLogins = 0;         // every APPEND's message bytes          // STORE / MOVE answer NO (to test rollback)
 
     // New message; notifies IDLE sessions (* n EXISTS). Returns its X-GM-MSGID.
     quint64 deliver(const QByteArray &raw, const QStringList &labels = {QStringLiteral("\\Inbox")},

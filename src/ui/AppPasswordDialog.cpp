@@ -36,6 +36,11 @@ AppPasswordDialog::AppPasswordDialog(zmail::TokenStore *store, QWidget *parent)
     lay->addWidget(intro);
 
     auto *form = new QFormLayout;
+    m_displayName = new QLineEdit(this);
+    m_displayName->setObjectName(QStringLiteral("displayNameEdit"));
+    m_displayName->setPlaceholderText(tr("Alex Morgan (optional)"));
+    m_displayName->setToolTip(tr("Shown to recipients in the From line: \u201cAlex Morgan <you@gmail.com>\u201d."));
+    form->addRow(tr("Your name:"), m_displayName);
     m_email = new QLineEdit(this);
     m_email->setObjectName(QStringLiteral("emailEdit"));
     m_email->setPlaceholderText(QStringLiteral("you@gmail.com"));
@@ -121,6 +126,7 @@ AppPasswordAccount AppPasswordDialog::account() const
 {
     AppPasswordAccount a;
     a.email = m_email->text().trimmed();
+    a.displayName = m_displayName->text().trimmed();
     if (m_servers->isChecked()) {
         a.imapHost = m_imapHost->text().trimmed();
         a.imapPort = m_imapPort->value();

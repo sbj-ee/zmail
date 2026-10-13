@@ -2,12 +2,14 @@
 
 #include "AppPasswordAccount.h"
 #include "ImapClient.h"
+#include "ServerLimits.h"
 #include "SyncEngine.h"
 
 #include <deque>
 #include <QHash>
 #include <QJsonObject>
 #include <QSet>
+#include <QTimer>
 
 class QTimer;
 
@@ -46,6 +48,12 @@ public:
 
     void setPlaintextForTests(bool on) { m_imap.setPlaintextForTests(on); }
     void setIdleRenewMs(int ms) { m_idleRenewMs = ms; }
+    // Reconnect / throttle backoff (ServerLimits::backoffMs), shrunk for tests.
+    void setBackoffScaleForTests(double scale) { m_backoffScale = scale; }
+    ServerLimits::Kind lastLimit() const { return m_lastLimit; }
+    bool authFailed() const { return m_authFailed; }
+    // Milliseconds until the next reconnect attempt; -1 when none is planned.
+    int retryInMs() const { return m_retry->isActive() ? m_retry->remainingTime() : -1; }
     ImapClient *client() { return &m_imap; }
     bool idling() const { return m_imap.idling(); }
     int incrementalSyncs() const { return m_incrementals; }
@@ -162,6 +170,7 @@ private:
     QStringList userLabels(const QStringList &labels) const;
     void idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
                                                                 const QHash<qint64, QStringList> &gmLabels)> then);
+    void dropAndRetry(const QString &reason);
     void removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then);
     QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
 
@@ -190,8 +199,11 @@ private:
     QTimer *m_poll;          // fallback polling when the server has no IDLE; reconnect backoff
     QTimer *m_idleRenew;
     QTimer *m_wake;          // debounces IDLE notifications
-    int m_reconnectDelayMs = 2000;
-    static constexpr int kMaxReconnectDelayMs = 5 * 60 * 1000;
+    QTimer *m_retry = new QTimer(this);
+    int m_retryAttempt = 0;
+    double m_backoffScale = 1.0;
+    bool m_authFailed = false;
+    ServerLimits::Kind m_lastLimit = ServerLimits::Kind::None;
 };
 
 } // namespace zmail

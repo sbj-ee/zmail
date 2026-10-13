@@ -3,6 +3,7 @@
 #include "ImapSyncEngine.h"
 #include "Limits.h"
 #include "Log.h"
+#include "ServerLimits.h"
 
 #include <QPointer>
 #include <QRegularExpression>
@@ -79,10 +80,13 @@ QStringList addresses(const QByteArray &value)
 class SmtpJob : public QObject
 {
 public:
+    // kind: what the refusal means (ServerLimits); beforeData: nothing of the
+    // message was accepted yet, so trying again can't send it twice.
+    using Done = std::function<void(const Sender::Result &, ServerLimits::Kind kind, bool beforeData)>;
     enum class Step { Greeting, Ehlo, Auth, MailFrom, Rcpt, Data, Body, Quit, Done };
 
     SmtpJob(Sender *owner, const AppPasswordAccount &account, const QString &password, bool plaintext, int timeoutMs,
-            QStringList rcpts, QByteArray payload, QString threadId, Sender::ResultCb cb)
+            QStringList rcpts, QByteArray payload, QString threadId, Done cb)
         : QObject(owner)
         , m_owner(owner)
         , m_account(account)
@@ -150,6 +154,8 @@ private:
 
     void step(int code, const QByteArray &text)
     {
+        m_lastCode = code;
+        m_lastText = QString::fromUtf8(text).left(300);
         switch (m_step) {
         case Step::Greeting:
             if (code != 220) {
@@ -211,7 +217,7 @@ private:
             r.ok = true;
             r.threadId = m_threadId;
             r.transport = Sender::Transport::Simple;
-            finish(r);
+            finish(r, ServerLimits::Kind::None, false);
             return;
         }
         case Step::Quit:
@@ -225,15 +231,20 @@ private:
         if (m_step == Step::Done) {
             return;
         }
+        const auto kind = m_lastCode >= 400 ? ServerLimits::classifySmtp(m_lastCode, m_lastText) : ServerLimits::Kind::None;
         Sender::Result r;
         r.err.isError = true;
+        r.err.httpStatus = m_lastCode; // the SMTP reply code (0: no reply)
         r.err.reason = QStringLiteral("smtp");
         r.err.message = why.isEmpty() ? tr("Sending failed.") : why;
-        finish(r);
+        if (kind != ServerLimits::Kind::None) {
+            r.err.message = ServerLimits::explain(kind, m_account.smtpHost) + QStringLiteral(" (") + m_lastText + u')';
+        }
+        finish(r, kind, m_step != Step::Body);
     }
     void fail(const QByteArray &text) { fail(QString::fromUtf8(text).left(300)); }
 
-    void finish(const Sender::Result &r)
+    void finish(const Sender::Result &r, ServerLimits::Kind kind, bool beforeData)
     {
         const bool quitting = m_step == Step::Quit;
         m_step = Step::Done;
@@ -247,10 +258,12 @@ private:
         }
         deleteLater();
         if (cb) {
-            cb(r);
+            cb(r, kind, beforeData);
         }
     }
 
+    int m_lastCode = 0;
+    QString m_lastText;
     Sender *m_owner;
     AppPasswordAccount m_account;
     QByteArray m_auth;
@@ -258,7 +271,7 @@ private:
     int m_rcptIndex = 0;
     QByteArray m_payload;
     QString m_threadId;
-    Sender::ResultCb m_cb;
+    Done m_cb;
     QSslSocket m_socket;
     QTimer m_timer;
     QByteArray m_buffer;
@@ -360,8 +373,16 @@ void SmtpSender::send(const QByteArray &mime, const QString &threadId, ResultCb 
         return;
     }
     QByteArray payload = dataPayload(mime);
+    attempt(rcpts, payload, threadId, 0, std::move(cb));
+}
+
+// One try; on a temporary refusal before DATA (421, 454 too many logins, ...)
+// wait ServerLimits::backoffMs and try again, up to m_maxRetries times.
+void SmtpSender::attempt(const QStringList &rcpts, const QByteArray &payload, const QString &threadId, int tries,
+                         ResultCb cb)
+{
     QPointer<SmtpSender> self(this);
-    m_password([self, rcpts, payload, threadId, cb](bool ok, const QString &password, const QString &error) {
+    m_password([self, rcpts, payload, threadId, tries, cb](bool ok, const QString &password, const QString &error) {
         if (!self) {
             return;
         }
@@ -369,13 +390,28 @@ void SmtpSender::send(const QByteArray &mime, const QString &threadId, ResultCb 
             cb(failure(error.isEmpty() ? tr("The app password isn't in the system keyring.") : error));
             return;
         }
-        QPointer<ImapSyncEngine> imap = self->m_imap;
         new SmtpJob(self, self->m_account, password, self->m_plaintext, self->m_timeoutMs, rcpts, payload, threadId,
-                    [cb, imap](const Result &r) {
-                        if (r.ok && imap) {
+                    [self, rcpts, payload, threadId, tries, cb](const Result &r, ServerLimits::Kind kind, bool beforeData) {
+                        if (!self) {
+                            return;
+                        }
+                        const bool temporary = kind == ServerLimits::Kind::Unavailable
+                            || kind == ServerLimits::Kind::TooManyConnections;
+                        if (!r.ok && temporary && beforeData && tries < self->m_maxRetries) {
+                            const qint64 wait = ServerLimits::backoffMs(kind, tries, self->m_backoffScale);
+                            ++self->m_retries;
+                            emit self->retrying(int(wait), r.err.message);
+                            QTimer::singleShot(int(std::min<qint64>(wait, 3'600'000)), self, [self, rcpts, payload, threadId, tries, cb] {
+                                if (self) {
+                                    self->attempt(rcpts, payload, threadId, tries + 1, cb);
+                                }
+                            });
+                            return;
+                        }
+                        if (r.ok && self->m_imap) {
                             // Gmail filed it in Sent Mail: read that folder now.
-                            imap->ensureLabel(QStringLiteral("SENT"));
-                            imap->pollNow(true);
+                            self->m_imap->ensureLabel(QStringLiteral("SENT"));
+                            self->m_imap->pollNow(true);
                         }
                         cb(r);
                     });

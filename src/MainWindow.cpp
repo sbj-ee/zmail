@@ -1680,6 +1680,30 @@ void MainWindow::runFullTextSearch(const QString &text)
     if (m_live) {
         statusBar()->showMessage(tr("%n match(es)", nullptr, ids.size()), 3000);
     }
+    // App-password (IMAP) accounts also ask Gmail itself (X-GM-RAW), so
+    // from:, has:attachment, older_than: and mail not cached yet all work.
+    zmail::SyncEngine *sync = m_live && m_session ? m_session->sync() : nullptr;
+    if (sync && sync->supportsServerSearch()) {
+        QPointer<MainWindow> guard(this);
+        const QStringList local = ids;
+        sync->serverSearch(trimmed, [guard, this, trimmed, local, fullText](const QStringList &found, const QString &error) {
+            if (!guard || m_proxy->searchText().trimmed() != trimmed) {
+                return; // a newer search replaced this one
+            }
+            QStringList merged = local;
+            for (const QString &id : found) {
+                if (!merged.contains(id)) {
+                    merged.append(id);
+                }
+            }
+            reloadFromCache();
+            m_proxy->setSearchIds(merged, fullText || !found.isEmpty());
+            updateCounts();
+            statusBar()->showMessage(error.isEmpty() ? tr("%n match(es)", nullptr, merged.size())
+                                                     : tr("%n match(es); Gmail search failed: %1", nullptr, merged.size()).arg(error),
+                                     5000);
+        });
+    }
 }
 
 void MainWindow::setStripeStrength(int strength)
@@ -1831,7 +1855,7 @@ QString freeFileName(const QDir &dir, const QString &wanted)
 void MainWindow::saveAttachments(const QString &folder)
 {
     m_savedAttachments.clear();
-    if (!(m_live && m_session && m_session->api()) || m_shownId.isEmpty()) {
+    if (!(m_live && m_session && m_session->sync()) || m_shownId.isEmpty()) {
         statusBar()->showMessage(m_live ? tr("Select a message first.") : tr("Sign in to Gmail to save attachments."), 5000);
         return;
     }
@@ -1847,11 +1871,16 @@ void MainWindow::saveAttachments(const QString &folder)
         QSettings().setValue(QStringLiteral("attachments/folder"), dir);
     }
     const QString id = m_shownId;
-    zmail::GmailClient *api = m_session->api();
+    zmail::GmailClient *api = m_session->api(); // null for app-password (IMAP) accounts
     statusBar()->showMessage(tr("Fetching attachments\u2026"));
-    api->getMessageFull(id, [this, api, id, dir](const QJsonObject &json, const zmail::ApiError &err) {
-        if (err.isError) {
-            statusBar()->showMessage(tr("Couldn't fetch the attachments: %1").arg(err.message), 8000);
+    QPointer<MainWindow> guard(this);
+    // IMAP hands the whole message over at once: every part arrives inline.
+    m_session->sync()->fetchFull(id, [guard, this, api, id, dir](const QJsonObject &json, const QString &error) {
+        if (!guard) {
+            return;
+        }
+        if (!error.isEmpty()) {
+            statusBar()->showMessage(tr("Couldn't fetch the attachments: %1").arg(error), 8000);
             return;
         }
         const QList<zmail::MessageParser::AttachmentRef> refs = zmail::MessageParser::bodyFromFull(json).attachmentRefs;
@@ -1886,8 +1915,8 @@ void MainWindow::saveAttachments(const QString &folder)
             statusBar()->showMessage(text, 8000);
         };
         for (const auto &ref : refs) {
-            if (ref.attachmentId.isEmpty()) {
-                write(ref.fileName, ref.inlineData, true);
+            if (ref.attachmentId.isEmpty() || !api) {
+                write(ref.fileName, ref.inlineData, ref.attachmentId.isEmpty());
                 continue;
             }
             api->getAttachment(id, ref.attachmentId, [this, ref, write](const QJsonObject &a, const zmail::ApiError &e) {

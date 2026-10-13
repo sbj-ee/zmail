@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QPointer>
 #include <QTimeZone>
 #include <QTimer>
 
@@ -898,6 +899,73 @@ void ImapSyncEngine::loadAllStep()
     });
 }
 
+QJsonObject ImapSyncEngine::fullJson(const QString &id, const QByteArray &raw) const
+{
+    const CachedMessage before = m_cache->summary(id);
+    QJsonObject json;
+    json.insert(QStringLiteral("id"), id);
+    json.insert(QStringLiteral("threadId"), before.threadId);
+    json.insert(QStringLiteral("labelIds"), QJsonArray::fromStringList(before.labels));
+    json.insert(QStringLiteral("internalDate"), QString::number(before.internalDateMs));
+    json.insert(QStringLiteral("sizeEstimate"), before.size ? before.size : raw.size());
+    json.insert(QStringLiteral("payload"), RawMime::toGmailPayload(raw));
+    return json;
+}
+
+void ImapSyncEngine::fetchRaw(const QString &id, std::function<void(const QByteArray &raw, const QString &error)> cb)
+{
+    // In front of any sync: the user is waiting for this one.
+    enqueue([this, id, cb](Done done) {
+        locate({id}, [this, id, cb, done](const Located &where) {
+            QString folderLabel;
+            qint64 uid = 0;
+            for (auto it = where.constBegin(); it != where.constEnd(); ++it) {
+                if (it.value().contains(id)) {
+                    folderLabel = it.key();
+                    uid = it.value().value(id);
+                }
+            }
+            Folder *f = folder(folderLabel);
+            if (!f || uid <= 0) {
+                cb({}, tr("That message is no longer on the server."));
+                done();
+                return;
+            }
+            const int gen = m_generation;
+            m_imap.command("UID FETCH " + QByteArray::number(uid) + " (UID X-GM-MSGID BODY.PEEK[])",
+                           [this, gen, cb, done](const ImapClient::Reply &fr) {
+                if (gen != m_generation) {
+                    cb({}, tr("Disconnected."));
+                    return;
+                }
+                QByteArray raw;
+                for (const ImapUntagged &u : fr.untagged) {
+                    if (const ImapValue *attrs = fetchAttrs(u)) {
+                        for (int i = 0; i + 1 < attrs->items.size(); i += 2) {
+                            if (attrs->items.at(i).text.toUpper() == "BODY[]") {
+                                raw = attrs->items.at(i + 1).text;
+                            }
+                        }
+                    }
+                }
+                cb(raw, raw.isEmpty() ? (fr.ok ? tr("The server sent an empty message.") : fr.text) : QString());
+                done();
+            });
+        });
+    }, /*front=*/true);
+}
+
+void ImapSyncEngine::fetchFull(const QString &id, FullCb cb)
+{
+    QPointer<ImapSyncEngine> self(this);
+    fetchRaw(id, [self, id, cb](const QByteArray &raw, const QString &error) {
+        if (!self) {
+            return;
+        }
+        cb(raw.isEmpty() ? QJsonObject() : self->fullJson(id, raw), error);
+    });
+}
+
 void ImapSyncEngine::fetchBody(const QString &id, MessageCb cb)
 {
     const CachedMessage cached = m_cache->message(id);
@@ -905,100 +973,878 @@ void ImapSyncEngine::fetchBody(const QString &id, MessageCb cb)
         cb(cached, {});
         return;
     }
-    bool ok = false;
-    const quint64 gmId = id.toULongLong(&ok, 16);
-    if (!ok) {
-        cb(cached, tr("Not an IMAP message id."));
-        return;
-    }
-    // In front of any sync: the user is waiting for this one.
-    enqueue([this, id, gmId, cb](Done done) {
-        Folder *f = folder(QString::fromLatin1(kAllMailLabel));
-        if (!f) {
-            f = folder(QStringLiteral("INBOX"));
-        }
-        if (!f) {
-            cb(m_cache->message(id), tr("No folder to read it from."));
-            done();
+    fetchRaw(id, [this, id, cb](const QByteArray &raw, const QString &error) {
+        if (raw.isEmpty()) {
+            cb(m_cache->message(id), error);
             return;
         }
-        const int gen = m_generation;
-        const QString folderLabel = f->labelId;
-        auto search = [this, gen, id, gmId, cb, done] {
-            m_imap.command("UID SEARCH X-GM-MSGID " + QByteArray::number(gmId), [this, gen, id, cb, done](const ImapClient::Reply &r) {
+        const QJsonObject json = fullJson(id, raw);
+        CachedMessage meta = MessageParser::fromMetadata(json);
+        const MessageParser::Body body = MessageParser::bodyFromFull(json);
+        meta.hasAttachment = !body.attachments.isEmpty();
+        if (meta.snippet.isEmpty()) {
+            meta.snippet = body.text.simplified().left(200);
+        }
+        {
+            const MailCache::Batch batch(*m_cache);
+            m_cache->upsert(meta);
+            m_cache->setBody(id, body.text, body.html, body.attachments,
+                             {body.listUnsubscribe, body.listUnsubscribePost, body.calendar});
+        }
+        cb(m_cache->message(id), {});
+    });
+}
+
+// ---- Finding messages ------------------------------------------------------
+
+void ImapSyncEngine::locate(const QStringList &ids, std::function<void(const Located &)> then)
+{
+    // Gmail keeps everything but Trash and Spam in All Mail; look there first.
+    QStringList order{QString::fromLatin1(kAllMailLabel), QStringLiteral("TRASH"), QStringLiteral("SPAM")};
+    if (!folder(QString::fromLatin1(kAllMailLabel))) {
+        order.prepend(QStringLiteral("INBOX"));
+    }
+    auto result = std::make_shared<Located>();
+    auto left = std::make_shared<QStringList>(ids);
+    auto step = std::make_shared<std::function<void()>>();
+    const int gen = m_generation;
+    *step = [this, gen, order, result, left, then, step]() mutable {
+        if (gen != m_generation) {
+            *step = nullptr;
+            return;
+        }
+        if (left->isEmpty() || order.isEmpty()) {
+            then(*result);
+            *step = nullptr;
+            return;
+        }
+        const QString label = order.takeFirst();
+        Folder *f = folder(label);
+        if (!f) {
+            (*step)();
+            return;
+        }
+        searchIn(label, *left, [result, left, label, step](const QHash<QString, qint64> &found) {
+            if (!found.isEmpty()) {
+                (*result)[label] = found;
+                for (auto it = found.constBegin(); it != found.constEnd(); ++it) {
+                    left->removeAll(it.key());
+                }
+            }
+            if (*step) {
+                (*step)();
+            }
+        });
+    };
+    (*step)();
+}
+
+void ImapSyncEngine::selectFolder(const QString &labelId, std::function<void(bool ok)> then)
+{
+    Folder *f = folder(labelId);
+    if (!f) {
+        then(false);
+        return;
+    }
+    if (m_imap.selected() == f->name) {
+        then(true);
+        return;
+    }
+    const int gen = m_generation;
+    m_imap.command(selectCmd(*f), [this, gen, labelId, then](const ImapClient::Reply &r) {
+        if (gen != m_generation) {
+            return;
+        }
+        Folder *ff = folder(labelId);
+        if (ff && r.ok) {
+            m_imap.setSelected(ff->name);
+            bool changed = false;
+            applySelect(ff, r, &changed);
+        } else {
+            m_imap.setSelected({});
+        }
+        then(ff && r.ok);
+    });
+}
+
+void ImapSyncEngine::searchIn(const QString &labelId, const QStringList &ids,
+                              std::function<void(const QHash<QString, qint64> &)> then)
+{
+    const int gen = m_generation;
+    selectFolder(labelId, [this, gen, ids, then](bool ok) {
+        if (!ok) {
+            then({});
+            return;
+        }
+        // UID SEARCH OR X-GM-MSGID a OR X-GM-MSGID b X-GM-MSGID c ..., 50 at a time,
+        // then UID FETCH (X-GM-MSGID) to pair the UIDs with ids.
+        auto found = std::make_shared<QHash<QString, qint64>>();
+        auto chunks = std::make_shared<QList<QStringList>>();
+        for (int i = 0; i < ids.size(); i += 50) {
+            chunks->append(ids.mid(i, 50));
+        }
+        auto step = std::make_shared<std::function<void()>>();
+        *step = [this, gen, found, chunks, then, step]() {
+            if (gen != m_generation) {
+                *step = nullptr;
+                return;
+            }
+            if (chunks->isEmpty()) {
+                then(*found);
+                *step = nullptr;
+                return;
+            }
+            const QStringList chunk = chunks->takeFirst();
+            QByteArray criteria;
+            int terms = 0;
+            for (const QString &id : chunk) {
+                bool ok = false;
+                const quint64 n = id.toULongLong(&ok, 16);
+                if (!ok) {
+                    continue;
+                }
+                const QByteArray term = "X-GM-MSGID " + QByteArray::number(n);
+                criteria = terms == 0 ? term : "OR " + term + ' ' + criteria;
+                ++terms;
+            }
+            if (terms == 0) {
+                (*step)();
+                return;
+            }
+            m_imap.command("UID SEARCH " + criteria, [this, gen, found, step](const ImapClient::Reply &r) {
                 if (gen != m_generation) {
-                    cb(m_cache->message(id), tr("Disconnected."));
                     return;
                 }
                 const QList<qint64> uids = searchResults(r);
-                if (!r.ok || uids.isEmpty()) {
-                    cb(m_cache->message(id), r.ok ? tr("That message is no longer on the server.") : r.text);
-                    done();
+                if (uids.isEmpty()) {
+                    (*step)();
                     return;
                 }
-                m_imap.command("UID FETCH " + QByteArray::number(uids.first()) + " (UID X-GM-MSGID BODY.PEEK[])",
-                               [this, gen, id, cb, done](const ImapClient::Reply &fr) {
+                QByteArray set;
+                for (const qint64 u : uids) {
+                    set += (set.isEmpty() ? "" : ",") + QByteArray::number(u);
+                }
+                m_imap.command("UID FETCH " + set + " (UID X-GM-MSGID)", [this, gen, found, step](const ImapClient::Reply &fr) {
                     if (gen != m_generation) {
-                        cb(m_cache->message(id), tr("Disconnected."));
                         return;
                     }
-                    QByteArray raw;
                     for (const ImapUntagged &u : fr.untagged) {
                         if (const ImapValue *attrs = fetchAttrs(u)) {
-                            for (int i = 0; i + 1 < attrs->items.size(); i += 2) {
-                                if (attrs->items.at(i).text.toUpper() == "BODY[]") {
-                                    raw = attrs->items.at(i + 1).text;
-                                }
+                            const QString id = hexId(attrs->get("X-GM-MSGID"));
+                            if (!id.isEmpty() && attrs->get("UID")) {
+                                found->insert(id, attrs->get("UID")->num());
                             }
                         }
                     }
-                    if (raw.isEmpty()) {
-                        cb(m_cache->message(id), fr.ok ? tr("The server sent an empty message.") : fr.text);
-                        done();
-                        return;
-                    }
-                    const CachedMessage before = m_cache->summary(id);
-                    QJsonObject json;
-                    json.insert(QStringLiteral("id"), id);
-                    json.insert(QStringLiteral("threadId"), before.threadId);
-                    json.insert(QStringLiteral("labelIds"), QJsonArray::fromStringList(before.labels));
-                    json.insert(QStringLiteral("internalDate"), QString::number(before.internalDateMs));
-                    json.insert(QStringLiteral("sizeEstimate"), before.size ? before.size : raw.size());
-                    json.insert(QStringLiteral("payload"), RawMime::toGmailPayload(raw));
-                    CachedMessage meta = MessageParser::fromMetadata(json);
-                    const MessageParser::Body body = MessageParser::bodyFromFull(json);
-                    meta.hasAttachment = !body.attachments.isEmpty();
-                    if (meta.snippet.isEmpty()) {
-                        meta.snippet = body.text.simplified().left(200);
-                    }
-                    {
-                        const MailCache::Batch batch(*m_cache);
-                        m_cache->upsert(meta);
-                        m_cache->setBody(id, body.text, body.html, body.attachments,
-                                         {body.listUnsubscribe, body.listUnsubscribePost, body.calendar});
-                    }
-                    cb(m_cache->message(id), {});
-                    done();
+                    (*step)();
                 });
             });
         };
-        if (m_imap.selected() == f->name) {
-            search();
+        (*step)();
+    });
+}
+
+// ---- Changing mail ---------------------------------------------------------
+
+QByteArray ImapSyncEngine::gmLabel(const QString &labelId) const
+{
+    static const QHash<QString, QString> sys = {
+        {QStringLiteral("INBOX"), QStringLiteral("\\Inbox")},
+        {QStringLiteral("IMPORTANT"), QStringLiteral("\\Important")},
+        {QStringLiteral("SENT"), QStringLiteral("\\Sent")},
+        {QStringLiteral("DRAFT"), QStringLiteral("\\Draft")},
+    };
+    const QString name = sys.value(labelId, labelId);
+    return ImapClient::quote(QString::fromLatin1(ImapClient::encodeMailboxName(name)));
+}
+
+void ImapSyncEngine::applyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove,
+                                 std::function<void(bool ok, const QString &error)> done)
+{
+    locate(ids, [this, ids, add, remove, done](const Located &where) {
+        if (where.isEmpty()) {
+            done(false, tr("Not found on the server."));
             return;
         }
-        m_imap.command(selectCmd(*f), [this, gen, folderLabel, search, id, cb, done](const ImapClient::Reply &r) {
+        auto groups = std::make_shared<QList<QPair<QString, QHash<QString, qint64>>>>();
+        for (auto it = where.constBegin(); it != where.constEnd(); ++it) {
+            groups->append({it.key(), it.value()});
+        }
+        auto ok = std::make_shared<bool>(true);
+        auto error = std::make_shared<QString>();
+        auto step = std::make_shared<std::function<void()>>();
+        const int gen = m_generation;
+        *step = [this, gen, groups, add, remove, ok, error, done, step]() {
             if (gen != m_generation) {
-                cb(m_cache->message(id), tr("Disconnected."));
+                *step = nullptr;
                 return;
             }
-            if (Folder *ff = folder(folderLabel); ff && r.ok) {
-                m_imap.setSelected(ff->name);
-                bool changed = false;
-                applySelect(ff, r, &changed);
+            if (groups->isEmpty()) {
+                done(*ok, *error);
+                *step = nullptr;
+                return;
             }
-            search();
+            const auto [label, uidsById] = groups->takeFirst();
+            QByteArray set;
+            for (const qint64 u : uidsById) {
+                set += (set.isEmpty() ? "" : ",") + QByteArray::number(u);
+            }
+            const bool inBin = label == QLatin1String("TRASH") || label == QLatin1String("SPAM");
+            const QStringList ids = uidsById.keys();
+            // Leaving Trash / Spam: move it out first (to the Inbox if it is
+            // going back there), then the rest of the change in All Mail.
+            if (inBin && remove.contains(label)) {
+                Folder *to = add.contains(QStringLiteral("INBOX")) ? folder(QStringLiteral("INBOX"))
+                                                                    : folder(QString::fromLatin1(kAllMailLabel));
+                if (!to) {
+                    to = folder(QStringLiteral("INBOX"));
+                }
+                const QByteArray dest = to ? to->wire : QByteArray("\"INBOX\"");
+                selectFolder(label, [this, gen, set, dest, ids, add, remove, label, ok, error, step](bool sel) {
+                    if (!sel) {
+                        *ok = false;
+                        (*step)();
+                        return;
+                    }
+                    m_imap.command(moveCmd(set, dest), [this, gen, ids, add, remove, label, ok, error, step](const ImapClient::Reply &r) {
+                        if (gen != m_generation) {
+                            return;
+                        }
+                        if (!r.ok) {
+                            *ok = false;
+                            *error = r.text;
+                            (*step)();
+                            return;
+                        }
+                        QStringList restAdd = add;
+                        restAdd.removeAll(QStringLiteral("INBOX"));
+                        QStringList restRemove = remove;
+                        restRemove.removeAll(label);
+                        if (add.contains(QStringLiteral("INBOX")) && !restAdd.isEmpty()) {
+                            // Moved to INBOX already; the other labels still to add.
+                        }
+                        if (restAdd.isEmpty() && restRemove.isEmpty()) {
+                            (*step)();
+                            return;
+                        }
+                        applyLabels(ids, restAdd, restRemove, [ok, error, step](bool good, const QString &e) {
+                            if (!good) {
+                                *ok = false;
+                                *error = e;
+                            }
+                            (*step)();
+                        });
+                    });
+                });
+                return;
+            }
+            // Flags and labels with STORE, then (into Trash / Spam) a MOVE.
+            QList<QByteArray> cmds;
+            auto flag = [&](const QString &id, const char *f) {
+                if (add.contains(id)) {
+                    cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " -FLAGS.SILENT (" + f + ")"
+                                                              : "UID STORE " + set + " +FLAGS.SILENT (" + f + ")");
+                }
+                if (remove.contains(id)) {
+                    cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " +FLAGS.SILENT (" + f + ")"
+                                                              : "UID STORE " + set + " -FLAGS.SILENT (" + f + ")");
+                }
+            };
+            flag(QStringLiteral("UNREAD"), "\\Seen");
+            flag(QStringLiteral("STARRED"), "\\Flagged");
+            static const QStringList special{QStringLiteral("UNREAD"), QStringLiteral("STARRED"), QStringLiteral("TRASH"),
+                                             QStringLiteral("SPAM")};
+            QByteArray plus;
+            QByteArray minus;
+            for (const QString &l : add) {
+                if (!special.contains(l)) {
+                    plus += (plus.isEmpty() ? "" : " ") + gmLabel(l);
+                }
+            }
+            for (const QString &l : remove) {
+                if (!special.contains(l)) {
+                    minus += (minus.isEmpty() ? "" : " ") + gmLabel(l);
+                }
+            }
+            if (!minus.isEmpty()) {
+                cmds.append("UID STORE " + set + " -X-GM-LABELS.SILENT (" + minus + ")");
+            }
+            if (!plus.isEmpty()) {
+                cmds.append("UID STORE " + set + " +X-GM-LABELS.SILENT (" + plus + ")");
+            }
+            for (const char *bin : {"TRASH", "SPAM"}) {
+                const QString b = QString::fromLatin1(bin);
+                if (add.contains(b) && label != b) {
+                    if (Folder *to = folder(b)) {
+                        cmds.append(moveCmd(set, to->wire));
+                    }
+                }
+            }
+            if (cmds.isEmpty()) {
+                (*step)();
+                return;
+            }
+            selectFolder(label, [this, gen, cmds, ok, error, step](bool sel) {
+                if (!sel) {
+                    *ok = false;
+                    (*step)();
+                    return;
+                }
+                auto pending = std::make_shared<int>(int(cmds.size()));
+                for (const QByteArray &c : cmds) {
+                    m_imap.command(c, [gen, this, pending, ok, error, step](const ImapClient::Reply &r) {
+                        if (gen != m_generation) {
+                            return;
+                        }
+                        if (!r.ok) {
+                            *ok = false;
+                            *error = r.text.isEmpty() ? tr("Disconnected.") : r.text;
+                        }
+                        if (--*pending == 0) {
+                            (*step)();
+                        }
+                    });
+                }
+            });
+        };
+        (*step)();
+    });
+}
+
+QByteArray ImapSyncEngine::moveCmd(const QByteArray &set, const QByteArray &destWire) const
+{
+    if (m_imap.hasCapability("MOVE")) {
+        return "UID MOVE " + set + ' ' + destWire;
+    }
+    // Without MOVE, Gmail still files by label: Trash / Spam are labels too.
+    for (const Folder &f : m_folders) {
+        if (f.wire == destWire && (f.labelId == QLatin1String("TRASH") || f.labelId == QLatin1String("SPAM"))) {
+            return "UID STORE " + set + " +X-GM-LABELS.SILENT (" + (f.labelId == QLatin1String("TRASH") ? "\"\\\\Trash\"" : "\"\\\\Spam\"") + ")";
+        }
+    }
+    return "UID COPY " + set + ' ' + destWire;
+}
+
+void ImapSyncEngine::modifyOptimistic(const QStringList &ids, const QStringList &add, const QStringList &remove,
+                                      const QString &what, std::function<void(bool ok)> after, bool announce)
+{
+    if (ids.isEmpty() || (add.isEmpty() && remove.isEmpty())) {
+        return;
+    }
+    // What this edit really changes on each message, so a refusal undoes
+    // exactly that and keeps anything that arrived meanwhile.
+    QHash<QString, QPair<QStringList, QStringList>> changed;
+    {
+        const MailCache::Batch batch(*m_cache);
+        for (const QString &id : ids) {
+            const QStringList before = m_cache->summary(id).labels;
+            QStringList a, r;
+            for (const QString &l : add) {
+                if (!before.contains(l)) {
+                    a.append(l);
+                }
+            }
+            for (const QString &l : remove) {
+                if (before.contains(l)) {
+                    r.append(l);
+                }
+            }
+            changed.insert(id, {a, r});
+            m_cache->modifyLabels(id, add, remove);
+        }
+    }
+    if (announce) {
+        emit messagesChanged();
+    }
+    if (!m_connected) {
+        // Offline: put it back and say so.
+        for (auto it = changed.constBegin(); it != changed.constEnd(); ++it) {
+            m_cache->modifyLabels(it.key(), it.value().second, it.value().first);
+        }
+        emit syncError(tr("%1: not connected to %2.").arg(what, m_account.imapHost));
+        emit messagesChanged();
+        if (after) {
+            after(false);
+        }
+        return;
+    }
+    QStringList touched = add + remove;
+    enqueue([this, ids, add, remove, what, after, changed, touched](Done done) {
+        applyLabels(ids, add, remove, [this, what, after, changed, touched, done](bool ok, const QString &error) {
+            if (!ok) {
+                const MailCache::Batch batch(*m_cache);
+                for (auto it = changed.constBegin(); it != changed.constEnd(); ++it) {
+                    m_cache->modifyLabels(it.key(), it.value().second, it.value().first);
+                }
+                emit syncError(tr("%1 failed: %2").arg(what, error.left(200)));
+                emit messagesChanged();
+            }
+            if (after) {
+                after(ok);
+            }
+            refreshCounts(done);
         });
-    }, /*front=*/true);
+    });
+}
+
+QStringList ImapSyncEngine::userLabels(const QStringList &labels) const
+{
+    QStringList out;
+    for (const QString &l : labels) {
+        if (Folder *f = const_cast<ImapSyncEngine *>(this)->folder(l); f && f->type == QLatin1String("user")) {
+            out.append(l);
+        }
+    }
+    return out;
+}
+
+void ImapSyncEngine::markRead(const QString &id)
+{
+    if (!m_cache->summary(id).unread()) {
+        return;
+    }
+    modifyOptimistic({id}, {}, {QStringLiteral("UNREAD")}, tr("Marking as read"), {}, /*announce=*/false);
+}
+
+void ImapSyncEngine::markUnread(const QString &id)
+{
+    const CachedMessage m = m_cache->summary(id);
+    if (m.id.isEmpty() || m.unread()) {
+        return;
+    }
+    modifyOptimistic({id}, {QStringLiteral("UNREAD")}, {}, tr("Marking as unread"));
+}
+
+void ImapSyncEngine::markJunk(const QString &id)
+{
+    const CachedMessage m = m_cache->summary(id);
+    if (m.id.isEmpty() || m.labels.contains(QStringLiteral("SPAM"))) {
+        return;
+    }
+    modifyOptimistic({id}, {QStringLiteral("SPAM")}, {QStringLiteral("INBOX")}, tr("Marking as Junk"));
+}
+
+void ImapSyncEngine::markNotJunk(const QString &id)
+{
+    const CachedMessage m = m_cache->summary(id);
+    if (m.id.isEmpty() || !m.labels.contains(QStringLiteral("SPAM"))) {
+        return;
+    }
+    modifyOptimistic({id}, {QStringLiteral("INBOX")}, {QStringLiteral("SPAM")}, tr("Marking as Not Junk"));
+}
+
+void ImapSyncEngine::snooze(const QString &, qint64) { notYet(tr("Snooze")); }
+void ImapSyncEngine::unsnooze(const QString &) { notYet(tr("Snooze")); }
+int ImapSyncEngine::wakeDue(qint64) { return 0; }
+
+void ImapSyncEngine::trash(const QString &id)
+{
+    trashMany({id});
+}
+
+void ImapSyncEngine::trashMany(const QStringList &idsIn)
+{
+    QStringList ids;
+    QStringList folders;
+    for (const QString &id : idsIn) {
+        const CachedMessage m = m_cache->summary(id);
+        if (m.id.isEmpty()) {
+            continue;
+        }
+        ids.append(id);
+        m_labelsBeforeTrash.insert(id, m.labels);
+        for (const QString &l : userLabels(m.labels)) {
+            if (!folders.contains(l)) {
+                folders.append(l);
+            }
+        }
+    }
+    if (ids.isEmpty()) {
+        return;
+    }
+    // Out of the Inbox and out of its folder: Trash is a place of its own.
+    modifyOptimistic(ids, {QStringLiteral("TRASH")}, QStringList{QStringLiteral("INBOX")} + folders,
+                     tr("Moving to Trash"), [this, ids](bool ok) {
+        for (const QString &id : ids) {
+            if (ok) {
+                emit trashSucceeded(id);
+            } else {
+                m_labelsBeforeTrash.remove(id);
+                emit trashFailed(id, tr("The server refused the move to Trash."));
+            }
+        }
+    });
+}
+
+bool ImapSyncEngine::untrash(const QString &id)
+{
+    if (!m_labelsBeforeTrash.contains(id)) {
+        return false;
+    }
+    const QStringList before = m_labelsBeforeTrash.take(id);
+    const QStringList now = m_cache->summary(id).labels;
+    QStringList add;
+    for (const QString &l : before) {
+        if (!now.contains(l) && l != QLatin1String("TRASH")) {
+            add.append(l);
+        }
+    }
+    // Queued behind the trash itself, so the two can't cross on the wire.
+    modifyOptimistic({id}, add, {QStringLiteral("TRASH")}, tr("Undoing the move to Trash"), [this, id, before](bool ok) {
+        if (!ok) {
+            m_labelsBeforeTrash.insert(id, before);
+        }
+    });
+    return true;
+}
+
+void ImapSyncEngine::setFlag(const QString &id, const QString &color)
+{
+    const CachedMessage m = m_cache->summary(id);
+    if (!m_running || m.id.isEmpty()) {
+        return;
+    }
+    m_cache->setFlag(id, color);
+    const QString starred = QStringLiteral("STARRED");
+    const bool isStarred = m.labels.contains(starred);
+    if (color.isEmpty() && isStarred) {
+        modifyOptimistic({id}, {}, {starred}, tr("Clearing the flag"));
+    } else if (!color.isEmpty() && !isStarred) {
+        modifyOptimistic({id}, {starred}, {}, tr("Flagging"));
+    } else {
+        emit messagesChanged();
+    }
+}
+
+void ImapSyncEngine::idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
+                                                                            const QHash<qint64, QStringList> &gmLabels)> then)
+{
+    const int gen = m_generation;
+    selectFolder(labelId, [this, gen, then](bool ok) {
+        if (!ok) {
+            then(false, {}, {});
+            return;
+        }
+        Folder *f = nullptr;
+        for (Folder &c : m_folders) {
+            if (c.name == m_imap.selected()) {
+                f = &c;
+            }
+        }
+        if (!f || f->exists == 0) {
+            then(true, {}, {});
+            return;
+        }
+        m_imap.command("UID FETCH 1:* (UID X-GM-MSGID X-GM-LABELS)", [this, gen, then](const ImapClient::Reply &r) {
+            if (gen != m_generation) {
+                return;
+            }
+            QHash<qint64, QString> ids;
+            QHash<qint64, QStringList> labels;
+            for (const ImapUntagged &u : r.untagged) {
+                if (const ImapValue *attrs = fetchAttrs(u)) {
+                    const qint64 uid = attrs->get("UID") ? attrs->get("UID")->num() : 0;
+                    ids.insert(uid, hexId(attrs->get("X-GM-MSGID")));
+                    QStringList l;
+                    if (const ImapValue *gm = attrs->get("X-GM-LABELS"); gm && gm->isList()) {
+                        for (const ImapValue &v : gm->items) {
+                            l.append(ImapClient::decodeMailboxName(v.text));
+                        }
+                    }
+                    labels.insert(uid, l);
+                }
+            }
+            then(r.ok, ids, labels);
+        });
+    });
+}
+
+void ImapSyncEngine::emptyTrash()
+{
+    if (!m_connected) {
+        emit trashEmptied(-1);
+        return;
+    }
+    // Like the Gmail API path: zmail hides what is in Trash now; Gmail
+    // erases it after 30 days.
+    enqueue([this](Done done) {
+        idsInFolder(QStringLiteral("TRASH"), [this, done](bool ok, const QHash<qint64, QString> &ids, const QHash<qint64, QStringList> &) {
+            if (!ok) {
+                emit trashEmptied(-1);
+                done();
+                return;
+            }
+            const QStringList list = ids.values();
+            m_cache->setPurged(list);
+            emit messagesChanged();
+            emit labelsChanged();
+            emit trashEmptied(int(list.size()));
+            done();
+        });
+    });
+}
+
+void ImapSyncEngine::createLabel(const QString &name, const QString &, std::function<void(const QString &id)> then)
+{
+    if (!m_connected || name.trimmed().isEmpty()) {
+        if (then) {
+            then({});
+        }
+        return;
+    }
+    // Colours are a Gmail API feature; IMAP folders have none.
+    const QString clean = name.trimmed();
+    enqueue([this, clean, then](Done done) {
+        m_imap.command("CREATE " + ImapClient::quote(QString::fromLatin1(ImapClient::encodeMailboxName(clean))),
+                       [this, clean, then, done](const ImapClient::Reply &r) {
+            if (!r.ok) {
+                emit syncError(tr("Creating folder failed: %1").arg(r.text.left(200)));
+                if (then) {
+                    then({});
+                }
+                done();
+                return;
+            }
+            listFolders([this, clean, then, done] {
+                refreshCounts([this, clean, then, done] {
+                    if (then) {
+                        then(folder(clean) ? clean : QString());
+                    }
+                    done();
+                });
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::renameLabel(const QString &id, const QString &newName)
+{
+    Folder *f = folder(id);
+    if (!m_connected || !f || f->type != QLatin1String("user") || newName.trimmed().isEmpty()) {
+        return;
+    }
+    const QString to = newName.trimmed();
+    enqueue([this, id, to](Done done) {
+        Folder *f = folder(id);
+        if (!f) {
+            done();
+            return;
+        }
+        if (m_imap.selected() == f->name) {
+            m_imap.setSelected({});
+        }
+        m_imap.command("RENAME " + f->wire + ' ' + ImapClient::quote(QString::fromLatin1(ImapClient::encodeMailboxName(to))),
+                       [this, id, to, done](const ImapClient::Reply &r) {
+            if (!r.ok) {
+                emit syncError(tr("Renaming folder failed: %1").arg(r.text.left(200)));
+                done();
+                return;
+            }
+            {
+                const MailCache::Batch batch(*m_cache);
+                for (const QString &messageId : m_cache->messageIds(id)) {
+                    m_cache->modifyLabels(messageId, {to}, {id});
+                }
+            }
+            listFolders([this, done] {
+                refreshCounts(done);
+                emit messagesChanged();
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::deleteLabel(const QString &id)
+{
+    Folder *f = folder(id);
+    if (!m_connected || !f || f->type != QLatin1String("user")) {
+        return;
+    }
+    // Gmail: deleting a label folder removes the label; the mail stays in All Mail.
+    enqueue([this, id](Done done) {
+        Folder *f = folder(id);
+        if (!f) {
+            done();
+            return;
+        }
+        if (m_imap.selected() == f->name) {
+            m_imap.setSelected({});
+        }
+        m_imap.command("DELETE " + f->wire, [this, id, done](const ImapClient::Reply &r) {
+            if (!r.ok) {
+                emit syncError(tr("Deleting folder failed: %1").arg(r.text.left(200)));
+                done();
+                return;
+            }
+            {
+                const MailCache::Batch batch(*m_cache);
+                for (const QString &messageId : m_cache->messageIds(id)) {
+                    m_cache->modifyLabels(messageId, {}, {id});
+                }
+            }
+            listFolders([this, done] {
+                emit messagesChanged();
+                refreshCounts(done);
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringList>)
+{
+    if (!m_connected || !folder(id)) {
+        emit labelEmptied(id, {});
+        return;
+    }
+    // Every message in the folder goes to Trash (and out of the folder and Inbox).
+    enqueue([this, id](Done done) {
+        idsInFolder(id, [this, id, done](bool ok, const QHash<qint64, QString> &uidToId, const QHash<qint64, QStringList> &) {
+            const QStringList ids = uidToId.values();
+            if (!ok || ids.isEmpty()) {
+                if (!ok) {
+                    emit syncError(tr("Emptying the folder failed."));
+                }
+                emit labelEmptied(id, {});
+                done();
+                return;
+            }
+            {
+                const MailCache::Batch batch(*m_cache);
+                for (const QString &m : ids) {
+                    if (m_cache->contains(m)) {
+                        m_cache->modifyLabels(m, {QStringLiteral("TRASH")}, {id, QStringLiteral("INBOX")});
+                    }
+                }
+            }
+            emit messagesChanged();
+            QByteArray set;
+            for (auto it = uidToId.constBegin(); it != uidToId.constEnd(); ++it) {
+                set += (set.isEmpty() ? "" : ",") + QByteArray::number(it.key());
+            }
+            Folder *trashFolder = folder(QStringLiteral("TRASH"));
+            m_imap.command(moveCmd(set, trashFolder ? trashFolder->wire : QByteArray("\"[Gmail]/Trash\"")),
+                           [this, id, ids, done](const ImapClient::Reply &r) {
+                if (!r.ok) {
+                    emit syncError(tr("Emptying the folder failed: %1").arg(r.text.left(200)));
+                }
+                emit labelEmptied(id, r.ok ? ids : QStringList());
+                refreshCounts(done);
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
+{
+    modifyOptimistic(messageIds, {id}, {QStringLiteral("TRASH")}, tr("Undoing Empty Folder"));
+}
+
+void ImapSyncEngine::clearImportantFromFiled()
+{
+    if (!m_connected || !folder(QStringLiteral("IMPORTANT"))) {
+        emit importantCleared(0, false);
+        return;
+    }
+    enqueue([this](Done done) {
+        idsInFolder(QStringLiteral("IMPORTANT"), [this, done](bool ok, const QHash<qint64, QString> &ids,
+                                                             const QHash<qint64, QStringList> &labels) {
+            if (!ok) {
+                emit importantCleared(0, false);
+                done();
+                return;
+            }
+            QByteArray set;
+            QStringList cleared;
+            for (auto it = labels.constBegin(); it != labels.constEnd(); ++it) {
+                bool filed = false;
+                bool inbox = false;
+                for (const QString &l : it.value()) {
+                    inbox = inbox || l == QLatin1String("\\Inbox");
+                    filed = filed || !l.startsWith(QLatin1Char('\\'));
+                }
+                if (filed && !inbox) {
+                    set += (set.isEmpty() ? "" : ",") + QByteArray::number(it.key());
+                    cleared.append(ids.value(it.key()));
+                }
+            }
+            if (cleared.isEmpty()) {
+                emit importantCleared(0, true);
+                done();
+                return;
+            }
+            m_imap.command("UID STORE " + set + " -X-GM-LABELS.SILENT (\"\\\\Important\")",
+                           [this, cleared, done](const ImapClient::Reply &r) {
+                if (r.ok) {
+                    const MailCache::Batch batch(*m_cache);
+                    for (const QString &m : cleared) {
+                        m_cache->modifyLabels(m, {}, {QStringLiteral("IMPORTANT")});
+                    }
+                }
+                emit messagesChanged();
+                emit importantCleared(r.ok ? int(cleared.size()) : 0, r.ok);
+                refreshCounts(done);
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::restoreFolders(const QString &messageId, const QStringList &before)
+{
+    const CachedMessage now = m_cache->summary(messageId);
+    if (!m_running || now.id.isEmpty()) {
+        return;
+    }
+    QStringList folders{QStringLiteral("INBOX"), QStringLiteral("IMPORTANT")};
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user")) {
+            folders.append(l.id);
+        }
+    }
+    QStringList add, remove;
+    for (const QString &l : std::as_const(folders)) {
+        const bool was = before.contains(l);
+        const bool is = now.labels.contains(l);
+        if (was && !is) {
+            add.append(l);
+        } else if (!was && is) {
+            remove.append(l);
+        }
+    }
+    modifyOptimistic({messageId}, add, remove, tr("Undoing the move"));
+}
+
+void ImapSyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId)
+{
+    const CachedMessage before = m_cache->summary(messageId);
+    if (!m_running || before.id.isEmpty() || targetLabelId.isEmpty()) {
+        return;
+    }
+    const QString inbox = QStringLiteral("INBOX");
+    QStringList add;
+    QStringList remove;
+    if (!before.labels.contains(targetLabelId)) {
+        add.append(targetLabelId);
+    }
+    if (targetLabelId != inbox && before.labels.contains(inbox)) {
+        remove.append(inbox);
+    }
+    for (const CachedLabel &l : m_cache->labels()) {
+        if (l.type == QLatin1String("user") && l.id != targetLabelId && before.labels.contains(l.id)) {
+            remove.append(l.id);
+        }
+    }
+    const QString important = QStringLiteral("IMPORTANT");
+    if (targetLabelId != inbox && before.labels.contains(important)) {
+        remove.append(important);
+    }
+    modifyOptimistic({messageId}, add, remove, tr("Moving to folder"));
+}
+
+void ImapSyncEngine::touchCounts(const QStringList &)
+{
+    if (m_connected) {
+        enqueue([this](Done done) { refreshCounts(done); });
+    }
 }
 
 void ImapSyncEngine::notYet(const QString &what)
@@ -1006,50 +1852,76 @@ void ImapSyncEngine::notYet(const QString &what)
     emit statusChanged(tr("%1 isn't available for app-password accounts yet; it comes in the next zmail update.").arg(what));
 }
 
-// Changing mail over IMAP (X-GM-LABELS STORE, UID MOVE, \Seen, ...) is the
-// next update. Reading a message doesn't mark it read on the server meanwhile
-// (BODY.PEEK), so these do nothing rather than claim success.
-void ImapSyncEngine::markRead(const QString &) {}
-void ImapSyncEngine::markUnread(const QString &) { notYet(tr("Mark as unread")); }
-void ImapSyncEngine::markJunk(const QString &) { notYet(tr("Junk")); }
-void ImapSyncEngine::markNotJunk(const QString &) { notYet(tr("Not junk")); }
-void ImapSyncEngine::snooze(const QString &, qint64) { notYet(tr("Snooze")); }
-void ImapSyncEngine::unsnooze(const QString &) { notYet(tr("Snooze")); }
-int ImapSyncEngine::wakeDue(qint64) { return 0; }
-void ImapSyncEngine::trash(const QString &id) { emit trashFailed(id, tr("Delete isn't available for app-password accounts yet.")); emit messagesChanged(); }
-void ImapSyncEngine::trashMany(const QStringList &ids)
+// ---- Gmail-syntax search (X-GM-RAW) ---------------------------------------
+
+void ImapSyncEngine::serverSearch(const QString &query, SearchCb cb)
 {
-    for (const QString &id : ids) {
-        emit trashFailed(id, tr("Delete isn't available for app-password accounts yet."));
+    const QString q = query.simplified();
+    if (!m_connected || q.isEmpty()) {
+        cb({}, m_connected ? QString() : tr("Not connected."));
+        return;
     }
-    emit messagesChanged();
-}
-bool ImapSyncEngine::untrash(const QString &) { return false; }
-void ImapSyncEngine::setFlag(const QString &, const QString &) { notYet(tr("Flags")); }
-void ImapSyncEngine::emptyTrash() { notYet(tr("Empty Trash")); emit trashEmptied(-1); }
-void ImapSyncEngine::createLabel(const QString &, const QString &, std::function<void(const QString &)> then)
-{
-    notYet(tr("New folder"));
-    if (then) {
-        then({});
-    }
-}
-void ImapSyncEngine::renameLabel(const QString &, const QString &) { notYet(tr("Rename folder")); }
-void ImapSyncEngine::deleteLabel(const QString &) { notYet(tr("Delete folder")); }
-void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringList>)
-{
-    notYet(tr("Empty folder"));
-    emit labelEmptied(id, {});
-}
-void ImapSyncEngine::unemptyLabel(const QString &, const QStringList &) { notYet(tr("Undo")); }
-void ImapSyncEngine::clearImportantFromFiled() { emit importantCleared(0, false); }
-void ImapSyncEngine::restoreFolders(const QString &, const QStringList &) { notYet(tr("Undo")); }
-void ImapSyncEngine::moveToLabel(const QString &, const QString &) { notYet(tr("Moving mail")); }
-void ImapSyncEngine::touchCounts(const QStringList &)
-{
-    if (m_connected) {
-        enqueue([this](Done done) { refreshCounts(done); });
-    }
+    enqueue([this, q, cb](Done done) {
+        const QString label = folder(QString::fromLatin1(kAllMailLabel)) ? QString::fromLatin1(kAllMailLabel)
+                                                                        : QStringLiteral("INBOX");
+        const int gen = m_generation;
+        selectFolder(label, [this, gen, q, cb, done, label](bool ok) {
+            if (!ok) {
+                cb({}, tr("Couldn't open All Mail."));
+                done();
+                return;
+            }
+            m_imap.command("UID SEARCH CHARSET UTF-8 X-GM-RAW " + ImapClient::quote(q),
+                           [this, gen, cb, done, label](const ImapClient::Reply &r) {
+                if (gen != m_generation) {
+                    return;
+                }
+                if (!r.ok) {
+                    cb({}, r.text.left(200));
+                    done();
+                    return;
+                }
+                QList<qint64> uids = searchResults(r);
+                std::sort(uids.begin(), uids.end());
+                uids = uids.mid(std::max<qsizetype>(0, uids.size() - kServerSearchLimit)); // newest
+                if (uids.isEmpty()) {
+                    cb({}, {});
+                    done();
+                    return;
+                }
+                QByteArray set;
+                for (const qint64 u : uids) {
+                    set += (set.isEmpty() ? "" : ",") + QByteArray::number(u);
+                }
+                m_imap.command("UID FETCH " + set + " (" + kMetaItems + ")", [this, gen, cb, done, label](const ImapClient::Reply &fr) {
+                    if (gen != m_generation) {
+                        return;
+                    }
+                    QStringList ids;
+                    {
+                        const MailCache::Batch batch(*m_cache);
+                        for (const ImapUntagged &u : fr.untagged) {
+                            if (const ImapValue *attrs = fetchAttrs(u)) {
+                                const CachedMessage m = messageFromFetch(*attrs, label);
+                                if (m.id.isEmpty()) {
+                                    continue;
+                                }
+                                if (m_cache->contains(m.id)) {
+                                    m_cache->setLabels(m.id, m.labels); // keep its body
+                                } else {
+                                    m_cache->upsert(m);
+                                }
+                                ids.append(m.id);
+                            }
+                        }
+                    }
+                    emit messagesChanged();
+                    cb(ids, fr.ok ? QString() : fr.text);
+                    done();
+                });
+            });
+        });
+    }, /*front=*/true);
 }
 
 } // namespace zmail

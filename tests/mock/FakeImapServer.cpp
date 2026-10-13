@@ -348,17 +348,36 @@ void FakeImapServer::handle(Session *s, const QByteArray &line)
             }
         }
         reply(s, out + tag + " OK Success\r\n");
-    } else if (cmd == "SEARCH" && v.size() >= 3 && !s->selected.isEmpty()) {
+    } else if (cmd == "SEARCH" && v.size() >= 2 && !s->selected.isEmpty()) {
         const auto ms = members(s->selected);
         QByteArray hits;
-        const QByteArray key = v.at(1).text.toUpper();
-        if (key == "X-GM-MSGID") {
+        if (v.at(1).text.toUpper() == "CHARSET" && v.size() >= 3) {
+            v.remove(1, 2);
+        }
+        const QByteArray key = v.size() > 1 ? v.at(1).text.toUpper() : QByteArray();
+        QSet<quint64> wanted;
+        for (int i = 1; i + 1 < v.size(); ++i) {
+            if (v.at(i).text.toUpper() == "X-GM-MSGID") {
+                wanted.insert(v.at(i + 1).text.toULongLong());
+            }
+        }
+        if (key == "ALL") {
             for (const Msg *m : ms) {
-                if (m->msgid == v.at(2).text.toULongLong()) {
+                hits += ' ' + QByteArray::number(m->uid.value(s->selected));
+            }
+        } else if (key == "X-GM-RAW" && v.size() >= 3) {
+            for (const Msg *m : ms) {
+                if (rawMatches(*m, v.at(2).str())) {
                     hits += ' ' + QByteArray::number(m->uid.value(s->selected));
                 }
             }
-        } else if (key == "UID") {
+        } else if (!wanted.isEmpty()) {
+            for (const Msg *m : ms) {
+                if (wanted.contains(m->msgid)) {
+                    hits += ' ' + QByteArray::number(m->uid.value(s->selected));
+                }
+            }
+        } else if (key == "UID" && v.size() >= 3) {
             const qint64 maxUid = ms.isEmpty() ? 0 : ms.last()->uid.value(s->selected);
             const auto ranges = parseSet(v.at(2).text, maxUid);
             for (const Msg *m : ms) {
@@ -372,9 +391,180 @@ void FakeImapServer::handle(Session *s, const QByteArray &line)
             }
         }
         reply(s, "* SEARCH" + hits + "\r\n" + tag + " OK SEARCH completed (Success)\r\n");
+    } else if (cmd == "STORE" && v.size() >= 4 && !s->selected.isEmpty()) {
+        if (refuseChanges) {
+            reply(s, tag + " NO [CANNOT] Refused for the test\r\n");
+            return;
+        }
+        const QString folder = s->selected;
+        const auto ms = members(folder);
+        const qint64 star = ms.isEmpty() ? 0 : (uid ? ms.last()->uid.value(folder) : ms.size());
+        const auto ranges = parseSet(v.at(1).text, star);
+        const QByteArray op = v.at(2).text.toUpper();
+        QStringList values;
+        for (const ImapValue &x : v.at(3).items) {
+            values.append(ImapClient::decodeMailboxName(x.text));
+        }
+        const bool plus = op.startsWith('+');
+        for (int i = 0; i < ms.size(); ++i) {
+            const qint64 key = uid ? ms.at(i)->uid.value(folder) : i + 1;
+            bool hit = false;
+            for (const auto &r : ranges) {
+                hit = hit || (key >= r.first && key <= r.second);
+            }
+            if (!hit) {
+                continue;
+            }
+            Msg *m = ms.at(i);
+            if (op.contains("FLAGS")) {
+                for (const QString &f : values) {
+                    if (plus) {
+                        m->flags.insert(f);
+                    } else {
+                        m->flags.remove(f);
+                    }
+                }
+            } else if (op.contains("X-GM-LABELS")) {
+                for (const QString &l : values) {
+                    if (plus && (l == QLatin1String("\\Trash") || l == QLatin1String("\\Spam"))) {
+                        m->labels = {l}; // Gmail: Trash and Spam take the message out of everything
+                    } else if (plus) {
+                        if (!m->labels.contains(l)) {
+                            m->labels.append(l);
+                        }
+                    } else {
+                        m->labels.removeAll(l);
+                    }
+                }
+            }
+            m->modseq = ++m_modseq;
+        }
+        reply(s, tag + " OK Success\r\n");
+    } else if ((cmd == "MOVE" || cmd == "COPY") && v.size() >= 3 && !s->selected.isEmpty()) {
+        if (refuseChanges) {
+            reply(s, tag + " NO [CANNOT] Refused for the test\r\n");
+            return;
+        }
+        const QString folder = s->selected;
+        const QString dest = ImapClient::decodeMailboxName(v.at(2).text);
+        const auto ms = members(folder);
+        const qint64 star = ms.isEmpty() ? 0 : (uid ? ms.last()->uid.value(folder) : ms.size());
+        const auto ranges = parseSet(v.at(1).text, star);
+        QList<quint64> moving;
+        for (int i = 0; i < ms.size(); ++i) {
+            const qint64 key = uid ? ms.at(i)->uid.value(folder) : i + 1;
+            for (const auto &r : ranges) {
+                if (key >= r.first && key <= r.second) {
+                    moving.append(ms.at(i)->msgid);
+                    break;
+                }
+            }
+        }
+        for (const quint64 id : moving) {
+            moveTo(find(id), folder, dest, cmd == "MOVE");
+        }
+        reply(s, tag + " OK [COPYUID 1 1 1] (Success)\r\n");
+    } else if (cmd == "CREATE" && v.size() >= 2) {
+        userFolders.append(ImapClient::decodeMailboxName(v.at(1).text));
+        reply(s, tag + " OK Success\r\n");
+    } else if (cmd == "RENAME" && v.size() >= 3) {
+        const QString from = ImapClient::decodeMailboxName(v.at(1).text);
+        const QString to = ImapClient::decodeMailboxName(v.at(2).text);
+        userFolders.removeAll(from);
+        userFolders.append(to);
+        for (Msg &m : m_msgs) {
+            if (m.labels.removeAll(from) > 0) {
+                m.labels.append(to);
+                m.modseq = ++m_modseq;
+            }
+        }
+        reply(s, tag + " OK Success\r\n");
+    } else if (cmd == "DELETE" && v.size() >= 2) {
+        const QString name = ImapClient::decodeMailboxName(v.at(1).text);
+        userFolders.removeAll(name);
+        for (Msg &m : m_msgs) {
+            if (m.labels.removeAll(name) > 0) {
+                m.modseq = ++m_modseq;
+            }
+        }
+        reply(s, tag + " OK Success\r\n");
     } else {
         reply(s, tag + " BAD Unknown command\r\n");
     }
+}
+
+void FakeImapServer::moveTo(Msg *m, const QString &from, const QString &to, bool move)
+{
+    if (!m) {
+        return;
+    }
+    QString toLabel;
+    QString fromLabel;
+    for (const Folder &f : folders()) {
+        if (f.name == to) {
+            toLabel = f.label;
+        }
+        if (f.name == from) {
+            fromLabel = f.label;
+        }
+    }
+    if (toLabel == QLatin1String("\\Trash") || toLabel == QLatin1String("\\Spam")) {
+        m->labels = {toLabel};
+    } else {
+        m->labels.removeAll(QStringLiteral("\\Trash"));
+        m->labels.removeAll(QStringLiteral("\\Spam"));
+        if (move && !fromLabel.isEmpty() && !fromLabel.startsWith(QLatin1Char('*'))) {
+            m->labels.removeAll(fromLabel);
+        }
+        if (!toLabel.isEmpty() && !toLabel.startsWith(QLatin1Char('*')) && !m->labels.contains(toLabel)) {
+            m->labels.append(toLabel);
+        }
+    }
+    m->modseq = ++m_modseq;
+}
+
+bool FakeImapServer::rawMatches(const Msg &m, const QString &query) const
+{
+    // A small part of Gmail's search syntax: from:, subject:, is:unread,
+    // is:starred, has:attachment, in:inbox, label:, and plain words.
+    const QString raw = QString::fromUtf8(m.raw);
+    const QString head = raw.left(std::max<qsizetype>(0, raw.indexOf(QStringLiteral("\r\n\r\n"))));
+    auto header = [&head](const QString &name) {
+        for (const QString &line : head.split(QStringLiteral("\r\n"))) {
+            if (line.startsWith(name + QLatin1Char(':'), Qt::CaseInsensitive)) {
+                return line.mid(name.size() + 1);
+            }
+        }
+        return QString();
+    };
+    for (const QString &term : query.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        const QString t = term.toLower();
+        bool ok;
+        if (t.startsWith(QLatin1String("from:"))) {
+            ok = header(QStringLiteral("From")).contains(t.mid(5), Qt::CaseInsensitive);
+        } else if (t.startsWith(QLatin1String("subject:"))) {
+            ok = header(QStringLiteral("Subject")).contains(t.mid(8), Qt::CaseInsensitive);
+        } else if (t == QLatin1String("is:unread")) {
+            ok = !m.flags.contains(QStringLiteral("\\Seen"));
+        } else if (t == QLatin1String("is:starred")) {
+            ok = m.flags.contains(QStringLiteral("\\Flagged"));
+        } else if (t == QLatin1String("has:attachment")) {
+            ok = raw.contains(QStringLiteral("Content-Disposition: attachment"), Qt::CaseInsensitive);
+        } else if (t == QLatin1String("in:inbox")) {
+            ok = m.labels.contains(QStringLiteral("\\Inbox"));
+        } else if (t.startsWith(QLatin1String("label:"))) {
+            ok = false;
+            for (const QString &l : m.labels) {
+                ok = ok || l.compare(term.mid(6), Qt::CaseInsensitive) == 0;
+            }
+        } else {
+            ok = raw.contains(term, Qt::CaseInsensitive);
+        }
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
 }
 
 void FakeImapServer::notify(const std::function<QByteArray(const QString &folder, Session *)> &what)

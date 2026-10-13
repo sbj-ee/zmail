@@ -779,6 +779,13 @@ void GmailSyncEngine::fetchBody(const QString &id, MessageCb cb)
     });
 }
 
+void GmailSyncEngine::fetchFull(const QString &id, FullCb cb)
+{
+    m_api->getMessageFull(id, [cb](const QJsonObject &json, const ApiError &err) {
+        cb(json, err.isError ? (err.message.isEmpty() ? tr("HTTP %1").arg(err.httpStatus) : err.message) : QString());
+    });
+}
+
 QStringList GmailSyncEngine::labelIds(const QJsonObject &message)
 {
     QStringList labels;

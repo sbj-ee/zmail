@@ -340,6 +340,7 @@ void MessageListModel::setStatus(int row, MailStatus status)
 
 void MessageFilterProxy::setSearchText(const QString &text)
 {
+    m_searchText = text;
     m_terms = parseSearch(text);
     m_fieldTerms.clear();
     for (const SearchTerm &t : std::as_const(m_terms)) {

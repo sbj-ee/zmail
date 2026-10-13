@@ -162,7 +162,9 @@ private:
     void refreshCounts(Done then, const QStringList &only = {}); // only: these labels' folders
     void checkConnection();
     void syncFolder(const QString &labelId, bool full, Done then);
-    void fetchRange(Folder *f, const QByteArray &range, bool byUid, std::function<void(QStringList newIds)> then);
+    // anyUid: a UID FETCH of named messages, not "what is new" (which skips UIDs already seen).
+    void fetchRange(Folder *f, const QByteArray &range, bool byUid, std::function<void(QStringList newIds)> then,
+                    bool anyUid = false);
     void handleUntagged(const ImapUntagged &u);
     void scheduleIncremental();
     void setBusy(bool b, const QString &status = {});
@@ -191,6 +193,11 @@ private:
     void scheduleRetry(const QString &reason);
     void removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then);
     QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
+    // After start(): cached from an earlier run and not yet shown by the server
+    // again. What the Inbox doesn't vouch for is set aside once it is read.
+    QSet<QString> m_unverified;
+    bool m_sweepPending = false; // start() has yet to set the unverified aside
+    bool m_startPending = false; // start() has yet to reach the server (it may take some tries)
 
     AppPasswordAccount m_account;
     PasswordProvider m_password;

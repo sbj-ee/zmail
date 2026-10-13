@@ -345,18 +345,6 @@ private slots:
         QVERIFY(!err.first().first().toString().contains(r.password));
     }
 
-    void mutationsSayNotYet()
-    {
-        Rig r(3);
-        QVERIFY(r.startAndSettle());
-        QSignalSpy status(r.sync.get(), &SyncEngine::statusChanged);
-        r.sync->moveToLabel(QStringLiteral("1"), QStringLiteral("Receipts"));
-        QVERIFY(status.last().first().toString().contains(QStringLiteral("next zmail update")));
-        QSignalSpy trashFailed(r.sync.get(), &SyncEngine::trashFailed);
-        r.sync->trash(QStringLiteral("1"));
-        QCOMPARE(trashFailed.count(), 1);
-    }
-
     void sessionResumesAppPasswordAccount()
     {
         FakeImapServer server;

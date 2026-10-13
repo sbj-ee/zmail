@@ -36,6 +36,7 @@ zmail_add_test(tst_labels) # Labels as folders
 zmail_add_test(tst_connect)
 zmail_add_test(tst_apppassword) # Gmail (app password): keyring, Test button, account dialog
 zmail_add_test(tst_imap) # Gmail (app password): IMAP read path, IDLE, CONDSTORE (fake server)
+zmail_add_test(tst_imapactions) # Gmail (app password): changing mail, folders, X-GM-RAW search, attachments
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)

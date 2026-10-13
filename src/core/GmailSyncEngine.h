@@ -57,6 +57,7 @@ public:
     QString loadingAll() const override { return m_loadAllLabel; } // the label being loaded, or empty
 
     void fetchBody(const QString &id, MessageCb cb) override;
+    void fetchFull(const QString &id, FullCb cb) override;
     void markRead(const QString &id) override;
     void markUnread(const QString &id) override; // messages.modify addLabelIds: ["UNREAD"]
     // Move to Gmail Spam: add SPAM, remove INBOX (optimistic, rolled back on error).

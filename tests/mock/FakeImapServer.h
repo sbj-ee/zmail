@@ -47,6 +47,7 @@ public:
     QStringList userFolders;            // extra empty labels to list
     QList<QByteArray> commands;         // every command line after LOGIN (tags stripped)
     int logins = 0;
+    bool refuseChanges = false;          // STORE / MOVE answer NO (to test rollback)
 
     // New message; notifies IDLE sessions (* n EXISTS). Returns its X-GM-MSGID.
     quint64 deliver(const QByteArray &raw, const QStringList &labels = {QStringLiteral("\\Inbox")},
@@ -88,6 +89,8 @@ private:
     void reply(Session *s, const QByteArray &data);
     QByteArray fetchLine(const QString &folder, int seq, Msg *m, const QList<QByteArray> &items, bool withModseq);
     void notify(const std::function<QByteArray(const QString &folder, Session *)> &what);
+    bool rawMatches(const Msg &m, const QString &query) const;
+    void moveTo(Msg *m, const QString &from, const QString &to, bool move);
     QList<QPair<qint64, qint64>> parseSet(const QByteArray &set, qint64 star) const;
 
     QTcpServer m_server;

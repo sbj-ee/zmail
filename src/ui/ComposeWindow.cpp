@@ -1350,23 +1350,23 @@ void ComposeWindow::setMailto(const MailtoFields &f)
 
 void ComposeWindow::attachFromMessage(const QString &gmailMessageId)
 {
-    if (!m_session || !m_session->api()) {
+    if (!m_session || !m_session->sync()) {
         return;
     }
     QPointer<ComposeWindow> self(this);
-    GmailClient *api = m_session->api();
+    GmailClient *api = m_session->api(); // null for app-password (IMAP) accounts: parts arrive inline
     statusBar()->showMessage(tr("Fetching attachments\u2026"));
-    api->getMessageFull(gmailMessageId, [self, api, gmailMessageId](const QJsonObject &json, const ApiError &err) {
+    m_session->sync()->fetchFull(gmailMessageId, [self, api, gmailMessageId](const QJsonObject &json, const QString &error) {
         if (!self) {
             return;
         }
-        if (err.isError) {
-            self->fail(tr("Couldn't fetch the original's attachments: %1").arg(err.message));
+        if (!error.isEmpty()) {
+            self->fail(tr("Couldn't fetch the original's attachments: %1").arg(error));
             return;
         }
         const auto body = MessageParser::bodyFromFull(json);
         for (const auto &ref : body.attachmentRefs) {
-            if (ref.attachmentId.isEmpty()) {
+            if (ref.attachmentId.isEmpty() || !api) {
                 self->addAttachment({ref.fileName, ref.inlineData.size(), {}, ref.inlineData, ref.mimeType});
                 continue;
             }

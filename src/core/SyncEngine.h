@@ -2,6 +2,7 @@
 
 #include "MailCache.h"
 
+#include <QJsonObject>
 #include <QObject>
 #include <QStringList>
 #include <functional>
@@ -46,6 +47,15 @@ public:
 
     using MessageCb = std::function<void(const CachedMessage &m, const QString &error)>;
     virtual void fetchBody(const QString &id, MessageCb cb) = 0;
+    // The whole message in the Gmail API's "full" shape (MessageParser reads
+    // it): for saving attachments and forwarding them. error empty on success.
+    using FullCb = std::function<void(const QJsonObject &message, const QString &error)>;
+    virtual void fetchFull(const QString &id, FullCb cb) = 0;
+    // Gmail-syntax search on the server (IMAP: X-GM-RAW), on top of the
+    // cache's own full-text search. Matching messages are cached first.
+    using SearchCb = std::function<void(const QStringList &ids, const QString &error)>;
+    virtual bool supportsServerSearch() const { return false; }
+    virtual void serverSearch(const QString &, SearchCb cb) { cb({}, {}); }
     virtual void markRead(const QString &id) = 0;
     virtual void markUnread(const QString &id) = 0;
     virtual void markJunk(const QString &id) = 0;

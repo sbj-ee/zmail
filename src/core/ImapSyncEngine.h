@@ -6,6 +6,7 @@
 
 #include <deque>
 #include <QHash>
+#include <QJsonObject>
 #include <QSet>
 
 class QTimer;
@@ -24,8 +25,12 @@ namespace zmail {
 //    on a wake-up, new UIDs past the last one seen, CONDSTORE CHANGEDSINCE for
 //    flag / label changes, and UID SEARCH for what was expunged. Servers
 //    without IDLE are polled with the same incremental sync.
-// Changing mail (labels, moves, trash, flags) arrives in a later update; until
-// then those calls only say so in the status bar.
+//  - changing mail: messages are found by X-GM-MSGID in All Mail (then Trash,
+//    then Spam), then UID STORE +/-FLAGS (\Seen, \Flagged), +/-X-GM-LABELS
+//    (Inbox, Important, folders), and UID MOVE into / out of Trash and Spam.
+//    The cache changes first; a refusal undoes exactly that change.
+//  - search: X-GM-RAW (Gmail's own search syntax) in All Mail
+// Snooze arrives in a later update.
 class ImapSyncEngine : public SyncEngine
 {
     Q_OBJECT
@@ -64,6 +69,10 @@ public:
     QString loadingAll() const override { return m_loadAllLabel; }
 
     void fetchBody(const QString &id, MessageCb cb) override;
+    void fetchFull(const QString &id, FullCb cb) override;
+    bool supportsServerSearch() const override { return true; }
+    void serverSearch(const QString &query, SearchCb cb) override;
+    static constexpr int kServerSearchLimit = 200;
     void markRead(const QString &id) override;
     void markUnread(const QString &id) override;
     void markJunk(const QString &id) override;
@@ -131,6 +140,22 @@ private:
     QByteArray selectCmd(const Folder &f) const;
     void applySelect(Folder *f, const ImapClient::Reply &r, bool *uidValidityChanged);
     void loadAllStep();
+    using Located = QHash<QString, QHash<QString, qint64>>; // folder label -> id -> UID
+    void locate(const QStringList &ids, std::function<void(const Located &)> then);
+    void searchIn(const QString &labelId, const QStringList &ids, std::function<void(const QHash<QString, qint64> &)> then);
+    void selectFolder(const QString &labelId, std::function<void(bool ok)> then);
+    void fetchRaw(const QString &id, std::function<void(const QByteArray &raw, const QString &error)> cb);
+    QJsonObject fullJson(const QString &id, const QByteArray &raw) const;
+    QByteArray gmLabel(const QString &labelId) const;
+    QByteArray moveCmd(const QByteArray &set, const QByteArray &destWire) const;
+    void applyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove,
+                     std::function<void(bool ok, const QString &error)> done);
+    void modifyOptimistic(const QStringList &ids, const QStringList &add, const QStringList &remove, const QString &what,
+                          std::function<void(bool ok)> after = {}, bool announce = true);
+    QStringList userLabels(const QStringList &labels) const;
+    void idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
+                                                                const QHash<qint64, QStringList> &gmLabels)> then);
+    QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
 
     AppPasswordAccount m_account;
     PasswordProvider m_password;

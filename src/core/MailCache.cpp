@@ -144,6 +144,10 @@ bool MailCache::open(const QString &path)
             "badge INTEGER NOT NULL DEFAULT 0, created_ms INTEGER NOT NULL)")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS flags (message_id TEXT PRIMARY KEY, color TEXT NOT NULL)")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS purged (message_id TEXT PRIMARY KEY)")) &&
+        // Bodies of messages set aside by a resync, until they turn up again (setAside()).
+        exec(QStringLiteral("CREATE TABLE IF NOT EXISTS kept_bodies (id TEXT PRIMARY KEY, body_text TEXT, "
+                            "body_html TEXT, attachments TEXT, list_unsubscribe TEXT, list_unsubscribe_post TEXT, "
+                            "calendar TEXT, extras_ver INTEGER NOT NULL DEFAULT 0)")) &&
         exec(QStringLiteral("CREATE TABLE IF NOT EXISTS outbox (id INTEGER PRIMARY KEY AUTOINCREMENT, mime BLOB NOT NULL, "
                             "thread_id TEXT, draft_id TEXT, to_addr TEXT, cc_addr TEXT, subject TEXT, body_text TEXT, "
                             "created_ms INTEGER NOT NULL, error TEXT)"));
@@ -207,6 +211,7 @@ bool MailCache::open(const QString &path)
         qCWarning(lcSync) << "SQLite has no FTS5; search falls back to LIKE";
     }
     exec(QStringLiteral("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema', '2')"));
+    m_keptAny = keptBodies() > 0;
     return true;
 }
 
@@ -379,6 +384,79 @@ void MailCache::upsert(const CachedMessage &m)
         return;
     }
     setLabels(m.id, m.labels);
+    if (m_keptAny) {
+        restoreKeptBody(m.id);
+    }
+}
+
+void MailCache::restoreKeptBody(const QString &id)
+{
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    QSqlQuery kept(db);
+    kept.prepare(QStringLiteral("SELECT body_text, body_html, attachments, list_unsubscribe, list_unsubscribe_post, "
+                                "calendar, extras_ver FROM kept_bodies WHERE id = ?"));
+    kept.addBindValue(id);
+    if (!kept.exec() || !kept.next()) {
+        return;
+    }
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("UPDATE messages SET has_body = 1, body_text = ?, body_html = ?, attachments = ?, "
+                             "has_attachment = MAX(has_attachment, ?), list_unsubscribe = ?, "
+                             "list_unsubscribe_post = ?, calendar = ?, extras_ver = ? WHERE id = ? AND has_body = 0"));
+    q.addBindValue(kept.value(0));
+    q.addBindValue(kept.value(1));
+    q.addBindValue(kept.value(2));
+    q.addBindValue(kept.value(2).toString().isEmpty() ? 0 : 1);
+    q.addBindValue(kept.value(3));
+    q.addBindValue(kept.value(4));
+    q.addBindValue(kept.value(5));
+    q.addBindValue(kept.value(6));
+    q.addBindValue(id);
+    q.exec();
+    kept.finish();
+    QSqlQuery del(db);
+    del.prepare(QStringLiteral("DELETE FROM kept_bodies WHERE id = ?"));
+    del.addBindValue(id);
+    del.exec();
+}
+
+void MailCache::setAside(const QStringList &ids)
+{
+    const Batch batch(*this);
+    exec(QStringLiteral("DELETE FROM kept_bodies"));
+    QSqlDatabase db = QSqlDatabase::database(m_conn);
+    QSqlQuery keep(db);
+    keep.prepare(QStringLiteral(
+        "INSERT OR REPLACE INTO kept_bodies(id, body_text, body_html, attachments, list_unsubscribe, "
+        "list_unsubscribe_post, calendar, extras_ver) SELECT id, body_text, body_html, attachments, "
+        "list_unsubscribe, list_unsubscribe_post, calendar, extras_ver FROM messages WHERE id = ? AND has_body = 1"));
+    QSqlQuery drop(db);
+    drop.prepare(QStringLiteral("DELETE FROM messages WHERE id = ?")); // its labels go with it (cascade)
+    for (const QString &id : ids) {
+        keep.addBindValue(id);
+        keep.exec();
+        drop.addBindValue(id);
+        drop.exec();
+    }
+    m_keptAny = keptBodies() > 0;
+}
+
+int MailCache::keptBodies() const
+{
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    return q.exec(QStringLiteral("SELECT COUNT(*) FROM kept_bodies")) && q.next() ? q.value(0).toInt() : 0;
+}
+
+QStringList MailCache::allIds() const
+{
+    QStringList out;
+    QSqlQuery q(QSqlDatabase::database(m_conn));
+    if (q.exec(QStringLiteral("SELECT id FROM messages"))) {
+        while (q.next()) {
+            out.append(q.value(0).toString());
+        }
+    }
+    return out;
 }
 
 void MailCache::setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments,

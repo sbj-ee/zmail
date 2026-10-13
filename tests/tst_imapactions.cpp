@@ -581,6 +581,131 @@ private slots:
         }
         QCOMPARE(r.cache.messageIds(QStringLiteral("INBOX")).size(), 9);
     }
+
+    // Starting again asks the server what is still there instead of throwing
+    // the cache away: mail it still has keeps its headers and its body.
+    void restartKeepsWhatIsStillThere()
+    {
+        Rig r;
+        const QString id = Rig::hex(r.msgid("Lunch on Thursday?"));
+        bool got = false;
+        r.sync->fetchBody(id, [&](const CachedMessage &, const QString &) { got = true; });
+        QVERIFY(QTest::qWaitFor([&] { return got; }, 10000));
+        QVERIFY(r.cache.message(id).hasBody);
+        QVERIFY(r.settle());
+        const int cachedBefore = r.cache.count();
+
+        r.sync->stop();
+        const int base = int(r.server.commands.size());
+        QSignalSpy idle(r.sync.get(), &SyncEngine::idle);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+
+        QCOMPARE(r.sync->fullSyncs(), 2);
+        QCOMPARE(r.cache.count(), cachedBefore);
+        const CachedMessage after = r.cache.message(id);
+        QVERIFY(after.hasBody);
+        QVERIFY(after.bodyText.contains(QStringLiteral("Thursday")));
+        QVERIFY(after.labels.contains(QStringLiteral("INBOX")));
+        for (int i = base; i < r.server.commands.size(); ++i) {
+            QVERIFY2(!r.server.commands.at(i).contains("BODY.PEEK"), r.server.commands.at(i).constData());
+        }
+    }
+
+    // What changed while zmail was closed shows after the restart: mail that
+    // was deleted or archived is gone from the cache, flags are as the server
+    // has them, and new mail is there.
+    void restartCatchesUpWithWhatChangedMeanwhile()
+    {
+        Rig r;
+        QVERIFY(r.settle());
+        const quint64 deleted = r.msgid("Lunch on Thursday?");
+        const quint64 archived = r.msgid("Your October statement is ready");
+        const quint64 unread = r.msgid("Q4 field schedule (draft)");
+        QVERIFY(!r.cache.summary(Rig::hex(unread)).unread());
+        r.sync->stop();
+
+        r.server.expunge(deleted);
+        r.server.setLabels(archived, {QStringLiteral("Receipts")});
+        r.server.setFlags(unread, {});
+        const quint64 fresh = r.server.deliver(FakeImapServer::makeMessage(
+            QStringLiteral("Sam Ortiz"), QStringLiteral("sam@example.org"), QStringLiteral("While you were out"),
+            QStringLiteral("text")));
+
+        QSignalSpy idle(r.sync.get(), &SyncEngine::idle);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+
+        QVERIFY(!r.cache.contains(Rig::hex(deleted)));
+        QVERIFY(!r.cache.contains(Rig::hex(archived))); // no ghost in All Mail until its folder vouches for it
+        QVERIFY(r.cache.summary(Rig::hex(unread)).unread());
+        QVERIFY(r.cache.contains(Rig::hex(fresh)));
+        QVERIFY(r.cache.summary(Rig::hex(fresh)).subject.contains(QStringLiteral("While you were out")));
+    }
+
+    // Mail set aside at the restart gets its body back when its folder is opened.
+    void bodySetAsideComesBackWithItsFolder()
+    {
+        Rig r;
+        const quint64 msg = r.msgid("Your October statement is ready");
+        const QString id = Rig::hex(msg);
+        bool got = false;
+        r.sync->fetchBody(id, [&](const CachedMessage &, const QString &) { got = true; });
+        QVERIFY(QTest::qWaitFor([&] { return got; }, 10000));
+        QVERIFY(r.settle());
+        r.sync->stop();
+        r.server.setLabels(msg, {QStringLiteral("Receipts")}); // archived elsewhere
+
+        QSignalSpy idle(r.sync.get(), &SyncEngine::idle);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+        QVERIFY(!r.cache.contains(id));
+        QCOMPARE(r.cache.keptBodies(), 1);
+
+        const int base = int(r.server.commands.size());
+        r.sync->ensureLabel(QStringLiteral("Receipts"));
+        QVERIFY(QTest::qWaitFor([&] { return r.cache.contains(id); }, 10000));
+        QVERIFY(r.settle());
+        const CachedMessage back = r.cache.message(id);
+        QVERIFY(back.hasBody);
+        QVERIFY(back.bodyText.contains(QStringLiteral("statement")));
+        QCOMPARE(r.cache.keptBodies(), 0);
+        for (int i = base; i < r.server.commands.size(); ++i) {
+            QVERIFY2(!r.server.commands.at(i).contains("BODY.PEEK[]"), r.server.commands.at(i).constData());
+        }
+
+        // A body nobody reclaims goes at the next restart.
+        r.sync->stop();
+        r.server.expunge(msg);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+        r.sync->stop();
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+        QCOMPARE(r.cache.keptBodies(), 0);
+    }
+
+    void snoozedMailSurvivesARestart()
+    {
+        Rig r;
+        const QString id = Rig::hex(r.msgid("Lunch on Thursday?"));
+        const qint64 wake = QDateTime::currentMSecsSinceEpoch() + 3600 * 1000;
+        r.sync->snooze(id, wake);
+        QVERIFY(r.settle());
+        r.sync->stop();
+        QSignalSpy idle(r.sync.get(), &SyncEngine::idle);
+        r.sync->start();
+        QVERIFY(idle.wait(10000));
+        QVERIFY(r.settle());
+        QVERIFY(r.cache.contains(id));
+        QCOMPARE(r.cache.snooze(id).wakeMs, wake);
+        QVERIFY(!r.cache.summary(id).labels.contains(QStringLiteral("INBOX")));
+    }
 };
 
 QTEST_MAIN(TstImapActions)

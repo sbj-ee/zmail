@@ -128,7 +128,14 @@ public:
     // Full resync: drop every cached message. keepSnoozed leaves the rows that
     // have a snooze (deleting them would cascade the wake time away with them).
     void clearMessages(bool keepSnoozed = false);
+    // A resync that keeps what it can: these messages are dropped, but the
+    // bodies fetched for them are remembered, and upsert() gives a body back
+    // to a message that turns up again. Each call replaces what was
+    // remembered, so the body of mail that never comes back goes at the next.
+    void setAside(const QStringList &ids);
+    int keptBodies() const;
     bool contains(const QString &id) const;
+    QStringList allIds() const; // every cached message
 
     CachedMessage message(const QString &id) const;
     // message() without the bodies (bodyText / bodyHtml stay empty; hasBody
@@ -212,6 +219,8 @@ private:
     bool exec(const QString &sql);
     bool migrate();
     void backfillFtsIfNeeded();
+    void restoreKeptBody(const QString &id);
+    bool m_keptAny = false; // kept_bodies has rows (saves a lookup per upsert)
     QString m_conn;
     QString m_error;
     bool m_fts5 = false;

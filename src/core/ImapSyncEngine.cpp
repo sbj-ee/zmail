@@ -515,13 +515,31 @@ void ImapSyncEngine::connectAndSync(bool full)
                                 refreshCounts([this, full, done] {
                                     if (full) {
                                         ++m_fullSyncs;
-                                        m_cache->clearMessages(/*keepSnoozed=*/true);
+                                        // Nothing is thrown away yet: what an earlier run cached
+                                        // stays on show, and in doubt, until the server has been
+                                        // asked. Snoozed mail is out of the Inbox on purpose, and
+                                        // its wake time would go with it: never in doubt.
+                                        const QStringList cached = m_cache->allIds();
+                                        m_unverified = QSet<QString>(cached.begin(), cached.end());
+                                        for (const MailCache::SnoozeRow &row : m_cache->snoozes(/*activeOnly=*/false)) {
+                                            m_unverified.remove(row.messageId);
+                                        }
+                                        m_sweepPending = true;
                                         for (Folder &f : m_folders) {
                                             f.synced = false;
                                             f.uidToId.clear();
                                         }
                                     }
                                     syncFolder(QStringLiteral("INBOX"), full, [this, done] {
+                                        // The Inbox has been read: whatever it didn't show may have
+                                        // been deleted since, so it leaves the cache, as everything
+                                        // used to. Its body is kept for when a folder shows it again.
+                                        if (const Folder *inbox = folder(QStringLiteral("INBOX"));
+                                            inbox && inbox->synced && m_sweepPending) {
+                                            m_sweepPending = false;
+                                            m_cache->setAside(m_unverified.values()); // and forgets bodies nobody reclaimed
+                                            m_unverified.clear();
+                                        }
                                         // After a reconnect: catch up the other folders already shown.
                                         QStringList others;
                                         for (const Folder &f : m_folders) {
@@ -761,12 +779,13 @@ void ImapSyncEngine::applySelect(Folder *f, const ImapClient::Reply &r, bool *ui
     }
 }
 
-void ImapSyncEngine::fetchRange(Folder *fIn, const QByteArray &range, bool byUid, std::function<void(QStringList)> then)
+void ImapSyncEngine::fetchRange(Folder *fIn, const QByteArray &range, bool byUid, std::function<void(QStringList)> then,
+                                bool anyUid)
 {
     const QString labelId = fIn->labelId;
     const int gen = m_generation;
     m_imap.command((byUid ? "UID FETCH " : "FETCH ") + range + " (" + kMetaItems + ")",
-                   [this, gen, labelId, byUid, then](const ImapClient::Reply &r) {
+                   [this, gen, labelId, byUid, anyUid, then](const ImapClient::Reply &r) {
                        if (gen != m_generation) {
                            return;
                        }
@@ -791,7 +810,7 @@ void ImapSyncEngine::fetchRange(Folder *fIn, const QByteArray &range, bool byUid
                                    continue;
                                }
                                const qint64 uid = attrs->get("UID") ? attrs->get("UID")->num() : 0;
-                               if (byUid && uid <= before) {
+                               if (byUid && !anyUid && uid <= before) {
                                    continue; // "n:*" always answers with the last message
                                }
                                const CachedMessage m = messageFromFetch(*attrs, labelId);
@@ -802,6 +821,7 @@ void ImapSyncEngine::fetchRange(Folder *fIn, const QByteArray &range, bool byUid
                                    fresh.append(m.id);
                                }
                                m_cache->upsert(m);
+                               m_unverified.remove(m.id);
                                if (uid > 0) {
                                    f->uidToId.insert(uid, m.id);
                                    f->lastUid = std::max(f->lastUid, uid);
@@ -850,16 +870,75 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
                 return;
             }
             const qint64 lowest = std::max<qint64>(1, f->exists - m_initialCount + 1);
-            fetchRange(f, QByteArray::number(lowest) + ":*", false, [this, gen, labelId, lowest, then](const QStringList &) {
+            // Flags and labels first, a line each: mail the cache already
+            // holds needs no more than that. The headers are then fetched
+            // only for what it doesn't hold.
+            m_imap.command("FETCH " + QByteArray::number(lowest) + ":* (UID X-GM-MSGID X-GM-LABELS FLAGS)",
+                           [this, gen, labelId, lowest, then](const ImapClient::Reply &r) {
                 if (gen != m_generation) {
                     return;
                 }
-                if (Folder *ff = folder(labelId)) {
-                    ff->synced = true;
-                    ff->lowestSeq = lowest;
+                Folder *f = folder(labelId);
+                if (!f) {
+                    then();
+                    return;
                 }
-                emit messagesChanged();
-                then();
+                if (!r.ok) {
+                    emit syncError(tr("Couldn't read %1: %2").arg(f->name, r.text.left(200)));
+                }
+                if (const qint64 n = existsIn(r); n >= 0) {
+                    f->exists = n;
+                }
+                QList<qint64> missing;
+                QList<qint64> listed;
+                {
+                    const MailCache::Batch batch(*m_cache);
+                    for (const ImapUntagged &u : r.untagged) {
+                        const ImapValue *attrs = fetchAttrs(u);
+                        if (!attrs || !attrs->get("X-GM-MSGID") || !attrs->get("UID")) {
+                            continue;
+                        }
+                        const qint64 uid = attrs->get("UID")->num();
+                        const QString id = hexId(attrs->get("X-GM-MSGID"));
+                        if (uid <= 0 || id.isEmpty()) {
+                            continue;
+                        }
+                        listed.append(uid);
+                        if (!m_cache->contains(id)) {
+                            missing.append(uid);
+                            continue;
+                        }
+                        m_cache->setLabels(id, messageFromFetch(*attrs, labelId).labels);
+                        m_unverified.remove(id);
+                        f->uidToId.insert(uid, id);
+                        f->lastUid = std::max(f->lastUid, uid);
+                    }
+                }
+                auto left = std::make_shared<QList<QByteArray>>(uidSets(missing, listed));
+                auto step = std::make_shared<std::function<void()>>();
+                *step = [this, gen, labelId, lowest, left, then, step] {
+                    if (gen != m_generation) {
+                        *step = nullptr;
+                        return;
+                    }
+                    Folder *ff = folder(labelId);
+                    if (ff && !left->isEmpty()) {
+                        fetchRange(ff, left->takeFirst(), true, [step](const QStringList &) {
+                            if (*step) {
+                                (*step)();
+                            }
+                        }, /*anyUid=*/true);
+                        return;
+                    }
+                    if (ff) {
+                        ff->synced = true;
+                        ff->lowestSeq = lowest;
+                    }
+                    emit messagesChanged();
+                    then();
+                    *step = nullptr;
+                };
+                (*step)();
             });
             return;
         }
@@ -2275,6 +2354,7 @@ void ImapSyncEngine::serverSearch(const QString &query, SearchCb cbIn)
                                 } else {
                                     m_cache->upsert(m);
                                 }
+                                m_unverified.remove(m.id);
                                 ids.append(m.id);
                             }
                         }

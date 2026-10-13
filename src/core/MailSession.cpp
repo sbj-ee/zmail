@@ -7,11 +7,13 @@
 #include "MailCache.h"
 #include "ContactStore.h"
 #include "PeopleClient.h"
-#include "SyncEngine.h"
+#include "GmailSyncEngine.h"
+#include "ImapSyncEngine.h"
 #include "TokenStore.h"
 
 #include <QNetworkAccessManager>
 #include <QJsonArray>
+#include <QPointer>
 #include <QSettings>
 
 namespace zmail {
@@ -105,6 +107,9 @@ void MailSession::setClient(const ClientConfig::LoadResult &client)
 
 QString MailSession::account() const
 {
+    if (m_kind == AccountKind::GmailAppPassword) {
+        return m_imapAccount.email;
+    }
     return m_auth ? m_auth->account() : QString();
 }
 
@@ -118,6 +123,16 @@ void MailSession::setState(State s)
 
 void MailSession::restoreSaved()
 {
+    if (m_opts.rememberAccount) {
+        const QSettings settings;
+        if (AppPasswordAccount::savedKind(settings) == AccountKind::GmailAppPassword) {
+            const AppPasswordAccount saved = AppPasswordAccount::load(settings);
+            if (saved.isValid()) {
+                startAppPasswordAccount(saved);
+                return;
+            }
+        }
+    }
     if (!m_auth || !m_opts.rememberAccount) {
         return;
     }
@@ -157,6 +172,18 @@ void MailSession::cancelSignIn()
 
 void MailSession::signOut()
 {
+    if (m_kind == AccountKind::GmailAppPassword) {
+        stopAccount();
+        m_opts.store->remove(AppPasswordAccount::appPasswordKey(m_imapAccount.email), [](bool, const QString &) {});
+        if (m_opts.rememberAccount) {
+            QSettings settings;
+            AppPasswordAccount::clear(settings);
+        }
+        m_kind = AccountKind::GmailOAuth;
+        m_imapAccount = {};
+        setState(m_auth ? State::SignedOut : State::NeedsClient);
+        return;
+    }
     stopAccount();
     if (m_auth) {
         m_auth->signOut();
@@ -167,9 +194,57 @@ void MailSession::signOut()
     setState(m_auth ? State::SignedOut : State::NeedsClient);
 }
 
+void MailSession::startAppPasswordAccount(const AppPasswordAccount &account)
+{
+    stopAccount();
+    m_kind = AccountKind::GmailAppPassword;
+    m_imapAccount = account;
+    m_cache = std::make_unique<MailCache>();
+    // Its own cache, apart from an OAuth sign-in to the same address.
+    const QString path = m_opts.cachePathOverride.isEmpty()
+        ? MailCache::defaultPath(account.email + QStringLiteral("-imap"))
+        : m_opts.cachePathOverride;
+    if (!m_cache->open(path)) {
+        const QString error = m_cache->lastError();
+        stopAccount();
+        m_kind = AccountKind::GmailOAuth;
+        setState(m_auth ? State::SignedOut : State::NeedsClient);
+        emit signInFailed(tr("zmail couldn't open its mail cache at %1 (%2).")
+                              .arg(path, error.isEmpty() ? tr("unknown error") : error));
+        return;
+    }
+    m_contacts = std::make_unique<ContactStore>();
+    const QString cpath = m_opts.contactsPathOverride.isEmpty()
+        ? ContactStore::defaultPath(account.email + QStringLiteral("-imap"))
+        : m_opts.contactsPathOverride;
+    if (!m_contacts->open(cpath)) {
+        qCWarning(lcSync) << "Couldn't open the contacts cache:" << m_contacts->lastError();
+    }
+    QPointer<TokenStore> store(m_opts.store);
+    const QString key = AppPasswordAccount::appPasswordKey(account.email);
+    auto password = [store, key](std::function<void(bool, const QString &, const QString &)> cb) {
+        if (!store) {
+            cb(false, {}, tr("The system keyring isn't available."));
+            return;
+        }
+        store->read(key, [cb](bool ok, const QString &value, const QString &error) { cb(ok, value, error); });
+    };
+    auto engine = std::make_unique<ImapSyncEngine>(account, password, m_cache.get());
+    engine->setPlaintextForTests(m_opts.imapPlaintextForTests);
+    m_sync = std::move(engine);
+    m_sync->setPollInterval(m_opts.pollIntervalMs);
+    m_sync->setInitialCount(m_opts.initialCount);
+    m_displayName.clear();
+    m_vacation = {};
+    setState(State::SignedIn);
+    emit ready();
+    m_sync->start();
+}
+
 void MailSession::startAccount(const QString &account)
 {
     stopAccount();
+    m_kind = AccountKind::GmailOAuth;
     m_cache = std::make_unique<MailCache>();
     const QString path = m_opts.cachePathOverride.isEmpty() ? MailCache::defaultPath(account) : m_opts.cachePathOverride;
     if (!m_cache->open(path)) {
@@ -195,7 +270,7 @@ void MailSession::startAccount(const QString &account)
     m_api = std::make_unique<GmailClient>(m_auth.get(), m_nam,
                                           m_opts.apiBase.isValid() ? m_opts.apiBase : GmailClient::defaultBaseUrl());
     m_api->setBackoffBaseMs(m_opts.backoffBaseMs);
-    m_sync = std::make_unique<SyncEngine>(m_api.get(), m_cache.get());
+    m_sync = std::make_unique<GmailSyncEngine>(m_api.get(), m_cache.get());
     m_sync->setPollInterval(m_opts.pollIntervalMs);
     m_sync->setInitialCount(m_opts.initialCount);
     m_sender = std::make_unique<Sender>(m_api.get());

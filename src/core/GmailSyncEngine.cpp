@@ -1,4 +1,4 @@
-#include "SyncEngine.h"
+#include "GmailSyncEngine.h"
 
 #include <memory>
 
@@ -45,8 +45,8 @@ QString countText(const QString &one, const QString &many, int n)
 }
 } // namespace
 
-SyncEngine::SyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
-    : QObject(parent)
+GmailSyncEngine::GmailSyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
+    : SyncEngine(parent)
     , m_api(api)
     , m_cache(cache)
     , m_poll(new QTimer(this))
@@ -69,14 +69,14 @@ SyncEngine::SyncEngine(GmailClient *api, MailCache *cache, QObject *parent)
     });
 }
 
-SyncEngine::~SyncEngine() = default;
+GmailSyncEngine::~GmailSyncEngine() = default;
 
-void SyncEngine::setPollInterval(int ms)
+void GmailSyncEngine::setPollInterval(int ms)
 {
     m_poll->setInterval(ms);
 }
 
-void SyncEngine::setBusy(bool b, const QString &status)
+void GmailSyncEngine::setBusy(bool b, const QString &status)
 {
     m_busy = b;
     if (!status.isEmpty()) {
@@ -87,7 +87,7 @@ void SyncEngine::setBusy(bool b, const QString &status)
     }
 }
 
-void SyncEngine::reportError(const ApiError &e, const QString &what)
+void GmailSyncEngine::reportError(const ApiError &e, const QString &what)
 {
     const QString msg = tr("%1 failed: %2").arg(what, e.message.isEmpty() ? QString::number(e.httpStatus) : e.message);
     qCWarning(lcSync) << what << "failed with HTTP" << e.httpStatus << e.reason;
@@ -95,7 +95,7 @@ void SyncEngine::reportError(const ApiError &e, const QString &what)
     emit statusChanged(msg);
 }
 
-void SyncEngine::start()
+void GmailSyncEngine::start()
 {
     m_running = true;
     m_poll->start();
@@ -107,7 +107,7 @@ void SyncEngine::start()
     prunePurged();
 }
 
-void SyncEngine::stop()
+void GmailSyncEngine::stop()
 {
     m_running = false;
     ++m_generation;
@@ -121,7 +121,7 @@ void SyncEngine::stop()
     m_labelsRefreshAgain = false;
 }
 
-void SyncEngine::touchCounts(const QStringList &labelIds)
+void GmailSyncEngine::touchCounts(const QStringList &labelIds)
 {
     for (const QString &id : labelIds) {
         if (!id.isEmpty()) {
@@ -133,7 +133,7 @@ void SyncEngine::touchCounts(const QStringList &labelIds)
     }
 }
 
-void SyncEngine::refreshMailboxTotal()
+void GmailSyncEngine::refreshMailboxTotal()
 {
     if (std::exchange(m_mailboxTotalFresh, false)) {
         return;
@@ -151,7 +151,7 @@ void SyncEngine::refreshMailboxTotal()
     });
 }
 
-void SyncEngine::refreshCounts(const QSet<QString> &labelIds)
+void GmailSyncEngine::refreshCounts(const QSet<QString> &labelIds)
 {
     refreshMailboxTotal(); // a folder's count changed: All Mail's may have too
     const int gen = m_generation;
@@ -179,7 +179,7 @@ void SyncEngine::refreshCounts(const QSet<QString> &labelIds)
     }
 }
 
-void SyncEngine::refreshLabels(std::function<void()> then, bool force)
+void GmailSyncEngine::refreshLabels(std::function<void()> then, bool force)
 {
     const int gen = m_generation;
     if (!force && m_lastLabelsRefreshMs != 0
@@ -318,7 +318,7 @@ void SyncEngine::refreshLabels(std::function<void()> then, bool force)
     });
 }
 
-void SyncEngine::fullSync(const QString &reason)
+void GmailSyncEngine::fullSync(const QString &reason)
 {
     ++m_fullSyncs;
     ++m_generation;
@@ -383,7 +383,7 @@ void SyncEngine::fullSync(const QString &reason)
     });
 }
 
-void SyncEngine::listPage(const QString &labelId, const QString &pageToken, int remaining,
+void GmailSyncEngine::listPage(const QString &labelId, const QString &pageToken, int remaining,
                           std::function<void(bool)> done)
 {
     const int gen = m_generation;
@@ -429,12 +429,12 @@ void SyncEngine::listPage(const QString &labelId, const QString &pageToken, int 
     });
 }
 
-bool SyncEngine::hasMore(const QString &labelId) const
+bool GmailSyncEngine::hasMore(const QString &labelId) const
 {
     return m_cache->meta(QStringLiteral("pageToken:") + labelId) != QLatin1String("-");
 }
 
-void SyncEngine::fetchMore(const QString &labelId)
+void GmailSyncEngine::fetchMore(const QString &labelId)
 {
     if (!m_running || m_loadingLabels.contains(labelId)) {
         return;
@@ -461,7 +461,7 @@ void SyncEngine::fetchMore(const QString &labelId)
     });
 }
 
-void SyncEngine::loadAll(const QString &labelId, const QString &displayName)
+void GmailSyncEngine::loadAll(const QString &labelId, const QString &displayName)
 {
     if (!m_running || labelId.isEmpty() || !m_loadAllLabel.isEmpty()) {
         return; // one at a time
@@ -475,12 +475,12 @@ void SyncEngine::loadAll(const QString &labelId, const QString &displayName)
     loadAllStep(false);
 }
 
-void SyncEngine::stopLoadAll()
+void GmailSyncEngine::stopLoadAll()
 {
     m_loadAllStop = true; // takes effect when the page in flight lands
 }
 
-void SyncEngine::loadAllStep(bool retried)
+void GmailSyncEngine::loadAllStep(bool retried)
 {
     const QString labelId = m_loadAllLabel;
     const auto finish = [this, labelId](bool complete) {
@@ -526,7 +526,7 @@ void SyncEngine::loadAllStep(bool retried)
     });
 }
 
-void SyncEngine::ensureLabel(const QString &labelId)
+void GmailSyncEngine::ensureLabel(const QString &labelId)
 {
     if (!m_running || labelId.isEmpty() || m_cache->meta(QStringLiteral("synced:") + labelId) == QLatin1String("1") ||
         m_loadingLabels.contains(labelId)) {
@@ -536,7 +536,7 @@ void SyncEngine::ensureLabel(const QString &labelId)
     listPage(labelId, {}, m_pageSize, [this, labelId](bool) { m_loadingLabels.remove(labelId); });
 }
 
-void SyncEngine::fetchMetadata(const QStringList &ids, std::function<void(bool)> done, bool force)
+void GmailSyncEngine::fetchMetadata(const QStringList &ids, std::function<void(bool)> done, bool force)
 {
     QStringList todo;
     for (const QString &id : ids) {
@@ -556,7 +556,7 @@ void SyncEngine::fetchMetadata(const QStringList &ids, std::function<void(bool)>
     drain();
 }
 
-void SyncEngine::drain()
+void GmailSyncEngine::drain()
 {
     while (m_inFlight < m_maxInFlight && !m_fetchQueue.isEmpty()) {
         Fetch f = m_fetchQueue.takeFirst();
@@ -586,7 +586,7 @@ void SyncEngine::drain()
     }
 }
 
-void SyncEngine::pollNow(bool force)
+void GmailSyncEngine::pollNow(bool force)
 {
     if (!m_running || m_busy) {
         return;
@@ -607,7 +607,7 @@ void SyncEngine::pollNow(bool force)
     historyPage(start, {}, run);
 }
 
-void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared_ptr<HistoryRun> run)
+void GmailSyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared_ptr<HistoryRun> run)
 {
     m_api->listHistory(QString::number(start), pageToken, [this, start, run](const QJsonObject &json, const ApiError &err) {
         if (run->generation != m_generation) {
@@ -686,7 +686,7 @@ void SyncEngine::historyPage(qint64 start, const QString &pageToken, std::shared
     });
 }
 
-void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
+void GmailSyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
 {
     QStringList fresh;
     for (const QString &id : run->added) {
@@ -735,7 +735,7 @@ void SyncEngine::finishHistory(std::shared_ptr<HistoryRun> run)
     });
 }
 
-void SyncEngine::fetchBody(const QString &id, MessageCb cb)
+void GmailSyncEngine::fetchBody(const QString &id, MessageCb cb)
 {
     const CachedMessage cached = m_cache->message(id);
     // Bodies cached by 0.2.0 lack Message-ID/References; refetch for replies.
@@ -779,7 +779,7 @@ void SyncEngine::fetchBody(const QString &id, MessageCb cb)
     });
 }
 
-QStringList SyncEngine::labelIds(const QJsonObject &message)
+QStringList GmailSyncEngine::labelIds(const QJsonObject &message)
 {
     QStringList labels;
     for (const auto &l : message.value(QStringLiteral("labelIds")).toArray()) {
@@ -788,7 +788,7 @@ QStringList SyncEngine::labelIds(const QJsonObject &message)
     return labels;
 }
 
-void SyncEngine::modifyOptimistic(const QString &id, const QStringList &add, const QStringList &remove,
+void GmailSyncEngine::modifyOptimistic(const QString &id, const QStringList &add, const QStringList &remove,
                                   const QString &what, std::function<void(const ApiError &)> after, bool announce)
 {
     // What this edit really changes, so a refusal undoes exactly that and
@@ -837,7 +837,7 @@ void SyncEngine::modifyOptimistic(const QString &id, const QStringList &add, con
     });
 }
 
-void SyncEngine::markRead(const QString &id)
+void GmailSyncEngine::markRead(const QString &id)
 {
     if (!m_cache->summary(id).unread()) {
         return;
@@ -846,7 +846,7 @@ void SyncEngine::markRead(const QString &id)
     modifyOptimistic(id, {}, {QStringLiteral("UNREAD")}, tr("Marking as read"), {}, /*announce=*/false);
 }
 
-void SyncEngine::markJunk(const QString &id)
+void GmailSyncEngine::markJunk(const QString &id)
 {
     const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || m.labels.contains(QStringLiteral("SPAM"))) {
@@ -855,7 +855,7 @@ void SyncEngine::markJunk(const QString &id)
     modifyOptimistic(id, {QStringLiteral("SPAM")}, {QStringLiteral("INBOX")}, tr("Marking as Junk"));
 }
 
-void SyncEngine::markNotJunk(const QString &id)
+void GmailSyncEngine::markNotJunk(const QString &id)
 {
     const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || !m.labels.contains(QStringLiteral("SPAM"))) {
@@ -864,7 +864,7 @@ void SyncEngine::markNotJunk(const QString &id)
     modifyOptimistic(id, {QStringLiteral("INBOX")}, {QStringLiteral("SPAM")}, tr("Marking as Not Junk"));
 }
 
-void SyncEngine::snooze(const QString &id, qint64 wakeMs)
+void GmailSyncEngine::snooze(const QString &id, qint64 wakeMs)
 {
     const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || wakeMs <= 0) {
@@ -883,7 +883,7 @@ void SyncEngine::snooze(const QString &id, qint64 wakeMs)
     });
 }
 
-void SyncEngine::unsnooze(const QString &id)
+void GmailSyncEngine::unsnooze(const QString &id)
 {
     const auto row = m_cache->snooze(id);
     if (row.messageId.isEmpty()) {
@@ -898,7 +898,7 @@ void SyncEngine::unsnooze(const QString &id)
     modifyOptimistic(id, {QStringLiteral("INBOX")}, {}, tr("Unsnoozing"));
 }
 
-int SyncEngine::wakeDue(qint64 nowMs)
+int GmailSyncEngine::wakeDue(qint64 nowMs)
 {
     if (nowMs <= 0) {
         nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -935,7 +935,7 @@ int SyncEngine::wakeDue(qint64 nowMs)
     return due.size();
 }
 
-QStringList SyncEngine::userLabels(const QStringList &labels) const
+QStringList GmailSyncEngine::userLabels(const QStringList &labels) const
 {
     QStringList out;
     for (const CachedLabel &l : m_cache->labels()) {
@@ -946,7 +946,7 @@ QStringList SyncEngine::userLabels(const QStringList &labels) const
     return out;
 }
 
-void SyncEngine::trash(const QString &id)
+void GmailSyncEngine::trash(const QString &id)
 {
     const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty()) {
@@ -1010,7 +1010,7 @@ void SyncEngine::trash(const QString &id)
     });
 }
 
-void SyncEngine::trashMany(const QStringList &idsIn)
+void GmailSyncEngine::trashMany(const QStringList &idsIn)
 {
     if (!m_running) {
         return;
@@ -1069,7 +1069,7 @@ void SyncEngine::trashMany(const QStringList &idsIn)
     }
 }
 
-bool SyncEngine::untrash(const QString &id)
+bool GmailSyncEngine::untrash(const QString &id)
 {
     if (!m_labelsBeforeTrash.contains(id)) {
         return false;
@@ -1088,7 +1088,7 @@ bool SyncEngine::untrash(const QString &id)
     return true;
 }
 
-void SyncEngine::sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson)
+void GmailSyncEngine::sendUntrash(const QString &id, const QStringList &before, const QJsonObject &trashedJson)
 {
     const QStringList trashed = labelIds(trashedJson);
     m_api->untrashMessage(id, [this, id, before, trashed](const QJsonObject &json, const ApiError &err) {
@@ -1129,7 +1129,7 @@ void SyncEngine::sendUntrash(const QString &id, const QStringList &before, const
     });
 }
 
-void SyncEngine::markUnread(const QString &id)
+void GmailSyncEngine::markUnread(const QString &id)
 {
     const CachedMessage m = m_cache->summary(id);
     if (m.id.isEmpty() || m.unread()) {
@@ -1139,7 +1139,7 @@ void SyncEngine::markUnread(const QString &id)
 }
 
 
-void SyncEngine::createLabel(const QString &name, const QString &backgroundColor,
+void GmailSyncEngine::createLabel(const QString &name, const QString &backgroundColor,
                              std::function<void(const QString &id)> then)
 {
     if (!m_running || name.trimmed().isEmpty()) {
@@ -1166,7 +1166,7 @@ void SyncEngine::createLabel(const QString &name, const QString &backgroundColor
     });
 }
 
-void SyncEngine::renameLabel(const QString &id, const QString &newName)
+void GmailSyncEngine::renameLabel(const QString &id, const QString &newName)
 {
     if (!m_running || id.isEmpty() || newName.trimmed().isEmpty()) {
         return;
@@ -1188,7 +1188,7 @@ void SyncEngine::renameLabel(const QString &id, const QString &newName)
     });
 }
 
-void SyncEngine::setFlag(const QString &id, const QString &color)
+void GmailSyncEngine::setFlag(const QString &id, const QString &color)
 {
     if (!m_running || id.isEmpty()) {
         return;
@@ -1209,7 +1209,7 @@ void SyncEngine::setFlag(const QString &id, const QString &color)
     }
 }
 
-void SyncEngine::listTrash(std::function<void(bool, const QStringList &)> done, const QString &pageToken,
+void GmailSyncEngine::listTrash(std::function<void(bool, const QStringList &)> done, const QString &pageToken,
                            std::shared_ptr<QStringList> sofar)
 {
     if (!sofar) {
@@ -1237,7 +1237,7 @@ void SyncEngine::listTrash(std::function<void(bool, const QStringList &)> done, 
     }, GmailClient::Priority::Interactive); // Empty Trash: someone is waiting, don't queue behind background paging
 }
 
-void SyncEngine::emptyTrash()
+void GmailSyncEngine::emptyTrash()
 {
     if (!m_running) {
         return;
@@ -1254,7 +1254,7 @@ void SyncEngine::emptyTrash()
     });
 }
 
-void SyncEngine::prunePurged()
+void GmailSyncEngine::prunePurged()
 {
     if (!m_running || m_cache->purged().isEmpty()) {
         return;
@@ -1281,7 +1281,7 @@ void SyncEngine::prunePurged()
     });
 }
 
-void SyncEngine::emptyLabel(const QString &id, int round, std::shared_ptr<QStringList> moved)
+void GmailSyncEngine::emptyLabel(const QString &id, int round, std::shared_ptr<QStringList> moved)
 {
     if (!m_running || id.isEmpty()) {
         return;
@@ -1351,7 +1351,7 @@ struct ClearImportantRun {
     QSet<QString> inInbox;
 };
 
-void SyncEngine::clearImportantFromFiled()
+void GmailSyncEngine::clearImportantFromFiled()
 {
     if (!m_running) {
         return;
@@ -1370,7 +1370,7 @@ void SyncEngine::clearImportantFromFiled()
     clearImportantStep(run, {});
 }
 
-void SyncEngine::clearImportantStep(std::shared_ptr<ClearImportantRun> run, const QString &pageToken)
+void GmailSyncEngine::clearImportantStep(std::shared_ptr<ClearImportantRun> run, const QString &pageToken)
 {
     const int gen = m_generation;
     const QString important = QStringLiteral("IMPORTANT");
@@ -1436,7 +1436,7 @@ void SyncEngine::clearImportantStep(std::shared_ptr<ClearImportantRun> run, cons
     });
 }
 
-void SyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
+void GmailSyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
 {
     if (!m_running || id.isEmpty() || messageIds.isEmpty()) {
         return;
@@ -1469,7 +1469,7 @@ void SyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
     }
 }
 
-void SyncEngine::restoreFolders(const QString &messageId, const QStringList &before)
+void GmailSyncEngine::restoreFolders(const QString &messageId, const QStringList &before)
 {
     if (!m_running || messageId.isEmpty()) {
         return;
@@ -1506,7 +1506,7 @@ void SyncEngine::restoreFolders(const QString &messageId, const QStringList &bef
     });
 }
 
-void SyncEngine::deleteLabel(const QString &id)
+void GmailSyncEngine::deleteLabel(const QString &id)
 {
     if (!m_running || id.isEmpty()) {
         return;
@@ -1530,7 +1530,7 @@ void SyncEngine::deleteLabel(const QString &id)
     });
 }
 
-void SyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId)
+void GmailSyncEngine::moveToLabel(const QString &messageId, const QString &targetLabelId)
 {
     if (!m_running || messageId.isEmpty() || targetLabelId.isEmpty()) {
         return;

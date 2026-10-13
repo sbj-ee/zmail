@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AppPasswordAccount.h"
 #include "AuthManager.h"
 #include "ClientConfig.h"
 #include "Vacation.h"
@@ -34,6 +35,7 @@ struct SessionOptions
     int pollIntervalMs = 15000; // how soon mail and changes made elsewhere show up
     int initialCount = 500;
     int backoffBaseMs = 1000;
+    bool imapPlaintextForTests = false; // tests only: fake IMAP server without TLS
 };
 
 // One signed-in Gmail account: auth + API client + cache + sync.
@@ -65,6 +67,13 @@ public:
     void signIn();
     void cancelSignIn();
     void signOut();
+
+    // "Gmail (app password)": IMAP instead of the Gmail API. The address and
+    // servers come from the account dialog; the app password is read from the
+    // keyring (TokenStore) when the engine connects. Remembered in QSettings
+    // (account/kind), so restoreSaved() resumes it.
+    void startAppPasswordAccount(const AppPasswordAccount &account);
+    AccountKind accountKind() const { return m_kind; }
 
     // Where secrets go (the system keyring in the app). Also holds app passwords.
     TokenStore *tokenStore() const { return m_opts.store; }
@@ -132,6 +141,8 @@ private:
     QStringList m_scopesWanted;
     std::function<void(const QString &error)> m_scopesDone; // set while consent is in the browser
     State m_state = State::NeedsClient;
+    AccountKind m_kind = AccountKind::GmailOAuth;
+    AppPasswordAccount m_imapAccount;
 };
 
 } // namespace zmail

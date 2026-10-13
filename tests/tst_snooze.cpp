@@ -1,7 +1,7 @@
 // Snooze presets, wakeDue, and Gmail INBOX remove/restore against the mock.
 #include "core/MailCache.h"
 #include "core/SnoozeTimes.h"
-#include "core/SyncEngine.h"
+#include "core/GmailSyncEngine.h"
 #include "core/AuthManager.h"
 #include "core/GmailClient.h"
 #include "core/TokenStore.h"
@@ -24,7 +24,7 @@ struct Rig
     std::unique_ptr<AuthManager> auth;
     std::unique_ptr<GmailClient> api;
     MailCache cache;
-    std::unique_ptr<SyncEngine> sync;
+    std::unique_ptr<GmailSyncEngine> sync;
 
     Rig()
     {
@@ -38,7 +38,7 @@ struct Rig
         api = std::make_unique<GmailClient>(auth.get(), &nam, g.apiBase());
         api->setBackoffBaseMs(5);
         cache.open(QStringLiteral(":memory:"));
-        sync = std::make_unique<SyncEngine>(api.get(), &cache);
+        sync = std::make_unique<GmailSyncEngine>(api.get(), &cache);
         sync->setPollInterval(3600 * 1000);
     }
     QString addInbox(const QString &subject)

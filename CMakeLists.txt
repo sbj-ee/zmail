@@ -125,7 +125,14 @@ add_library(zmail_app STATIC
   src/core/SizeFormat.h
   src/core/SpellChecker.cpp
   src/core/SpellChecker.h
-  src/core/SyncEngine.cpp
+  src/core/GmailSyncEngine.cpp
+  src/core/ImapClient.cpp
+  src/core/ImapClient.h
+  src/core/ImapSyncEngine.cpp
+  src/core/ImapSyncEngine.h
+  src/core/RawMime.cpp
+  src/core/RawMime.h
+  src/core/GmailSyncEngine.h
   src/core/SyncEngine.h
   src/core/TokenStore.cpp
   src/core/TokenStore.h

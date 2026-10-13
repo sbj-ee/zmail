@@ -256,7 +256,6 @@ void ImapClient::open(const QString &host, int port, const QString &user, const 
     };
     const QByteArray login = "LOGIN " + quote(user) + ' ' + quote(password);
     m_greeting = [this, finish, login](const QByteArray &line) {
-        m_greeting = nullptr;
         if (!line.startsWith("* OK") && !line.startsWith("* PREAUTH")) {
             finish(false, tr("Unexpected IMAP greeting."));
             fail(tr("Unexpected IMAP greeting."));
@@ -456,7 +455,8 @@ void ImapClient::handleResponse(const QByteArray &respIn)
     }
     if (m_greeting) {
         m_timer->stop();
-        m_greeting(resp);
+        const auto greeting = std::exchange(m_greeting, nullptr); // it may set m_greeting itself
+        greeting(resp);
         return;
     }
     if (resp.startsWith('+')) {

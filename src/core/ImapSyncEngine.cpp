@@ -2,6 +2,8 @@
 #include "ServerLimits.h"
 
 #include <limits>
+#include <utility>
+#include <vector>
 
 #include "Log.h"
 #include "MessageParser.h"
@@ -60,6 +62,19 @@ const ImapValue *fetchAttrs(const ImapUntagged &u)
     return &u.values.at(2);
 }
 
+// f, but only the first call goes through: an op's answer and its abort
+// handler share one of these, whichever comes first.
+template <typename... A>
+std::function<void(A...)> once(std::function<void(A...)> f)
+{
+    auto fired = std::make_shared<bool>(false);
+    return [fired, f](A... a) {
+        if (!std::exchange(*fired, true) && f) {
+            f(std::forward<A>(a)...);
+        }
+    };
+}
+
 } // namespace
 
 ImapSyncEngine::ImapSyncEngine(const AppPasswordAccount &account, PasswordProvider password, MailCache *cache,
@@ -114,6 +129,19 @@ ImapSyncEngine::~ImapSyncEngine()
 
 void ImapSyncEngine::dropAndRetry(const QString &reason)
 {
+    // What was under way or waiting is lost with the connection. Each is told
+    // below, so a change is undone in the cache and a request gets its answer.
+    std::vector<std::function<void()>> aborted;
+    if (m_runningAbort) {
+        aborted.push_back(std::move(m_runningAbort));
+    }
+    m_runningAbort = nullptr;
+    for (QueuedOp &op : m_ops) {
+        if (op.aborted) {
+            aborted.push_back(std::move(op.aborted));
+        }
+    }
+    const QString loadingAll = std::exchange(m_loadAllLabel, {});
     m_connected = false;
     m_connecting = false;
     ++m_generation;
@@ -121,6 +149,21 @@ void ImapSyncEngine::dropAndRetry(const QString &reason)
     m_opRunning = false;
     m_idleRenew->stop();
     setBusy(false);
+    scheduleRetry(reason);
+    const QPointer<ImapSyncEngine> self(this);
+    for (const auto &abort : aborted) {
+        abort();
+        if (!self) {
+            return;
+        }
+    }
+    if (!loadingAll.isEmpty()) {
+        emit loadAllFinished(loadingAll, m_loadAllCount, false);
+    }
+}
+
+void ImapSyncEngine::scheduleRetry(const QString &reason)
+{
     const ServerLimits::Kind kind = ServerLimits::classifyImap(reason);
     m_lastLimit = kind;
     if (kind == ServerLimits::Kind::AuthFailed) {
@@ -168,6 +211,7 @@ void ImapSyncEngine::stop()
     m_retry->stop();
     ++m_generation;
     m_ops.clear();
+    m_runningAbort = nullptr;
     m_opRunning = false;
     m_connected = false;
     m_connecting = false;
@@ -203,6 +247,16 @@ QByteArray ImapSyncEngine::selectCmd(const Folder &f) const
         cmd += " (CONDSTORE)";
     }
     return cmd;
+}
+
+// Every SELECT goes through here. Until the server answers, no folder counts
+// as selected: afterOps() selects INBOX outside the op queue, and an op that
+// starts meanwhile must send its own SELECT instead of trusting the folder
+// that was selected before (its UIDs are not INBOX's).
+void ImapSyncEngine::select(const Folder &f, ImapClient::ReplyCb cb)
+{
+    m_imap.setSelected({});
+    m_imap.command(selectCmd(f), std::move(cb));
 }
 
 QString ImapSyncEngine::labelIdForGmLabel(const QString &l)
@@ -394,7 +448,15 @@ void ImapSyncEngine::connectAndSync(bool full)
                                             }
                                         }
                                         auto step = std::make_shared<std::function<void()>>();
-                                        *step = [this, others, done, step]() mutable {
+                                        // Weak: a step that owned itself would never be freed when a
+                                        // callback it waits on is dropped (lost connection). The callbacks
+                                        // in flight keep it alive.
+                                        const std::weak_ptr<std::function<void()>> weakStep = step;
+                                        *step = [this, others, done, weakStep]() mutable {
+                                            const auto step = weakStep.lock();
+                                            if (!step) {
+                                                return;
+                                            }
                                             if (others.isEmpty()) {
                                                 emit messagesChanged();
                                                 done();
@@ -413,12 +475,12 @@ void ImapSyncEngine::connectAndSync(bool full)
     });
 }
 
-void ImapSyncEngine::enqueue(Op op, bool front)
+void ImapSyncEngine::enqueue(Op op, bool front, std::function<void()> aborted)
 {
     if (front) {
-        m_ops.push_front(std::move(op));
+        m_ops.push_front({std::move(op), std::move(aborted)});
     } else {
-        m_ops.push_back(std::move(op));
+        m_ops.push_back({std::move(op), std::move(aborted)});
     }
     runNext();
 }
@@ -436,14 +498,16 @@ void ImapSyncEngine::runNext()
     m_idleRenew->stop();
     m_poll->stop();
     m_busy = true;
-    Op op = std::move(m_ops.front());
+    QueuedOp op = std::move(m_ops.front());
     m_ops.pop_front();
+    m_runningAbort = std::move(op.aborted);
     const int gen = m_generation;
-    op([this, gen] {
+    op.run([this, gen] {
         if (gen != m_generation) {
             return;
         }
         m_opRunning = false;
+        m_runningAbort = nullptr;
         QTimer::singleShot(0, this, [this, gen] {
             if (gen == m_generation) {
                 runNext();
@@ -471,7 +535,7 @@ void ImapSyncEngine::afterOps()
         emit idle();
     };
     if (inbox && m_imap.selected() != inbox->name) {
-        m_imap.command(selectCmd(*inbox), [this, gen, goIdle](const ImapClient::Reply &r) {
+        select(*inbox, [this, gen, goIdle](const ImapClient::Reply &r) {
             if (gen != m_generation) {
                 return;
             }
@@ -674,7 +738,7 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
     const int gen = m_generation;
     const qint64 oldModSeq = f->highestModSeq;
     const qint64 oldLastUid = f->lastUid;
-    m_imap.command(selectCmd(*f), [this, gen, labelId, full, then, oldModSeq, oldLastUid](const ImapClient::Reply &r) {
+    select(*f, [this, gen, labelId, full, then, oldModSeq, oldLastUid](const ImapClient::Reply &r) {
         if (gen != m_generation) {
             return;
         }
@@ -831,7 +895,15 @@ void ImapSyncEngine::pollNow(bool force)
             }
         }
         auto step = std::make_shared<std::function<void()>>();
-        *step = [this, labels, done, step]() mutable {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, labels, done, weakStep]() mutable {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (labels.isEmpty()) {
                 refreshCounts([done] { done(); });
                 *step = nullptr;
@@ -875,7 +947,7 @@ void ImapSyncEngine::fetchMore(const QString &labelId)
             return;
         }
         const int gen = m_generation;
-        m_imap.command(selectCmd(*f), [this, gen, labelId, done](const ImapClient::Reply &r) {
+        select(*f, [this, gen, labelId, done](const ImapClient::Reply &r) {
             if (gen != m_generation) {
                 return;
             }
@@ -959,8 +1031,9 @@ QJsonObject ImapSyncEngine::fullJson(const QString &id, const QByteArray &raw) c
     return json;
 }
 
-void ImapSyncEngine::fetchRaw(const QString &id, std::function<void(const QByteArray &raw, const QString &error)> cb)
+void ImapSyncEngine::fetchRaw(const QString &id, std::function<void(const QByteArray &raw, const QString &error)> cbIn)
 {
+    const auto cb = once(std::move(cbIn));
     // In front of any sync: the user is waiting for this one.
     enqueue([this, id, cb](Done done) {
         locate({id}, [this, id, cb, done](const Located &where) {
@@ -999,7 +1072,7 @@ void ImapSyncEngine::fetchRaw(const QString &id, std::function<void(const QByteA
                 done();
             });
         });
-    }, /*front=*/true);
+    }, /*front=*/true, [cb] { cb({}, tr("Disconnected.")); });
 }
 
 void ImapSyncEngine::fetchFull(const QString &id, FullCb cb)
@@ -1055,7 +1128,15 @@ void ImapSyncEngine::locate(const QStringList &ids, std::function<void(const Loc
     auto left = std::make_shared<QStringList>(ids);
     auto step = std::make_shared<std::function<void()>>();
     const int gen = m_generation;
-    *step = [this, gen, order, result, left, then, step]() mutable {
+    // Weak: a step that owned itself would never be freed when a
+    // callback it waits on is dropped (lost connection). The callbacks
+    // in flight keep it alive.
+    const std::weak_ptr<std::function<void()>> weakStep = step;
+    *step = [this, gen, order, result, left, then, weakStep]() mutable {
+        const auto step = weakStep.lock();
+        if (!step) {
+            return;
+        }
         if (gen != m_generation) {
             *step = nullptr;
             return;
@@ -1098,7 +1179,7 @@ void ImapSyncEngine::selectFolder(const QString &labelId, std::function<void(boo
         return;
     }
     const int gen = m_generation;
-    m_imap.command(selectCmd(*f), [this, gen, labelId, then](const ImapClient::Reply &r) {
+    select(*f, [this, gen, labelId, then](const ImapClient::Reply &r) {
         if (gen != m_generation) {
             return;
         }
@@ -1131,7 +1212,15 @@ void ImapSyncEngine::searchIn(const QString &labelId, const QStringList &ids,
             chunks->append(ids.mid(i, 50));
         }
         auto step = std::make_shared<std::function<void()>>();
-        *step = [this, gen, found, chunks, then, step]() {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, gen, found, chunks, then, weakStep]() {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (gen != m_generation) {
                 *step = nullptr;
                 return;
@@ -1221,7 +1310,15 @@ void ImapSyncEngine::applyLabels(const QStringList &ids, const QStringList &add,
         auto error = std::make_shared<QString>();
         auto step = std::make_shared<std::function<void()>>();
         const int gen = m_generation;
-        *step = [this, gen, groups, add, remove, ok, error, done, step]() {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, gen, groups, add, remove, ok, error, done, weakStep]() {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (gen != m_generation) {
                 *step = nullptr;
                 return;
@@ -1415,13 +1512,15 @@ void ImapSyncEngine::modifyOptimistic(const QStringList &ids, const QStringList 
         }
         return;
     }
-    QStringList touched = add + remove;
-    enqueue([this, ids, add, remove, what, after, changed, touched](Done done) {
-        applyLabels(ids, add, remove, [this, what, after, changed, touched, done](bool ok, const QString &error) {
+    // The server's answer, or the connection going before it came.
+    const auto settle = once(std::function<void(bool, const QString &)>(
+        [this, what, after, changed](bool ok, const QString &error) {
             if (!ok) {
-                const MailCache::Batch batch(*m_cache);
-                for (auto it = changed.constBegin(); it != changed.constEnd(); ++it) {
-                    m_cache->modifyLabels(it.key(), it.value().second, it.value().first);
+                {
+                    const MailCache::Batch batch(*m_cache);
+                    for (auto it = changed.constBegin(); it != changed.constEnd(); ++it) {
+                        m_cache->modifyLabels(it.key(), it.value().second, it.value().first);
+                    }
                 }
                 emit syncError(tr("%1 failed: %2").arg(what, error.left(200)));
                 emit messagesChanged();
@@ -1429,8 +1528,14 @@ void ImapSyncEngine::modifyOptimistic(const QStringList &ids, const QStringList 
             if (after) {
                 after(ok);
             }
+        }));
+    enqueue([this, ids, add, remove, settle](Done done) {
+        applyLabels(ids, add, remove, [this, settle, done](bool ok, const QString &error) {
+            settle(ok, error);
             refreshCounts(done);
         });
+    }, /*front=*/false, [this, settle] {
+        settle(false, tr("the connection to %1 was lost").arg(m_account.imapHost));
     });
 }
 
@@ -1695,15 +1800,14 @@ void ImapSyncEngine::emptyTrash()
             emit trashEmptied(int(list.size()));
             done();
         });
-    });
+    }, /*front=*/false, [this] { emit trashEmptied(-1); });
 }
 
-void ImapSyncEngine::createLabel(const QString &name, const QString &, std::function<void(const QString &id)> then)
+void ImapSyncEngine::createLabel(const QString &name, const QString &, std::function<void(const QString &id)> thenIn)
 {
+    const auto then = once(std::move(thenIn));
     if (!m_connected || name.trimmed().isEmpty()) {
-        if (then) {
-            then({});
-        }
+        then({});
         return;
     }
     // Colours are a Gmail API feature; IMAP folders have none.
@@ -1728,7 +1832,7 @@ void ImapSyncEngine::createLabel(const QString &name, const QString &, std::func
                 });
             });
         });
-    });
+    }, /*front=*/false, [then] { then({}); });
 }
 
 void ImapSyncEngine::renameLabel(const QString &id, const QString &newName)
@@ -1819,15 +1923,17 @@ void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringL
         emit labelEmptied(id, {});
         return;
     }
+    const auto emptied = once(std::function<void(const QStringList &)>(
+        [this, id](const QStringList &moved) { emit labelEmptied(id, moved); }));
     // Every message in the folder goes to Trash (and out of the folder and Inbox).
-    enqueue([this, id](Done done) {
-        idsInFolder(id, [this, id, done](bool ok, const QHash<qint64, QString> &uidToId, const QHash<qint64, QStringList> &) {
+    enqueue([this, id, emptied](Done done) {
+        idsInFolder(id, [this, id, emptied, done](bool ok, const QHash<qint64, QString> &uidToId, const QHash<qint64, QStringList> &) {
             const QStringList ids = uidToId.values();
             if (!ok || ids.isEmpty()) {
                 if (!ok) {
                     emit syncError(tr("Emptying the folder failed."));
                 }
-                emit labelEmptied(id, {});
+                emptied({});
                 done();
                 return;
             }
@@ -1846,15 +1952,15 @@ void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringL
             }
             Folder *trashFolder = folder(QStringLiteral("TRASH"));
             m_imap.command(moveCmd(set, trashFolder ? trashFolder->wire : QByteArray("\"[Gmail]/Trash\"")),
-                           [this, id, ids, done](const ImapClient::Reply &r) {
+                           [this, emptied, ids, done](const ImapClient::Reply &r) {
                 if (!r.ok) {
                     emit syncError(tr("Emptying the folder failed: %1").arg(r.text.left(200)));
                 }
-                emit labelEmptied(id, r.ok ? ids : QStringList());
+                emptied(r.ok ? ids : QStringList());
                 refreshCounts(done);
             });
         });
-    });
+    }, /*front=*/false, [emptied] { emptied({}); });
 }
 
 void ImapSyncEngine::unemptyLabel(const QString &id, const QStringList &messageIds)
@@ -1868,11 +1974,12 @@ void ImapSyncEngine::clearImportantFromFiled()
         emit importantCleared(0, false);
         return;
     }
-    enqueue([this](Done done) {
-        idsInFolder(QStringLiteral("IMPORTANT"), [this, done](bool ok, const QHash<qint64, QString> &ids,
-                                                             const QHash<qint64, QStringList> &labels) {
+    const auto report = once(std::function<void(int, bool)>([this](int n, bool ok) { emit importantCleared(n, ok); }));
+    enqueue([this, report](Done done) {
+        idsInFolder(QStringLiteral("IMPORTANT"), [this, report, done](bool ok, const QHash<qint64, QString> &ids,
+                                                                     const QHash<qint64, QStringList> &labels) {
             if (!ok) {
-                emit importantCleared(0, false);
+                report(0, false);
                 done();
                 return;
             }
@@ -1891,12 +1998,12 @@ void ImapSyncEngine::clearImportantFromFiled()
                 }
             }
             if (cleared.isEmpty()) {
-                emit importantCleared(0, true);
+                report(0, true);
                 done();
                 return;
             }
             m_imap.command("UID STORE " + set + " -X-GM-LABELS.SILENT (\"\\\\Important\")",
-                           [this, cleared, done](const ImapClient::Reply &r) {
+                           [this, cleared, report, done](const ImapClient::Reply &r) {
                 if (r.ok) {
                     const MailCache::Batch batch(*m_cache);
                     for (const QString &m : cleared) {
@@ -1904,11 +2011,11 @@ void ImapSyncEngine::clearImportantFromFiled()
                     }
                 }
                 emit messagesChanged();
-                emit importantCleared(r.ok ? int(cleared.size()) : 0, r.ok);
+                report(r.ok ? int(cleared.size()) : 0, r.ok);
                 refreshCounts(done);
             });
         });
-    });
+    }, /*front=*/false, [report] { report(0, false); });
 }
 
 void ImapSyncEngine::restoreFolders(const QString &messageId, const QStringList &before)
@@ -1977,8 +2084,9 @@ void ImapSyncEngine::notYet(const QString &what)
 
 // ---- Gmail-syntax search (X-GM-RAW) ---------------------------------------
 
-void ImapSyncEngine::serverSearch(const QString &query, SearchCb cb)
+void ImapSyncEngine::serverSearch(const QString &query, SearchCb cbIn)
 {
+    const SearchCb cb = once(std::move(cbIn));
     const QString q = query.simplified();
     if (!m_connected || q.isEmpty()) {
         cb({}, m_connected ? QString() : tr("Not connected."));
@@ -2044,21 +2152,23 @@ void ImapSyncEngine::serverSearch(const QString &query, SearchCb cb)
                 });
             });
         });
-    }, /*front=*/true);
+    }, /*front=*/true, [cb] { cb({}, tr("Disconnected.")); });
 }
 
 } // namespace zmail
 
 namespace zmail {
 
-void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceId, DraftCb cb)
+void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceId, DraftCb cbIn)
 {
+    const DraftCb cb = once(std::move(cbIn));
+    auto appended = std::make_shared<bool>(false);
     if (!m_connected || !folder(QStringLiteral("DRAFT"))) {
         cb(false, {}, {}, tr("Not connected to the mail server."));
         return;
     }
     const int gen = m_generation;
-    enqueue([this, gen, mime, replaceId, cb](Done done) {
+    enqueue([this, gen, mime, replaceId, cb, appended](Done done) {
         Folder *d = folder(QStringLiteral("DRAFT"));
         if (!d) {
             cb(false, {}, {}, tr("There's no Drafts folder."));
@@ -2066,7 +2176,7 @@ void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceI
             return;
         }
         m_imap.command("APPEND " + d->wire + " (\\Seen \\Draft)", mime,
-                       [this, gen, replaceId, cb, done](const ImapClient::Reply &r) {
+                       [this, gen, replaceId, cb, appended, done](const ImapClient::Reply &r) {
             if (gen != m_generation) {
                 cb(false, {}, {}, tr("The connection was reset."));
                 return;
@@ -2076,6 +2186,7 @@ void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceI
                 done();
                 return;
             }
+            *appended = true;
             // "[APPENDUID <uidvalidity> <uid>] (Success)" (UIDPLUS; Gmail has it).
             static const QRegularExpression re(QStringLiteral("APPENDUID\\s+\\d+\\s+(\\d+)"),
                                                QRegularExpression::CaseInsensitiveOption);
@@ -2112,11 +2223,18 @@ void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceI
                 });
             });
         });
+    }, /*front=*/false, [cb, appended] {
+        if (*appended) {
+            cb(true, {}, {}, {}); // saved; the next sync shows it
+        } else {
+            cb(false, {}, {}, tr("The connection was reset."));
+        }
     });
 }
 
-void ImapSyncEngine::deleteDraft(const QString &id, std::function<void(bool ok, const QString &error)> cb)
+void ImapSyncEngine::deleteDraft(const QString &id, std::function<void(bool ok, const QString &error)> cbIn)
 {
+    const auto cb = once(std::move(cbIn));
     if (!m_connected || id.isEmpty()) {
         cb(false, tr("Not connected to the mail server."));
         return;
@@ -2126,7 +2244,7 @@ void ImapSyncEngine::deleteDraft(const QString &id, std::function<void(bool ok, 
             cb(ok, error);
             done();
         });
-    });
+    }, /*front=*/false, [cb] { cb(false, tr("The connection was reset.")); });
 }
 
 // In Drafts: flag \Deleted and expunge just that UID. Gmail then discards the

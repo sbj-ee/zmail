@@ -1,10 +1,20 @@
 // Offscreen screenshots of the "Gmail (app password)" account dialog, against
 // local fake IMAP/SMTP servers and a made-up password (never a real one).
 //   zmail_dialogshot <outdir>   writes apppassword-empty.png, -ok.png, -error.png, connect.png
+//   zmail_dialogshot <outdir> imap   main window on an app-password (IMAP) account:
+//                                    imap-mainwindow.png, imap-idle-newmail.png
 #include "core/MailSession.h"
 #include "core/TokenStore.h"
 #include "core/ConnectionTester.h"
 #include "mock/FakeMailServer.h"
+#include "mock/FakeImapServer.h"
+#include "MainWindow.hpp"
+#include "core/SyncEngine.h"
+#include "core/MailCache.h"
+#include <QSettings>
+#include <QTreeView>
+#include <QStatusBar>
+#include <QSignalSpy>
 #include "ui/AppPasswordDialog.h"
 #include "ui/ConnectDialog.h"
 #include "ui/Theme.h"
@@ -50,6 +60,60 @@ int main(int argc, char *argv[])
     const QString out = argc > 1 ? QString::fromLocal8Bit(argv[1]) : QDir::currentPath();
     QDir().mkpath(out);
     MemoryTokenStore store;
+
+    if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("imap")) {
+        test::FakeImapServer imap;
+        imap.seedDemo(24);
+        store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password); // the fake's made-up one
+        AppPasswordAccount a;
+        a.email = imap.user;
+        a.imapHost = QStringLiteral("127.0.0.1");
+        a.imapPort = imap.port();
+        {
+            QSettings s;
+            s.clear();
+            a.save(s);
+        }
+        SessionOptions o;
+        o.client.status = ClientConfig::LoadStatus::Missing;
+        o.store = &store;
+        o.cachePathOverride = QStringLiteral(":memory:");
+        o.contactsPathOverride = QStringLiteral(":memory:");
+        o.imapPlaintextForTests = true;
+        o.pollIntervalMs = 3600 * 1000;
+        MailSession session(o);
+        MainWindow w;
+        w.setSession(&session);
+        w.resize(1180, 740);
+        w.show();
+        session.restoreSaved();
+        QSignalSpy idle(session.sync(), &SyncEngine::idle);
+        if (!idle.wait(10000)) {
+            return 2;
+        }
+        QTest::qWait(800);
+        auto *list = w.findChild<QTreeView *>(QStringLiteral("messageList"));
+        if (list && list->model()->rowCount() > 0) {
+            list->setCurrentIndex(list->model()->index(0, 0));
+        }
+        QTest::qWait(1500);
+        w.statusBar()->clearMessage();
+        w.grab().save(out + QStringLiteral("/imap-mainwindow.png"));
+        std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-mainwindow.png")));
+        QSignalSpy newMail(session.sync(), &SyncEngine::newMail);
+        QTest::qWaitFor([&] { return imap.anyIdling(); }, 5000);
+        imap.deliver(test::FakeImapServer::makeMessage(QStringLiteral("Nia Okafor"), QStringLiteral("nia@example.org"),
+                                                       QStringLiteral("Pushed by IDLE: crew roster for Friday"),
+                                                       QStringLiteral("Roster attached below. This arrived over IMAP IDLE.")));
+        if (!newMail.wait(5000)) {
+            return 3;
+        }
+        QTest::qWait(1200);
+        w.grab().save(out + QStringLiteral("/imap-idle-newmail.png"));
+        std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-idle-newmail.png")));
+        QSettings().clear();
+        return 0;
+    }
 
     {
         ui::AppPasswordDialog d(&store);

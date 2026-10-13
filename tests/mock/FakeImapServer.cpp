@@ -407,7 +407,7 @@ quint64 FakeImapServer::deliver(const QByteArray &raw, const QStringList &labels
     m.modseq = ++m_modseq;
     m.raw = raw;
     m.internalDate = internalDate.isEmpty()
-        ? QLocale::c().toString(QDateTime::currentDateTime(), QStringLiteral("dd-MMM-yyyy HH:mm:ss +0000"))
+        ? QLocale::c().toString(QDateTime::currentDateTimeUtc(), QStringLiteral("dd-MMM-yyyy HH:mm:ss +0000"))
         : internalDate;
     m_msgs.append(m);
     notify([this](const QString &folder, Session *) {
@@ -512,7 +512,7 @@ QByteArray FakeImapServer::makeMessage(const QString &fromName, const QString &f
         ascii = ascii && c.unicode() < 128;
     }
     m += "Subject: " + (ascii ? subject.toUtf8() : "=?UTF-8?B?" + subject.toUtf8().toBase64() + "?=") + "\r\n";
-    m += "Date: " + QLocale::c().toString(date, QStringLiteral("ddd, dd MMM yyyy HH:mm:ss +0000")).toLatin1() + "\r\n";
+    m += "Date: " + QLocale::c().toString(date.toUTC(), QStringLiteral("ddd, dd MMM yyyy HH:mm:ss +0000")).toLatin1() + "\r\n";
     m += "Message-ID: <" + QByteArray::number(qHash(subject + fromAddr + date.toString()), 16) + "@example.com>\r\n";
     m += "MIME-Version: 1.0\r\n";
     if (html.isEmpty()) {

@@ -5,6 +5,7 @@
 #include "core/AppPasswordAccount.h"
 #include "core/ImapClient.h"
 #include "core/ImapSyncEngine.h"
+#include "core/SmtpSender.h"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/MessageParser.h"
@@ -370,7 +371,7 @@ private slots:
         QCOMPARE(session.account(), server.user);
         QVERIFY(qobject_cast<ImapSyncEngine *>(session.sync()));
         QVERIFY(!session.api());
-        QVERIFY(!session.sender());
+        QVERIFY(qobject_cast<SmtpSender *>(session.sender())); // SMTP + IMAP drafts (part 4)
         QSignalSpy idle(session.sync(), &SyncEngine::idle);
         QVERIFY(idle.wait(10000));
         QCOMPARE(session.cache()->count(QStringLiteral("INBOX")), 5);

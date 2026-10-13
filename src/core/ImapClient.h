@@ -76,6 +76,9 @@ public:
 
     // Queue a command (without tag / CRLF). Leaves IDLE first if idling.
     void command(const QByteArray &cmd, ReplyCb cb);
+    // A command ending in one synchronizing literal (APPEND): sends
+    // "cmd {n}", waits for the server's "+", then the bytes.
+    void command(const QByteArray &cmd, const QByteArray &literal, ReplyCb cb);
     // IDLE until the next command(); untagged responses arrive via untagged().
     void idle();
     bool idling() const { return m_idleState != IdleState::Off; }
@@ -98,10 +101,13 @@ private:
     {
         QByteArray cmd;
         ReplyCb cb;
+        QByteArray literal;
+        bool hasLiteral = false;
     };
     void onReadyRead();
     bool takeResponse(QByteArray &out); // one complete response (line + literals)
     void handleResponse(const QByteArray &resp);
+    void submit(Pending p);
     void sendNext();
     void fail(const QString &reason);
 

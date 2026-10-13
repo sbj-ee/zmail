@@ -2591,8 +2591,8 @@ void MainWindow::sendNextQueued(int sent, int failed, QList<qint64> left)
     statusBar()->showMessage(tr("Sending queued mail\u2026 %1 to go").arg(left.size() + 1));
     QPointer<MainWindow> guard(this);
     zmail::Sender *sender = m_session->sender();
-    if (!sender) { // app-password accounts send over SMTP in a later update
-        statusBar()->showMessage(tr("Sending isn't available for this account yet; the queue is kept."), 8000);
+    if (!sender) { // signed out meanwhile
+        statusBar()->showMessage(tr("Not connected; the queue is kept."), 8000);
         return;
     }
     sender->send(q.mime, q.threadId, [guard, sender, id, q, sent, failed, left](const zmail::Sender::Result &r) {

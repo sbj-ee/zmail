@@ -95,6 +95,13 @@ public:
     void restoreFolders(const QString &messageId, const QStringList &before) override;
     void moveToLabel(const QString &messageId, const QString &targetLabelId) override;
     void touchCounts(const QStringList &labelIds) override;
+
+    // Drafts for SmtpSender: APPEND to [Gmail]/Drafts (\Draft \Seen), read
+    // back the new X-GM-MSGID (APPENDUID), then remove the draft it replaces.
+    // The id is the message's hex X-GM-MSGID, which also serves as the draft id.
+    using DraftCb = std::function<void(bool ok, const QString &id, const QString &threadId, const QString &error)>;
+    void appendDraft(const QByteArray &mime, const QString &replaceId, DraftCb cb);
+    void deleteDraft(const QString &id, std::function<void(bool ok, const QString &error)> cb);
     int fullSyncs() const override { return m_fullSyncs; }
 
     // Gmail's X-GM-LABELS value / special-use attribute -> API label id.
@@ -155,6 +162,7 @@ private:
     QStringList userLabels(const QStringList &labels) const;
     void idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
                                                                 const QHash<qint64, QStringList> &gmLabels)> then);
+    void removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then);
     QHash<QString, QStringList> m_labelsBeforeTrash; // for untrash()
 
     AppPasswordAccount m_account;

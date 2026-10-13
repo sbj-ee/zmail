@@ -47,7 +47,8 @@ public:
     QStringList userFolders;            // extra empty labels to list
     QList<QByteArray> commands;         // every command line after LOGIN (tags stripped)
     int logins = 0;
-    bool refuseChanges = false;          // STORE / MOVE answer NO (to test rollback)
+    bool refuseChanges = false;
+    QList<QByteArray> appended;         // every APPEND's message bytes          // STORE / MOVE answer NO (to test rollback)
 
     // New message; notifies IDLE sessions (* n EXISTS). Returns its X-GM-MSGID.
     quint64 deliver(const QByteArray &raw, const QStringList &labels = {QStringLiteral("\\Inbox")},
@@ -81,11 +82,14 @@ private:
         bool authed = false;
         QString selected;
         QByteArray idleTag;
+        QByteArray literalLine;   // a command waiting for its literal
+        qint64 literalNeed = -1;
+        QByteArray literal;
     };
     QList<Folder> folders() const;
     bool inFolder(const Msg &m, const Folder &f) const;
     QList<Msg *> members(const QString &folder);  // assigns UIDs, in UID order
-    void handle(Session *s, const QByteArray &line);
+    void handle(Session *s, const QByteArray &line, const QByteArray &literal = {});
     void reply(Session *s, const QByteArray &data);
     QByteArray fetchLine(const QString &folder, int seq, Msg *m, const QList<QByteArray> &items, bool withModseq);
     void notify(const std::function<QByteArray(const QString &folder, Session *)> &what);

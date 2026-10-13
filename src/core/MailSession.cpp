@@ -1,6 +1,7 @@
 #include "MailSession.h"
 
 #include "Sender.h"
+#include "SmtpSender.h"
 
 #include "GmailClient.h"
 #include "Log.h"
@@ -231,6 +232,9 @@ void MailSession::startAppPasswordAccount(const AppPasswordAccount &account)
     };
     auto engine = std::make_unique<ImapSyncEngine>(account, password, m_cache.get());
     engine->setPlaintextForTests(m_opts.imapPlaintextForTests);
+    auto smtp = std::make_unique<SmtpSender>(account, password, engine.get());
+    smtp->setPlaintextForTests(m_opts.imapPlaintextForTests);
+    m_sender = std::move(smtp);
     m_sync = std::move(engine);
     m_sync->setPollInterval(m_opts.pollIntervalMs);
     m_sync->setInitialCount(m_opts.initialCount);

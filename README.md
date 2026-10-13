@@ -181,8 +181,6 @@ flags/stars, read/unread, bulk actions, Gmail search syntax (`from:`,
 - **No vacation responder.** Gmail's auto-reply is only reachable through the
   Gmail API. Set it in Gmail on the web (Settings → General → Vacation
   responder). **Settings → Vacation Responder** in zmail says so.
-- **No Google Contacts sync** (People API). The local address book still
-  learns addresses from your mail.
 - **No folder colours.** IMAP folders have none. Colours set in Gmail on the
   web aren't shown.
 - **Snooze is local to zmail**, as it is with OAuth: the message leaves the
@@ -337,14 +335,15 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
   Gmail keeps those messages in its own Trash until it purges them.
 - Shift+click and Shift+arrows select a range from the current message, up
   or down.
-- **Settings → Contacts** organises the contacts synced from Google. Select
+- **Settings → Contacts** is zmail's own address book, kept on this
+  computer (`contacts.db`); zmail doesn't sync with Google Contacts. Select
   one to read it; **Edit** (or a double-click) opens it in a window of its
   own to change its name, addresses, nickname, categories (a contact can be
   in several), your own fields (Phone, Company, anything), comment, and
-  whether it is hidden. Edits to a Google contact's name or addresses are
-  kept across syncs, and **Use Google's** goes back to Google's version.
-  **New Contact** adds one of your own. Hidden contacts leave the list and are not suggested when you write
-  a message. All of this stays on your computer; nothing is written to Google.
+  whether it is hidden. Contacts an older zmail copied from Google Contacts
+  stay and work like the rest; **Use Original** undoes edits to their name
+  and addresses. **New Contact** adds one; **Delete** removes any contact. Hidden contacts leave the list and are not suggested when you write
+  a message. All of this stays on your computer; nothing is read from or written to Google.
   **Export** saves the contacts shown, or all of them, as a JSON file with
   their categories, fields and comments.
 - **Nicknames**, as in Eudora: give a contact a nickname (Settings →

@@ -1,5 +1,4 @@
 #include "core/ContactStore.h"
-#include "core/PeopleClient.h"
 #include "core/AuthManager.h"
 #include "ui/ContactsWindow.h"
 #include "ui/ContactEditDialog.h"
@@ -55,54 +54,37 @@ private slots:
         QVERIFY(s.isTrusted(QStringLiteral("ada@example.org")));
     }
 
-    void personJsonMapsEmails()
+    // Google Contacts sync is gone: no button, no People scopes, and rows an
+    // older zmail synced still autocomplete, edit and delete like any contact.
+    void contactsAreZmailOnly()
     {
-        QJsonObject person{
-            {QStringLiteral("resourceName"), QStringLiteral("people/c123")},
-            {QStringLiteral("etag"), QStringLiteral("e1")},
-            {QStringLiteral("names"), QJsonArray{QJsonObject{{QStringLiteral("displayName"), QStringLiteral("Ada")}}}},
-            {QStringLiteral("emailAddresses"),
-             QJsonArray{QJsonObject{{QStringLiteral("value"), QStringLiteral("Ada@Example.org")},
-                                    {QStringLiteral("metadata"), QJsonObject{{QStringLiteral("primary"), true}}}}}},
-        };
-        Contact c = PeopleClient::contactFromPerson(person, QStringLiteral("google"));
-        QCOMPARE(c.googleResource, QStringLiteral("people/c123"));
-        QCOMPARE(c.emails.first().email, QStringLiteral("ada@example.org"));
-        QVERIFY(c.emails.first().primary);
-    }
-
-    void syncTokenResyncClearsGoogle()
-    {
-        // Pure store behaviour the sync path relies on: expired token → clear google/other.
+        for (const QString &scope : AuthManager::scopes() + AuthManager::settingsScopes()) {
+            QVERIFY2(!scope.contains(QLatin1String("contacts")), qPrintable(scope));
+        }
         ContactStore s;
         QVERIFY(s.open(QStringLiteral(":memory:")));
-        Contact g;
-        g.id = QStringLiteral("people/1");
-        g.displayName = QStringLiteral("G");
-        g.source = QStringLiteral("google");
-        g.emails.append({QStringLiteral("g@example.com"), true});
-        s.upsertContact(g);
-        Contact o;
-        o.id = QStringLiteral("otherContacts/1");
-        o.displayName = QStringLiteral("O");
-        o.source = QStringLiteral("other");
-        o.emails.append({QStringLiteral("o@example.com"), true});
-        s.upsertContact(o);
-        s.addLocalContact(QStringLiteral("Local"), QStringLiteral("local@example.com"));
-        s.setMeta(QStringLiteral("connectionsSyncToken"), QStringLiteral("tok"));
-        s.clearGoogleContacts();
-        s.setMeta(QStringLiteral("connectionsSyncToken"), {});
-        QCOMPARE(s.contacts().size(), 1);
-        QCOMPARE(s.contacts().first().source, QStringLiteral("local"));
-        QVERIFY(s.meta(QStringLiteral("connectionsSyncToken")).isEmpty());
-    }
+        google(s, QStringLiteral("people/9"), QStringLiteral("Grace Hopper"), QStringLiteral("grace@navy.example"));
+        google(s, QStringLiteral("otherContacts/9"), QStringLiteral("Shop"), QStringLiteral("orders@shop.example"),
+               QStringLiteral("other"));
+        const QString mine = s.addLocalContact(QStringLiteral("Gregor"), QStringLiteral("gregor@example.org"));
+        const auto hits = s.autocomplete(QStringLiteral("gr"));
+        QStringList emails;
+        for (const AutocompleteHit &h : hits) {
+            emails << h.email;
+        }
+        QVERIFY(emails.contains(QStringLiteral("grace@navy.example")));
+        QVERIFY(emails.contains(QStringLiteral("gregor@example.org")));
+        Contact g = s.contact(QStringLiteral("people/9"));
+        g.displayName = QStringLiteral("RADM Grace Hopper");
+        QVERIFY(s.updateContact(g));
+        QCOMPARE(s.contact(QStringLiteral("people/9")).displayName, QStringLiteral("RADM Grace Hopper"));
 
-    void contactScopesListed()
-    {
-        const QStringList s = AuthManager::contactScopes();
-        QVERIFY(s.contains(QStringLiteral("https://www.googleapis.com/auth/contacts.readonly")));
-        QVERIFY(s.contains(QStringLiteral("https://www.googleapis.com/auth/contacts.other.readonly")));
-        QVERIFY(!AuthManager::scopes().contains(s.first())); // not on initial sign-in
+        zmail::ui::ContactsWindow w(&s);
+        QVERIFY(!w.findChild<QPushButton *>(QStringLiteral("contactsSyncButton")));
+        w.selectContacts({QStringLiteral("otherContacts/9")});
+        w.deleteSelected();
+        QVERIFY(s.contact(QStringLiteral("otherContacts/9")).id.isEmpty());
+        QVERIFY(!s.contact(mine).id.isEmpty());
     }
 
     static Contact google(ContactStore &s, const QString &id, const QString &name, const QString &email,
@@ -125,10 +107,10 @@ private slots:
         return out;
     }
 
-    // Categories, extra fields, a comment and "hidden" per contact; all of it
-    // survives a Google resync and a restart, and none of it is on the
-    // contact rows Google's data replaces.
-    void organisationSurvivesResyncAndRestart()
+    // Categories, extra fields, a comment and "hidden" per contact survive a
+    // restart, on contacts an older zmail synced from Google too (contacts.db
+    // keeps those rows: schema 4, unchanged).
+    void organisationSurvivesRestart()
     {
         QTemporaryDir dir;
         const QString path = dir.filePath(QStringLiteral("contacts.db"));
@@ -145,18 +127,12 @@ private slots:
                                                      {QStringLiteral("Company"), QStringLiteral("Analytical Engines")}});
             s.setComment(QStringLiteral("people/1"), QStringLiteral("Met at the 2026 conference."));
             s.setHidden({QStringLiteral("otherContacts/2")}, true);
-
-            // A resync after an expired token: Google's rows go and come back.
-            s.clearGoogleContacts();
-            QCOMPARE(s.contacts().size(), 0);
-            google(s, QStringLiteral("people/1"), QStringLiteral("Ada King"), QStringLiteral("ada@example.org"));
-            google(s, QStringLiteral("otherContacts/2"), QStringLiteral("noreply"), QStringLiteral("noreply@shop.example.com"),
-                   QStringLiteral("other"));
         }
         ContactStore s;
         QVERIFY(s.open(path));
         const Contact ada = s.contact(QStringLiteral("people/1"));
-        QCOMPARE(ada.displayName, QStringLiteral("Ada King")); // Google's data is Google's
+        QCOMPARE(ada.displayName, QStringLiteral("Ada Lovelace"));
+        QCOMPARE(ada.source, QStringLiteral("google")); // still says where it came from
         QCOMPARE(ada.categories, (QStringList{QStringLiteral("Family"), QStringLiteral("Work")}));
         QCOMPARE(ada.fields, (QList<ContactField>{{QStringLiteral("Phone"), QStringLiteral("555 0100")},
                                                   {QStringLiteral("Company"), QStringLiteral("Analytical Engines")}}));
@@ -399,11 +375,7 @@ private slots:
         QCOMPARE(w.selectedIds(), QStringList{QStringLiteral("people/1")});
         QVERIFY(w.findChild<QTextBrowser *>(QStringLiteral("contactSummary"))->toPlainText().contains(QStringLiteral("Analytical Engines")));
 
-        // A resync brings Google's version again; the edit stays, here and after a restart.
-        s.clearGoogleContacts();
-        google(s, QStringLiteral("people/1"), QStringLiteral("ada.l (work)"), QStringLiteral("ada@example.org"));
-        google(s, QStringLiteral("people/2"), QStringLiteral("Brook"), QStringLiteral("brook@example.org"));
-        QCOMPARE(s.contact(QStringLiteral("people/1")).displayName, QStringLiteral("Ada Lovelace"));
+        // The edit stays after a restart.
         {
             ContactStore again;
             QVERIFY(again.open(path));
@@ -416,8 +388,8 @@ private slots:
         d->reject();
         QCOMPARE(s.contact(QStringLiteral("people/1")).displayName, QStringLiteral("Ada Lovelace"));
 
-        // "Use Google's": the name and addresses go back to what Google has
-        // now; the nickname, categories, fields and comment are kept.
+        // "Use Original": the name and addresses go back to the copy an older
+        // zmail took from Google; the nickname, categories, fields and comment are kept.
         d.reset(w.makeEditDialog(QStringLiteral("people/1")));
         auto *revert = d->findChild<QPushButton *>(QStringLiteral("editRevert"));
         QVERIFY(!revert->isHidden());
@@ -425,7 +397,7 @@ private slots:
         QVERIFY(d->revertRequested());
         w.applyEdit(d.get());
         ada = s.contact(QStringLiteral("people/1"));
-        QCOMPARE(ada.displayName, QStringLiteral("ada.l (work)"));
+        QCOMPARE(ada.displayName, QStringLiteral("ada.l")); // as first copied
         QCOMPARE(ada.emails.size(), 1);
         QCOMPARE(ada.emails.first().email, QStringLiteral("ada@example.org"));
         QVERIFY(!ada.edited);
@@ -464,9 +436,9 @@ private slots:
         QCOMPARE(s.contact(cy).displayName, QStringLiteral("Cyrus Vance"));
         QVERIFY(!s.contact(cy).edited);
         w.selectContacts({cy, QStringLiteral("people/1")});
-        w.deleteSelected(); // only the one made here goes
+        w.deleteSelected(); // no sync to bring one back: both go, even the one copied from Google
         QVERIFY(s.contact(cy).id.isEmpty());
-        QVERIFY(!s.contact(QStringLiteral("people/1")).id.isEmpty());
+        QVERIFY(s.contact(QStringLiteral("people/1")).id.isEmpty());
     }
 
     // Export: the contacts on show, or all of them, as JSON with the user's

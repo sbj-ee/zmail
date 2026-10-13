@@ -1,7 +1,6 @@
 #include "ContactsWindow.h"
 #include "ContactEditDialog.h"
 #include "core/ContactStore.h"
-#include "core/PeopleClient.h"
 #include "Icons.h"
 
 #include <QAbstractButton>
@@ -95,19 +94,18 @@ bool isCategory(const QString &group)
 QString sourceText(const Contact &c)
 {
     if (c.source == QLatin1String("google")) {
-        return ContactsWindow::tr("Google Contacts");
+        return ContactsWindow::tr("Copied from Google Contacts by an older zmail");
     }
     if (c.source == QLatin1String("other")) {
-        return ContactsWindow::tr("Google \"Other contacts\" (saved automatically by Gmail)");
+        return ContactsWindow::tr("Copied from Google \"Other contacts\" by an older zmail");
     }
     return ContactsWindow::tr("Saved in zmail");
 }
 } // namespace
 
-ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget *parent)
+ContactsWindow::ContactsWindow(ContactStore *store, QWidget *parent)
     : QDialog(parent)
     , m_store(store)
-    , m_sync(sync)
 {
     setObjectName(QStringLiteral("contactsWindow"));
     setWindowTitle(tr("Contacts"));
@@ -201,11 +199,6 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
     split->setSizes({210, 400, 400});
 
     auto *row = new QHBoxLayout;
-    auto *syncBtn = new QPushButton(tr("Sync from Google"), this);
-    syncBtn->setObjectName(QStringLiteral("contactsSyncButton"));
-    syncBtn->setAutoDefault(false);
-    syncBtn->setEnabled(m_sync != nullptr);
-    row->addWidget(syncBtn);
     auto *exportBtn = new QPushButton(tr("Export"), this);
     exportBtn->setObjectName(QStringLiteral("contactsExportButton"));
     exportBtn->setAutoDefault(false);
@@ -239,7 +232,6 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
 
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     connect(m_search, &QLineEdit::textChanged, this, [this](const QString &) { refreshList(); });
-    connect(syncBtn, &QPushButton::clicked, this, &ContactsWindow::syncNow);
     connect(m_groups, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *it) {
         if (it && !m_loading) {
             showGroup(it->data(Qt::UserRole).toString());
@@ -285,15 +277,6 @@ ContactsWindow::ContactsWindow(ContactStore *store, ContactsSync *sync, QWidget 
         }
     });
     connect(m_new, &QPushButton::clicked, this, [this]() { editContact(QString()); });
-    if (m_sync) {
-        connect(m_sync, &ContactsSync::finished, this, [this](bool ok, const QString &msg) {
-            if (ok) {
-                refresh();
-            }
-            m_status->setText(msg);
-        });
-        connect(m_sync, &ContactsSync::progress, this, [this](const QString &s) { m_status->setText(s); });
-    }
     refresh();
 }
 
@@ -549,14 +532,9 @@ void ContactsWindow::editContact(const QString &contactId)
 
 void ContactsWindow::deleteSelected()
 {
-    // Only contacts made here can be deleted: one from Google would come
-    // straight back with the next sync (hide those instead).
-    QStringList mine;
-    for (const QString &id : selectedIds()) {
-        if (m_store->contact(id).source == QLatin1String("local")) {
-            mine << id;
-        }
-    }
+    // Every contact is zmail's own now (no Google sync to bring one back),
+    // including ones an older zmail copied from Google Contacts.
+    const QStringList mine = selectedIds();
     for (const QString &id : std::as_const(mine)) {
         m_store->removeContact(id);
     }
@@ -684,28 +662,12 @@ void ContactsWindow::showListMenu(const QPoint &pos)
         const QString name = m_group;
         menu->addAction(tr("Remove from \"%1\"").arg(name), this, [this, name]() { removeSelectedFromCategory(name); });
     }
-    bool anyLocal = false;
-    for (const QString &id : ids) {
-        anyLocal = anyLocal || m_store->contact(id).source == QLatin1String("local");
-    }
-    if (anyLocal) {
+    if (!ids.isEmpty()) {
         menu->addSeparator();
         menu->addAction(tr("Delete"), this, &ContactsWindow::deleteSelected)
-            ->setToolTip(tr("Contacts made in zmail can be deleted; ones from Google can be hidden"));
+            ->setToolTip(tr("Delete the contact from zmail's address book"));
     }
     menu->popup(m_list->viewport()->mapToGlobal(pos));
-}
-
-void ContactsWindow::syncNow()
-{
-    // Match Settings → Sync Contacts: request contact scopes / re-auth when needed.
-    if (m_syncTrigger) {
-        m_syncTrigger();
-        return;
-    }
-    if (m_sync) {
-        m_sync->sync();
-    }
 }
 
 } // namespace zmail::ui

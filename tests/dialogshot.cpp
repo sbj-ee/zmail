@@ -7,6 +7,7 @@
 //                                    imap-search.png (X-GM-RAW), imap-attachment.png
 //   zmail_dialogshot <outdir> imap-send   SMTP + drafts: imap-compose.png, imap-drafts.png,
 //                                    imap-send-queued.png (with a fake SMTP server)
+//   zmail_dialogshot <outdir> contacts   contacts-settings-menu.png, contacts-window.png, contacts-edit-legacy.png
 //   zmail_dialogshot <outdir> imap-extras   imap-throttled.png (Gmail's connection limit, backing off),
 //                                    imap-snoozed.png, imap-from-name.png
 #include "core/MailSession.h"
@@ -19,6 +20,11 @@
 #include "core/ReplyBuilder.h"
 #include "core/Sender.h"
 #include "ui/ComposeWindow.h"
+#include "ui/ContactsWindow.h"
+#include "ui/ContactEditDialog.h"
+#include "core/ContactStore.h"
+#include <QMenu>
+#include <memory>
 #include "core/ImapSyncEngine.h"
 #include "core/ServerLimits.h"
 #include <QDateTime>
@@ -80,6 +86,50 @@ int main(int argc, char *argv[])
     MemoryTokenStore store;
 
     const QString mode = argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString();
+    if (mode == QLatin1String("contacts")) {
+        // zmail-only contacts: the Settings menu without "Sync Contacts from
+        // Google", the Contacts window without its sync button, and a contact
+        // an older zmail copied from Google, still editable.
+        MainWindow w;
+        w.resize(1180, 740);
+        w.show();
+        QTest::qWait(300);
+        auto *menu = w.findChild<QMenu *>(QStringLiteral("menuSettings"));
+        menu->popup(w.mapToGlobal(QPoint(300, 30)));
+        QTest::qWait(400);
+        menu->grab().save(out + QStringLiteral("/contacts-settings-menu.png"));
+        std::printf("%s\n", qPrintable(out + QStringLiteral("/contacts-settings-menu.png")));
+        menu->hide();
+        ContactStore cs;
+        cs.open(QStringLiteral(":memory:"));
+        Contact g;
+        g.id = QStringLiteral("people/c1");
+        g.displayName = QStringLiteral("Priya Raman");
+        g.source = QStringLiteral("google");
+        g.emails.append({QStringLiteral("priya@northwind.example"), true});
+        cs.upsertContact(g);
+        cs.setCategories(g.id, {QStringLiteral("Work")});
+        cs.setFields(g.id, {{QStringLiteral("Phone"), QStringLiteral("555 0142")}});
+        cs.setComment(g.id, QStringLiteral("Field schedule lead."));
+        const QString dana = cs.createContact(QStringLiteral("Dana Whitfield"), {{QStringLiteral("dana@whitfield.example"), true}});
+        cs.setCategories(dana, {QStringLiteral("Work")});
+        cs.addLocalContact(QStringLiteral("Marcus Lee"), QStringLiteral("marcus.lee@example.org"));
+        const QString jordan = cs.createContact(QStringLiteral("Jordan Kim"), {{QStringLiteral("jordan.kim@example.net"), true}});
+        cs.setNickname(jordan, QStringLiteral("jk"));
+        ui::ContactsWindow cw(&cs);
+        cw.resize(1000, 560);
+        cw.show();
+        cw.selectContacts({g.id});
+        QTest::qWait(500);
+        cw.grab().save(out + QStringLiteral("/contacts-window.png"));
+        std::printf("%s\n", qPrintable(out + QStringLiteral("/contacts-window.png")));
+        std::unique_ptr<ui::ContactEditDialog> ed(cw.makeEditDialog(g.id));
+        ed->show();
+        QTest::qWait(400);
+        ed->grab().save(out + QStringLiteral("/contacts-edit-legacy.png"));
+        std::printf("%s\n", qPrintable(out + QStringLiteral("/contacts-edit-legacy.png")));
+        return 0;
+    }
     if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions") || mode == QLatin1String("imap-send")
         || mode == QLatin1String("imap-extras")) {
         const bool extras = mode == QLatin1String("imap-extras");

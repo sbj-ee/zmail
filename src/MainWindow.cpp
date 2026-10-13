@@ -20,7 +20,6 @@
 #include "core/ContactStore.h"
 #include "core/Sender.h"
 #include "core/GmailClient.h"
-#include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
 #include "ui/SoundDialog.h"
 #include "ui/SafeHtmlView.h"
@@ -745,14 +744,6 @@ void MainWindow::buildMenus()
     QAction *contacts = settings->addAction(tr("&Contacts…"), this, &MainWindow::showContacts);
     contacts->setObjectName(QStringLiteral("actionContacts"));
     contacts->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_L)); // Eudora's address book
-    QAction *syncContacts = settings->addAction(tr("Sync &Contacts from Google"), this, [this]() {
-        if (m_session) {
-            m_session->enableContactsSync();
-        } else {
-            statusBar()->showMessage(tr("Sign in to Gmail to sync contacts."), 5000);
-        }
-    });
-    syncContacts->setObjectName(QStringLiteral("actionSyncContacts"));
     QAction *yourName = settings->addAction(tr("Your &Name\u2026"), this, [this]() { editDisplayName(); });
     yourName->setObjectName(QStringLiteral("actionDisplayName"));
     yourName->setToolTip(tr("The name recipients see in From (app-password accounts)"));
@@ -1613,12 +1604,7 @@ void MainWindow::showContacts()
         statusBar()->showMessage(tr("Sign in to Gmail to use Contacts."), 5000);
         return;
     }
-    auto *dlg = new ContactsWindow(store, m_session->contactsSync(), this);
-    dlg->setSyncTrigger([this]() {
-        if (m_session) {
-            m_session->enableContactsSync();
-        }
-    });
+    auto *dlg = new ContactsWindow(store, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }

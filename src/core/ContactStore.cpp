@@ -381,11 +381,6 @@ void ContactStore::removeContact(const QString &id)
     q.exec();
 }
 
-void ContactStore::clearGoogleContacts()
-{
-    exec(QStringLiteral("DELETE FROM contacts WHERE source IN ('google', 'other')"));
-}
-
 Contact ContactStore::contact(const QString &id) const
 {
     Contact c;

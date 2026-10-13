@@ -157,23 +157,23 @@ ContactEditDialog::ContactEditDialog(const Contact &contact, const QStringList &
     if (fromGoogle) {
         auto *note = new QHBoxLayout;
         auto *text = new QLabel(contact.edited
-                                    ? tr("From Google, with its name or addresses changed here. Google's copy is not changed.")
-                                    : tr("From Google. Changes are kept on this computer; Google's copy is not changed."),
+                                    ? tr("Copied from Google Contacts by an older zmail; its name or addresses were changed here.")
+                                    : tr("Copied from Google Contacts by an older zmail. It's zmail's own now: changes stay on this computer."),
                                 this);
         text->setObjectName(QStringLiteral("editSourceNote"));
         text->setWordWrap(true);
         text->setForegroundRole(QPalette::PlaceholderText);
         note->addWidget(text, 1);
-        auto *revert = new QPushButton(tr("Use Google's"), this);
+        auto *revert = new QPushButton(tr("Use Original"), this);
         revert->setObjectName(QStringLiteral("editRevert"));
         revert->setAutoDefault(false);
-        revert->setToolTip(tr("Go back to the name and addresses Google has for this contact"));
+        revert->setToolTip(tr("Go back to the name and addresses as they were copied from Google"));
         revert->setVisible(contact.edited);
         note->addWidget(revert);
         lay->addLayout(note);
         connect(revert, &QPushButton::clicked, this, [this]() {
             m_revert = true;
-            QDialog::accept(); // the caller restores Google's name and addresses and keeps the rest
+            QDialog::accept(); // the caller restores the copied name and addresses and keeps the rest
         });
     }
 

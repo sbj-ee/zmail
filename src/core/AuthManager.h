@@ -26,10 +26,8 @@ class AuthManager : public QObject
 public:
     // Sign-in scopes (PLAN.md §2): gmail.modify + openid email.
     static QStringList scopes();
-    // Added later via incremental consent when Contacts sync is enabled.
-    static QStringList contactScopes();
-    // ...and when the vacation responder is first changed (reading it needs
-    // nothing more than the sign-in scopes).
+    // Added later via incremental consent when the vacation responder is
+    // first changed (reading it needs nothing more than the sign-in scopes).
     static QStringList settingsScopes();
 
     using BrowserOpener = std::function<bool(const QUrl &)>;
@@ -48,11 +46,8 @@ public:
 
     // Interactive sign-in. Emits signedIn() or signInFailed().
     void startSignIn(const QString &loginHint = {});
-    // Incremental consent for People API scopes (include_granted_scopes=true).
-    // Existing Gmail grants are kept; user is only asked for Contacts.
-    void requestContactScopes();
-    bool hasContactScopes() const;
-    // The same for any optional scopes: asks only for what is missing, on
+    // Incremental consent for optional scopes (include_granted_scopes=true):
+    // asks only for what is missing, on
     // top of everything already granted. Emits signedIn() straight away when
     // nothing is missing.
     void requestScopes(const QStringList &scopes);

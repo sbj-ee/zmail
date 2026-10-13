@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.7.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.7.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -90,7 +90,9 @@ image sized by its height alone keeps its shape, and quitting with a
 message still being written no longer touches freed memory. New in
 0.6.23: quitting asks about each message still being written (Save
 draft?) instead of dropping it. New in 0.7.0: a "Gmail (app
-password)" account type over IMAP and SMTP, alongside Google sign-in. See
+password)" account type over IMAP and SMTP, alongside Google sign-in. New in 0.7.1:
+folders on app-password accounts can be nested, renamed, deleted and
+dragged to; contacts are zmail-only (Google Contacts sync removed). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -216,7 +218,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.7.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.7.1_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

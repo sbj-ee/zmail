@@ -1,6 +1,7 @@
 #include "ImapSyncEngine.h"
 #include "ServerLimits.h"
 
+#include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -54,6 +55,18 @@ QList<qint64> searchResults(const ImapClient::Reply &r)
     return out;
 }
 
+// "* 42 EXISTS" among a command's responses: the folder's size now; -1 if none.
+qint64 existsIn(const ImapClient::Reply &r)
+{
+    qint64 n = -1;
+    for (const ImapUntagged &u : r.untagged) {
+        if (u.keyword == "EXISTS") {
+            n = u.number;
+        }
+    }
+    return n;
+}
+
 const ImapValue *fetchAttrs(const ImapUntagged &u)
 {
     if (u.keyword != "FETCH" || u.values.size() < 3 || !u.values.at(2).isList()) {
@@ -86,13 +99,24 @@ ImapSyncEngine::ImapSyncEngine(const AppPasswordAccount &account, PasswordProvid
     , m_poll(new QTimer(this))
     , m_idleRenew(new QTimer(this))
     , m_wake(new QTimer(this))
+    , m_clock(new QTimer(this))
 {
     m_poll->setInterval(15000);
     connect(m_poll, &QTimer::timeout, this, [this] { pollNow(true); });
     m_idleRenew->setSingleShot(true);
-    connect(m_idleRenew, &QTimer::timeout, this, [this] {
-        // Gmail ends an IDLE after about 29 minutes: leave it and start again.
-        enqueue([this](Done done) { m_imap.command("NOOP", [done](const ImapClient::Reply &) { done(); }); });
+    // Gmail ends an IDLE after about 29 minutes, and a connection can die
+    // without a word long before that: leave IDLE and start again.
+    connect(m_idleRenew, &QTimer::timeout, this, &ImapSyncEngine::checkConnection);
+    // Timers stand still while the computer sleeps, and the connection rarely
+    // survives it: a tick that comes late means "ask the server now".
+    m_clock->setInterval(30000);
+    connect(m_clock, &QTimer::timeout, this, [this] {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const bool slept = m_lastTickMs > 0 && now - m_lastTickMs > 3 * m_clock->interval();
+        m_lastTickMs = now;
+        if (slept) {
+            checkConnection();
+        }
     });
     m_wake->setSingleShot(true);
     m_wake->setInterval(300);
@@ -189,6 +213,16 @@ void ImapSyncEngine::scheduleRetry(const QString &reason)
     }
 }
 
+// A command the server has to answer: within ImapClient's timeout the
+// connection is either proven or dropped (and then made again).
+void ImapSyncEngine::checkConnection()
+{
+    if (!m_running || !m_connected) {
+        return;
+    }
+    enqueue([this](Done done) { m_imap.command("NOOP", [done](const ImapClient::Reply &) { done(); }); });
+}
+
 void ImapSyncEngine::setPollInterval(int ms)
 {
     m_poll->setInterval(std::max(1000, ms));
@@ -202,6 +236,8 @@ void ImapSyncEngine::start()
     m_running = true;
     m_authFailed = false;
     m_retryAttempt = 0;
+    m_lastTickMs = 0;
+    m_clock->start();
     connectAndSync(true);
 }
 
@@ -218,6 +254,7 @@ void ImapSyncEngine::stop()
     m_poll->stop();
     m_idleRenew->stop();
     m_wake->stop();
+    m_clock->stop();
     m_imap.close();
     m_busy = false;
 }
@@ -390,6 +427,43 @@ CachedMessage ImapSyncEngine::messageFromFetch(const ImapValue &attrs, const QSt
     return MessageParser::fromMetadata(json);
 }
 
+QList<QByteArray> ImapSyncEngine::uidSets(QList<qint64> uids, QList<qint64> present, int maxBytes)
+{
+    std::sort(uids.begin(), uids.end());
+    uids.erase(std::unique(uids.begin(), uids.end()), uids.end());
+    std::sort(present.begin(), present.end());
+    // Nothing in the folder lies between a and b.
+    auto neighbours = [&present](qint64 a, qint64 b) {
+        if (b == a + 1) {
+            return true;
+        }
+        const auto next = std::upper_bound(present.constBegin(), present.constEnd(), a);
+        return next != present.constEnd() && *next == b;
+    };
+    QList<QByteArray> out;
+    QByteArray cur;
+    for (qsizetype i = 0; i < uids.size();) {
+        qsizetype j = i;
+        while (j + 1 < uids.size() && neighbours(uids.at(j), uids.at(j + 1))) {
+            ++j;
+        }
+        QByteArray run = QByteArray::number(uids.at(i));
+        if (j > i) {
+            run += ':' + QByteArray::number(uids.at(j));
+        }
+        if (!cur.isEmpty() && cur.size() + 1 + run.size() > maxBytes) {
+            out.append(cur);
+            cur.clear();
+        }
+        cur += (cur.isEmpty() ? "" : ",") + run;
+        i = j + 1;
+    }
+    if (!cur.isEmpty()) {
+        out.append(cur);
+    }
+    return out;
+}
+
 void ImapSyncEngine::connectAndSync(bool full)
 {
     if (m_connecting || !m_running || m_authFailed) {
@@ -430,6 +504,14 @@ void ImapSyncEngine::connectAndSync(bool full)
                         m_lastLimit = ServerLimits::Kind::None;
                         enqueue([this, full](Done done) {
                             listFolders([this, full, done] {
+                                if (!m_listed) {
+                                    // Without the folders there is nothing to read, and the
+                                    // cache must not be emptied for it: hang up, try again.
+                                    m_imap.close();
+                                    dropAndRetry(tr("Couldn't list the IMAP folders."));
+                                    return;
+                                }
+                                m_lastAllCountsMs = QDateTime::currentMSecsSinceEpoch();
                                 refreshCounts([this, full, done] {
                                     if (full) {
                                         ++m_fullSyncs;
@@ -565,6 +647,7 @@ void ImapSyncEngine::listFolders(Done then)
         if (gen != m_generation) {
             return;
         }
+        m_listed = r.ok;
         if (!r.ok) {
             emit syncError(tr("Couldn't list the IMAP folders: %1").arg(r.text.left(200)));
             then();
@@ -619,17 +702,23 @@ void ImapSyncEngine::listFolders(Done then)
     });
 }
 
-void ImapSyncEngine::refreshCounts(Done then)
+void ImapSyncEngine::refreshCounts(Done then, const QStringList &only)
 {
-    if (m_folders.isEmpty()) {
+    QList<QPair<QString, QByteArray>> ask; // label id, wire name
+    for (const Folder &f : std::as_const(m_folders)) {
+        if (only.isEmpty() || only.contains(f.labelId)) {
+            ask.append({f.labelId, f.wire});
+        }
+    }
+    if (ask.isEmpty()) {
         then();
         return;
     }
     const int gen = m_generation;
-    auto pending = std::make_shared<int>(int(m_folders.size()));
-    for (const Folder &f : m_folders) {
-        const QString labelId = f.labelId;
-        m_imap.command("STATUS " + f.wire + " (MESSAGES UNSEEN)", [this, gen, labelId, pending, then](const ImapClient::Reply &r) {
+    auto pending = std::make_shared<int>(int(ask.size()));
+    for (const auto &a : std::as_const(ask)) {
+        const QString labelId = a.first;
+        m_imap.command("STATUS " + a.second + " (MESSAGES UNSEEN)", [this, gen, labelId, pending, then](const ImapClient::Reply &r) {
             if (gen != m_generation) {
                 return;
             }
@@ -689,6 +778,9 @@ void ImapSyncEngine::fetchRange(Folder *fIn, const QByteArray &range, bool byUid
                        }
                        if (!r.ok) {
                            emit syncError(tr("Couldn't read %1: %2").arg(f->name, r.text.left(200)));
+                       }
+                       if (const qint64 n = existsIn(r); n >= 0) {
+                           f->exists = n;
                        }
                        const qint64 before = f->lastUid;
                        {
@@ -795,8 +887,30 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
                     then();
                     return;
                 }
+                auto announce = [this, labelId, then, fresh] {
+                    if (labelId == QLatin1String("INBOX")) {
+                        QStringList unread;
+                        for (const QString &id : fresh) {
+                            if (m_cache->summary(id).unread()) {
+                                unread.append(id);
+                            }
+                        }
+                        if (!unread.isEmpty()) {
+                            emit newMail(unread);
+                        }
+                    }
+                    emit messagesChanged();
+                    then();
+                };
+                // The folder holds what is listed plus the older mail not
+                // listed yet, and nothing else: nothing has left it. (Asking
+                // costs a line per message, on every wake-up.)
+                if (f->exists == f->lowestSeq - 1 + f->uidToId.size()) {
+                    announce();
+                    return;
+                }
                 m_imap.command("UID SEARCH UID " + QByteArray::number(minUid) + ":*",
-                               [this, gen, labelId, then, fresh](const ImapClient::Reply &r) {
+                               [this, gen, labelId, announce](const ImapClient::Reply &r) {
                     if (gen != m_generation) {
                         return;
                     }
@@ -804,6 +918,12 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
                     if (f && r.ok) {
                         const QList<qint64> found = searchResults(r);
                         const QSet<qint64> present(found.begin(), found.end());
+                        if (const qint64 n = existsIn(r); n >= 0) {
+                            f->exists = n;
+                        }
+                        // What was found sits at the end of the folder, so older
+                        // mail that left moves the first listed message down.
+                        f->lowestSeq = std::max<qint64>(1, f->exists - present.size() + 1);
                         const MailCache::Batch batch(*m_cache);
                         for (auto it = f->uidToId.begin(); it != f->uidToId.end();) {
                             if (!present.contains(it.key())) {
@@ -818,19 +938,7 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
                             }
                         }
                     }
-                    if (labelId == QLatin1String("INBOX")) {
-                        QStringList unread;
-                        for (const QString &id : fresh) {
-                            if (m_cache->summary(id).unread()) {
-                                unread.append(id);
-                            }
-                        }
-                        if (!unread.isEmpty()) {
-                            emit newMail(unread);
-                        }
-                    }
-                    emit messagesChanged();
-                    then();
+                    announce();
                 });
             };
             Folder *f = folder(labelId);
@@ -886,10 +994,18 @@ void ImapSyncEngine::pollNow(bool force)
                 labels.append(f.labelId);
             }
         }
+        // Every folder's counts only now and then: a STATUS per folder on
+        // each wake-up is how an account with many labels gets throttled.
+        QStringList counts = labels;
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if (now - m_lastAllCountsMs >= m_allCountsEveryMs) {
+            m_lastAllCountsMs = now;
+            counts.clear();
+        }
         auto step = std::make_shared<std::function<void()>>();
-        *step = [this, labels, done, step]() mutable {
+        *step = [this, labels, counts, done, step]() mutable {
             if (labels.isEmpty()) {
-                refreshCounts([done] { done(); });
+                refreshCounts([done] { done(); }, counts);
                 *step = nullptr;
                 return;
             }
@@ -1289,10 +1405,7 @@ void ImapSyncEngine::applyLabels(const QStringList &ids, const QStringList &add,
                 return;
             }
             const auto [label, uidsById] = groups->takeFirst();
-            QByteArray set;
-            for (const qint64 u : uidsById) {
-                set += (set.isEmpty() ? "" : ",") + QByteArray::number(u);
-            }
+            const QList<QByteArray> sets = uidSets(uidsById.values());
             const bool inBin = label == QLatin1String("TRASH") || label == QLatin1String("SPAM");
             const QStringList ids = uidsById.keys();
             // Leaving Trash / Spam: move it out first (to the Inbox if it is
@@ -1304,83 +1417,95 @@ void ImapSyncEngine::applyLabels(const QStringList &ids, const QStringList &add,
                     to = folder(QStringLiteral("INBOX"));
                 }
                 const QByteArray dest = to ? to->wire : QByteArray("\"INBOX\"");
-                selectFolder(label, [this, gen, set, dest, ids, add, remove, label, ok, error, step](bool sel) {
+                selectFolder(label, [this, gen, sets, dest, ids, add, remove, label, ok, error, step](bool sel) {
                     if (!sel) {
                         *ok = false;
                         (*step)();
                         return;
                     }
-                    m_imap.command(moveCmd(set, dest), [this, gen, ids, add, remove, label, ok, error, step](const ImapClient::Reply &r) {
-                        if (gen != m_generation) {
-                            return;
-                        }
-                        if (!r.ok) {
-                            *ok = false;
-                            *error = r.text;
-                            (*step)();
-                            return;
-                        }
-                        QStringList restAdd = add;
-                        restAdd.removeAll(QStringLiteral("INBOX"));
-                        QStringList restRemove = remove;
-                        restRemove.removeAll(label);
-                        if (add.contains(QStringLiteral("INBOX")) && !restAdd.isEmpty()) {
-                            // Moved to INBOX already; the other labels still to add.
-                        }
-                        if (restAdd.isEmpty() && restRemove.isEmpty()) {
-                            (*step)();
-                            return;
-                        }
-                        applyLabels(ids, restAdd, restRemove, [ok, error, step](bool good, const QString &e) {
-                            if (!good) {
-                                *ok = false;
-                                *error = e;
+                    auto pending = std::make_shared<int>(int(sets.size()));
+                    auto moved = std::make_shared<bool>(true);
+                    for (const QByteArray &set : sets) {
+                        m_imap.command(moveCmd(set, dest), [this, gen, ids, add, remove, label, ok, error, step, pending, moved](const ImapClient::Reply &r) {
+                            if (gen != m_generation) {
+                                return;
                             }
-                            (*step)();
+                            if (!r.ok) {
+                                *moved = false;
+                                *ok = false;
+                                *error = r.text;
+                            }
+                            if (--*pending > 0) {
+                                return;
+                            }
+                            if (!*moved) {
+                                (*step)();
+                                return;
+                            }
+                            QStringList restAdd = add;
+                            restAdd.removeAll(QStringLiteral("INBOX"));
+                            QStringList restRemove = remove;
+                            restRemove.removeAll(label);
+                            if (add.contains(QStringLiteral("INBOX")) && !restAdd.isEmpty()) {
+                                // Moved to INBOX already; the other labels still to add.
+                            }
+                            if (restAdd.isEmpty() && restRemove.isEmpty()) {
+                                (*step)();
+                                return;
+                            }
+                            applyLabels(ids, restAdd, restRemove, [ok, error, step](bool good, const QString &e) {
+                                if (!good) {
+                                    *ok = false;
+                                    *error = e;
+                                }
+                                (*step)();
+                            });
                         });
-                    });
+                    }
                 });
                 return;
             }
             // Flags and labels with STORE, then (into Trash / Spam) a MOVE.
             QList<QByteArray> cmds;
-            auto flag = [&](const QString &id, const char *f) {
-                if (add.contains(id)) {
-                    cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " -FLAGS.SILENT (" + f + ")"
-                                                              : "UID STORE " + set + " +FLAGS.SILENT (" + f + ")");
+            for (const QByteArray &set : sets) {
+                auto flag = [&](const QString &id, const char *f) {
+                    if (add.contains(id)) {
+                        cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " -FLAGS.SILENT (" + f + ")"
+                                                                  : "UID STORE " + set + " +FLAGS.SILENT (" + f + ")");
+                    }
+                    if (remove.contains(id)) {
+                        cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " +FLAGS.SILENT (" + f + ")"
+                                                                  : "UID STORE " + set + " -FLAGS.SILENT (" + f + ")");
+                    }
+                };
+                flag(QStringLiteral("UNREAD"), "\\Seen");
+                flag(QStringLiteral("STARRED"), "\\Flagged");
+                static const QStringList special{QStringLiteral("UNREAD"), QStringLiteral("STARRED"), QStringLiteral("TRASH"),
+                                                 QStringLiteral("SPAM")};
+                QByteArray plus;
+                QByteArray minus;
+                for (const QString &l : add) {
+                    if (!special.contains(l)) {
+                        plus += (plus.isEmpty() ? "" : " ") + gmLabel(l);
+                    }
                 }
-                if (remove.contains(id)) {
-                    cmds.append(id == QLatin1String("UNREAD") ? "UID STORE " + set + " +FLAGS.SILENT (" + f + ")"
-                                                              : "UID STORE " + set + " -FLAGS.SILENT (" + f + ")");
+                for (const QString &l : remove) {
+                    if (!special.contains(l)) {
+                        minus += (minus.isEmpty() ? "" : " ") + gmLabel(l);
+                    }
                 }
-            };
-            flag(QStringLiteral("UNREAD"), "\\Seen");
-            flag(QStringLiteral("STARRED"), "\\Flagged");
-            static const QStringList special{QStringLiteral("UNREAD"), QStringLiteral("STARRED"), QStringLiteral("TRASH"),
-                                             QStringLiteral("SPAM")};
-            QByteArray plus;
-            QByteArray minus;
-            for (const QString &l : add) {
-                if (!special.contains(l)) {
-                    plus += (plus.isEmpty() ? "" : " ") + gmLabel(l);
+                if (!minus.isEmpty()) {
+                    cmds.append("UID STORE " + set + " -X-GM-LABELS.SILENT (" + minus + ")");
                 }
-            }
-            for (const QString &l : remove) {
-                if (!special.contains(l)) {
-                    minus += (minus.isEmpty() ? "" : " ") + gmLabel(l);
+                if (!plus.isEmpty()) {
+                    cmds.append("UID STORE " + set + " +X-GM-LABELS.SILENT (" + plus + ")");
                 }
-            }
-            if (!minus.isEmpty()) {
-                cmds.append("UID STORE " + set + " -X-GM-LABELS.SILENT (" + minus + ")");
-            }
-            if (!plus.isEmpty()) {
-                cmds.append("UID STORE " + set + " +X-GM-LABELS.SILENT (" + plus + ")");
-            }
-            for (const char *bin : {"TRASH", "SPAM"}) {
-                const QString b = QString::fromLatin1(bin);
-                if (add.contains(b) && label != b) {
-                    if (Folder *to = folder(b)) {
-                        cmds.append(moveCmd(set, to->wire));
+                for (const char *bin : {"TRASH", "SPAM"}) {
+                    const QString b = QString::fromLatin1(bin);
+                    if (add.contains(b) && label != b) {
+                        if (Folder *to = folder(b)) {
+                            cmds.append(moveCmd(set, to->wire));
+                        }
                     }
                 }
             }
@@ -1438,10 +1563,21 @@ void ImapSyncEngine::modifyOptimistic(const QStringList &ids, const QStringList 
     // What this edit really changes on each message, so a refusal undoes
     // exactly that and keeps anything that arrived meanwhile.
     QHash<QString, QPair<QStringList, QStringList>> changed;
+    // The folders whose counts this can move: the ones named, and (for read /
+    // unread) every folder the messages are in.
+    QStringList counts = add + remove;
+    if (counts.contains(QStringLiteral("TRASH")) || counts.contains(QStringLiteral("SPAM"))) {
+        counts.append(QString::fromLatin1(kAllMailLabel));
+    }
     {
         const MailCache::Batch batch(*m_cache);
         for (const QString &id : ids) {
             const QStringList before = m_cache->summary(id).labels;
+            for (const QString &l : before) {
+                if (!counts.contains(l)) {
+                    counts.append(l);
+                }
+            }
             QStringList a, r;
             for (const QString &l : add) {
                 if (!before.contains(l)) {
@@ -1489,10 +1625,10 @@ void ImapSyncEngine::modifyOptimistic(const QStringList &ids, const QStringList 
                 after(ok);
             }
         }));
-    enqueue([this, ids, add, remove, settle](Done done) {
-        applyLabels(ids, add, remove, [this, settle, done](bool ok, const QString &error) {
+    enqueue([this, ids, add, remove, settle, counts](Done done) {
+        applyLabels(ids, add, remove, [this, settle, counts, done](bool ok, const QString &error) {
             settle(ok, error);
-            refreshCounts(done);
+            refreshCounts(done, counts);
         });
     }, /*front=*/false, [this, settle] {
         settle(false, tr("the connection to %1 was lost").arg(m_account.imapHost));
@@ -1883,11 +2019,24 @@ void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringL
         emit labelEmptied(id, {});
         return;
     }
+    // What the cache was told ahead of the server, to take back if the move fails.
+    auto changed = std::make_shared<QHash<QString, QPair<QStringList, QStringList>>>();
     const auto emptied = once(std::function<void(const QStringList &)>(
-        [this, id](const QStringList &moved) { emit labelEmptied(id, moved); }));
+        [this, id, changed](const QStringList &moved) {
+            if (moved.isEmpty() && !changed->isEmpty()) {
+                {
+                    const MailCache::Batch batch(*m_cache);
+                    for (auto it = changed->constBegin(); it != changed->constEnd(); ++it) {
+                        m_cache->modifyLabels(it.key(), it.value().second, it.value().first);
+                    }
+                }
+                emit messagesChanged();
+            }
+            emit labelEmptied(id, moved);
+        }));
     // Every message in the folder goes to Trash (and out of the folder and Inbox).
-    enqueue([this, id, emptied](Done done) {
-        idsInFolder(id, [this, id, emptied, done](bool ok, const QHash<qint64, QString> &uidToId, const QHash<qint64, QStringList> &) {
+    enqueue([this, id, emptied, changed](Done done) {
+        idsInFolder(id, [this, id, emptied, changed, done](bool ok, const QHash<qint64, QString> &uidToId, const QHash<qint64, QStringList> &) {
             const QStringList ids = uidToId.values();
             if (!ok || ids.isEmpty()) {
                 if (!ok) {
@@ -1899,25 +2048,40 @@ void ImapSyncEngine::emptyLabel(const QString &id, int, std::shared_ptr<QStringL
             }
             {
                 const MailCache::Batch batch(*m_cache);
+                const QStringList add{QStringLiteral("TRASH")};
+                const QStringList remove{id, QStringLiteral("INBOX")};
                 for (const QString &m : ids) {
-                    if (m_cache->contains(m)) {
-                        m_cache->modifyLabels(m, {QStringLiteral("TRASH")}, {id, QStringLiteral("INBOX")});
+                    if (!m_cache->contains(m)) {
+                        continue;
                     }
+                    const QStringList before = m_cache->summary(m).labels;
+                    QStringList a, r;
+                    for (const QString &l : add) {
+                        if (!before.contains(l)) {
+                            a.append(l);
+                        }
+                    }
+                    for (const QString &l : remove) {
+                        if (before.contains(l)) {
+                            r.append(l);
+                        }
+                    }
+                    changed->insert(m, {a, r});
+                    m_cache->modifyLabels(m, add, remove);
                 }
             }
             emit messagesChanged();
-            QByteArray set;
-            for (auto it = uidToId.constBegin(); it != uidToId.constEnd(); ++it) {
-                set += (set.isEmpty() ? "" : ",") + QByteArray::number(it.key());
-            }
+            // Everything in the folder is one run, however many messages:
+            // "first:last" (a list of every UID can outgrow a command line).
+            const QByteArray set = uidSets(uidToId.keys(), uidToId.keys()).value(0);
             Folder *trashFolder = folder(QStringLiteral("TRASH"));
             m_imap.command(moveCmd(set, trashFolder ? trashFolder->wire : QByteArray("\"[Gmail]/Trash\"")),
-                           [this, emptied, ids, done](const ImapClient::Reply &r) {
+                           [this, id, emptied, ids, done](const ImapClient::Reply &r) {
                 if (!r.ok) {
                     emit syncError(tr("Emptying the folder failed: %1").arg(r.text.left(200)));
                 }
                 emptied(r.ok ? ids : QStringList());
-                refreshCounts(done);
+                refreshCounts(done, {id, QStringLiteral("TRASH"), QStringLiteral("INBOX"), QString::fromLatin1(kAllMailLabel)});
             });
         });
     }, /*front=*/false, [emptied] { emptied({}); });
@@ -1943,7 +2107,7 @@ void ImapSyncEngine::clearImportantFromFiled()
                 done();
                 return;
             }
-            QByteArray set;
+            QList<qint64> uids;
             QStringList cleared;
             for (auto it = labels.constBegin(); it != labels.constEnd(); ++it) {
                 bool filed = false;
@@ -1953,7 +2117,7 @@ void ImapSyncEngine::clearImportantFromFiled()
                     filed = filed || !l.startsWith(QLatin1Char('\\'));
                 }
                 if (filed && !inbox) {
-                    set += (set.isEmpty() ? "" : ",") + QByteArray::number(it.key());
+                    uids.append(it.key());
                     cleared.append(ids.value(it.key()));
                 }
             }
@@ -1962,18 +2126,27 @@ void ImapSyncEngine::clearImportantFromFiled()
                 done();
                 return;
             }
-            m_imap.command("UID STORE " + set + " -X-GM-LABELS.SILENT (\"\\\\Important\")",
-                           [this, cleared, report, done](const ImapClient::Reply &r) {
-                if (r.ok) {
-                    const MailCache::Batch batch(*m_cache);
-                    for (const QString &m : cleared) {
-                        m_cache->modifyLabels(m, {}, {QStringLiteral("IMPORTANT")});
+            const QList<QByteArray> sets = uidSets(uids, labels.keys());
+            auto pending = std::make_shared<int>(int(sets.size()));
+            auto allOk = std::make_shared<bool>(true);
+            for (const QByteArray &set : sets) {
+                m_imap.command("UID STORE " + set + " -X-GM-LABELS.SILENT (\"\\\\Important\")",
+                               [this, cleared, report, done, pending, allOk](const ImapClient::Reply &r) {
+                    *allOk = *allOk && r.ok;
+                    if (--*pending > 0) {
+                        return;
                     }
-                }
-                emit messagesChanged();
-                report(r.ok ? int(cleared.size()) : 0, r.ok);
-                refreshCounts(done);
-            });
+                    if (*allOk) {
+                        const MailCache::Batch batch(*m_cache);
+                        for (const QString &m : cleared) {
+                            m_cache->modifyLabels(m, {}, {QStringLiteral("IMPORTANT")});
+                        }
+                    }
+                    emit messagesChanged();
+                    report(*allOk ? int(cleared.size()) : 0, *allOk);
+                    refreshCounts(done, {QStringLiteral("IMPORTANT")});
+                });
+            }
         });
     }, /*front=*/false, [report] { report(0, false); });
 }
@@ -2246,7 +2419,8 @@ void ImapSyncEngine::removeDraft(const QString &id, std::function<void(bool ok, 
                     emit messagesChanged();
                     emit labelsChanged();
                 }
-                refreshCounts([then, ok = r2.ok, text = r2.text.left(200)] { then(ok, ok ? QString() : text); });
+                refreshCounts([then, ok = r2.ok, text = r2.text.left(200)] { then(ok, ok ? QString() : text); },
+                              {QStringLiteral("DRAFT"), QString::fromLatin1(kAllMailLabel)});
             });
         });
     });

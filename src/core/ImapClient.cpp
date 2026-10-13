@@ -489,7 +489,7 @@ void ImapClient::handleResponse(const QByteArray &respIn)
             return;
         }
         if (m_idleState == IdleState::Starting) {
-            m_timer->stop(); // idling has no deadline; the engine re-IDLEs before Gmail's 29 min
+            m_timer->stop(); // idling has no deadline; the engine re-IDLEs every few minutes
             if (!m_queue.isEmpty()) {
                 m_idleState = IdleState::Stopping;
                 m_socket->write("DONE\r\n");

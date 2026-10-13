@@ -48,6 +48,7 @@ public:
     QList<QByteArray> commands;         // every command line after LOGIN (tags stripped)
     int logins = 0;
     bool refuseChanges = false;
+    bool refuseList = false;            // LIST answers NO
     QList<QByteArray> appended;
     // Gmail's limits, for the backoff tests.
     QList<QByteArray> byeGreetings;     // next connections are greeted with these and dropped

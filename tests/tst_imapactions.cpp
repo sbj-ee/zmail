@@ -8,6 +8,7 @@
 #include "core/MessageParser.h"
 #include "mock/FakeImapServer.h"
 
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTest>
@@ -421,6 +422,164 @@ private slots:
         QCOMPARE(searches, 1);
         QVERIFY(!bodyError.isEmpty());
         QVERIFY(!searchError.isEmpty());
+    }
+
+    void uidSetsAreRangesThatFitACommandLine()
+    {
+        QCOMPARE(ImapSyncEngine::uidSets({}), QList<QByteArray>{});
+        QCOMPARE(ImapSyncEngine::uidSets({7}), QList<QByteArray>{"7"});
+        QCOMPARE(ImapSyncEngine::uidSets({5, 3, 4, 9, 4, 12, 11}), QList<QByteArray>{"3:5,9,11:12"});
+        // Told what else is in the folder, a run spans UIDs nobody has...
+        QCOMPARE(ImapSyncEngine::uidSets({2, 5, 9}, {2, 5, 9}), QList<QByteArray>{"2:9"});
+        // ...but never a message that wasn't asked for.
+        QCOMPARE(ImapSyncEngine::uidSets({2, 5, 9}, {2, 5, 7, 9}), QList<QByteArray>{"2:5,9"});
+        // Thousands of scattered UIDs: several sets, none too long, nothing lost.
+        QList<qint64> scattered;
+        for (qint64 u = 100000; u < 100000 + 6000; u += 2) {
+            scattered.append(u);
+        }
+        const QList<QByteArray> sets = ImapSyncEngine::uidSets(scattered);
+        QVERIFY(sets.size() > 1);
+        qsizetype members = 0;
+        for (const QByteArray &set : sets) {
+            QVERIFY2(set.size() <= 1000, set.constData());
+            members += set.count(',') + 1;
+        }
+        QCOMPARE(members, scattered.size());
+    }
+
+    void emptyFolderIsOneRangeAndARefusalPutsItBack()
+    {
+        Rig r;
+        const QString folder = QStringLiteral("Projects/Substation");
+        const QString id = Rig::hex(r.msgid("Spare parts order"));
+        r.sync->ensureLabel(folder);
+        QVERIFY(r.settle());
+        auto labels = [&] {
+            QStringList l = r.cache.summary(id).labels;
+            l.sort();
+            return l;
+        };
+        const QStringList before = labels();
+        QVERIFY(before.contains(folder));
+
+        r.server.refuseChanges = true;
+        QSignalSpy emptied(r.sync.get(), &SyncEngine::labelEmptied);
+        r.sync->emptyLabel(folder);
+        QVERIFY(emptied.wait(10000));
+        QVERIFY(emptied.first().at(1).toStringList().isEmpty());
+        QCOMPARE(labels(), before); // not left looking trashed
+        QVERIFY(r.settle());
+
+        r.server.refuseChanges = false;
+        const int base = int(r.server.commands.size());
+        emptied.clear();
+        r.sync->emptyLabel(folder);
+        QVERIFY(emptied.wait(10000));
+        QVERIFY(!emptied.first().at(1).toStringList().isEmpty());
+        QByteArray move;
+        for (int i = base; i < r.server.commands.size(); ++i) {
+            if (r.server.commands.at(i).startsWith("UID MOVE")) {
+                move = r.server.commands.at(i);
+            }
+        }
+        QVERIFY2(QRegularExpression(QStringLiteral("^UID MOVE \\d+(:\\d+)? ")).match(QString::fromLatin1(move)).hasMatch(),
+                 move.constData());
+        QVERIFY(r.cache.summary(id).labels.contains(QStringLiteral("TRASH")));
+        QVERIFY(r.settle());
+    }
+
+    // Starting up reads everything afresh, but only once there is something
+    // to read: a LIST that fails must leave the cache as it was.
+    void failedFolderListKeepsTheCache()
+    {
+        Rig r;
+        r.sync->setBackoffScaleForTests(0.01);
+        const QString id = Rig::hex(r.msgid("Lunch on Thursday?"));
+        QVERIFY(r.cache.contains(id));
+        r.sync->stop();
+        r.server.refuseList = true;
+        const int logins = r.server.logins;
+        QSignalSpy errors(r.sync.get(), &SyncEngine::syncError);
+        r.sync->start();
+        QVERIFY(QTest::qWaitFor([&] { return r.server.logins >= logins + 2; }, 10000)); // it tries again
+        QVERIFY(!errors.isEmpty());
+        QVERIFY(r.cache.contains(id));
+        QCOMPARE(r.sync->fullSyncs(), 1); // the one in the rig; none since
+
+        r.server.refuseList = false;
+        QVERIFY(r.settle());
+        QVERIFY(r.cache.contains(id));
+        const quint64 fresh = r.server.deliver(FakeImapServer::makeMessage(
+            QStringLiteral("Sam Ortiz"), QStringLiteral("sam@example.org"), QStringLiteral("After the trouble"),
+            QStringLiteral("text")));
+        QVERIFY(QTest::qWaitFor([&] { return r.cache.contains(Rig::hex(fresh)); }, 10000));
+    }
+
+    // New mail costs a look at the Inbox, not a line per message it holds and
+    // a STATUS per folder; mail that left is still noticed.
+    void quietWakeUpAsksOnlyWhatItNeeds()
+    {
+        Rig r;
+        QVERIFY(r.settle());
+        const quint64 gone = r.msgid("Lunch on Thursday?");
+        int base = int(r.server.commands.size());
+        const quint64 fresh = r.server.deliver(FakeImapServer::makeMessage(
+            QStringLiteral("Sam Ortiz"), QStringLiteral("sam@example.org"), QStringLiteral("Just arrived"),
+            QStringLiteral("text")));
+        QVERIFY(QTest::qWaitFor([&] { return r.cache.contains(Rig::hex(fresh)); }, 10000));
+        QVERIFY(r.settle());
+        int searches = 0;
+        int statuses = 0;
+        for (int i = base; i < r.server.commands.size(); ++i) {
+            searches += r.server.commands.at(i).startsWith("UID SEARCH UID") ? 1 : 0;
+            statuses += r.server.commands.at(i).startsWith("STATUS") ? 1 : 0;
+        }
+        QCOMPARE(searches, 0);
+        QCOMPARE(statuses, 1); // INBOX, the one folder open
+        int inboxTotal = -1;
+        for (const CachedLabel &l : r.cache.labels()) {
+            if (l.id == QLatin1String("INBOX")) {
+                inboxTotal = l.total;
+            }
+        }
+        QCOMPARE(inboxTotal, 11);
+
+        r.server.expunge(gone);
+        QVERIFY(QTest::qWaitFor([&] {
+            return !r.cache.summary(Rig::hex(gone)).labels.contains(QStringLiteral("INBOX"));
+        }, 10000));
+        QVERIFY(r.settle());
+
+        // Now and then every folder is asked again.
+        r.sync->setAllCountsEveryMs(0);
+        base = int(r.server.commands.size());
+        r.sync->pollNow(true);
+        QVERIFY(QTest::qWaitFor([&] { return r.server.commands.size() > base; }, 10000));
+        QVERIFY(r.settle());
+        statuses = 0;
+        for (int i = base; i < r.server.commands.size(); ++i) {
+            statuses += r.server.commands.at(i).startsWith("STATUS") ? 1 : 0;
+        }
+        QVERIFY(statuses > 1);
+    }
+
+    // Older mail not listed yet leaves the folder: "more" still starts at the
+    // right message, so none is skipped and none is asked for twice.
+    void olderMailLeavingKeepsLoadMoreInStep()
+    {
+        Rig r(10, 4); // the newest 4 of 10 listed
+        QVERIFY(r.settle());
+        const quint64 oldest = r.msgid("Q4 field schedule (draft)");
+        QVERIFY(!r.cache.contains(Rig::hex(oldest)));
+        r.server.expunge(oldest);
+        r.sync->pollNow(true);
+        QVERIFY(r.settle());
+        while (r.sync->hasMore(QStringLiteral("INBOX"))) {
+            r.sync->fetchMore(QStringLiteral("INBOX"));
+            QVERIFY(r.settle());
+        }
+        QCOMPARE(r.cache.messageIds(QStringLiteral("INBOX")).size(), 9);
     }
 };
 

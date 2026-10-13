@@ -88,6 +88,9 @@ struct Rig
         return nullptr;
     }
     QString count(const QString &key) const { return item(key) ? item(key)->text(1) : QStringLiteral("<none>"); }
+    // The total of "unread / total" (or of a bare "total"): opening a message
+    // may mark it read, so the unread half depends on timing.
+    QString total(const QString &key) const { return count(key).section(QLatin1Char('/'), -1).trimmed(); }
     bool select(const char *subject)
     {
         auto *m = list->model();
@@ -132,7 +135,7 @@ private slots:
         r.w->findChild<QAction *>(QStringLiteral("actionJunk"))->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(r.imap.find(r.junk)->labels.contains(QStringLiteral("\\Spam")), 10000);
         QVERIFY(!r.imap.find(r.junk)->labels.contains(QStringLiteral("\\Inbox")));
-        QTRY_COMPARE_WITH_TIMEOUT(r.count(QStringLiteral("Junk")), QStringLiteral("2 / 2"), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(r.total(QStringLiteral("Junk")), QStringLiteral("2"), 10000);
 
         // The Junk mailbox lists both.
         r.tree->setCurrentItem(r.item(QStringLiteral("Junk"))); // as a click: loads [Gmail]/Spam
@@ -147,7 +150,7 @@ private slots:
         r.w->findChild<QAction *>(QStringLiteral("menuActionNotJunk"))->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(r.imap.find(r.spam)->labels.contains(QStringLiteral("\\Inbox")), 10000);
         QVERIFY(!r.imap.find(r.spam)->labels.contains(QStringLiteral("\\Spam")));
-        QTRY_VERIFY_WITH_TIMEOUT(r.count(QStringLiteral("Junk")).startsWith(QLatin1String("1")), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(r.total(QStringLiteral("Junk")), QStringLiteral("1"), 10000);
         r.tree->setCurrentItem(r.item(QStringLiteral("In")));
         QTRY_VERIFY_WITH_TIMEOUT(r.select("Double your balance today"), 10000);
         QVERIFY(!r.select("You have been selected")); // still in Spam, kept out of In by Hide Spam

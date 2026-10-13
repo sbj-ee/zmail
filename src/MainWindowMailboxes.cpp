@@ -260,10 +260,12 @@ void MainWindow::populateMailboxes()
     labels->setFlags(labels->flags() & ~Qt::ItemIsSelectable);
     labels->setData(0, Qt::UserRole + 1, QStringLiteral("labels-root"));
     struct L { QString name; QColor color; };
-    for (const L &l : {L{tr("Family"), QColor(0x00, 0x89, 0x7b)}, L{tr("Work"), QColor(0x7b, 0x3f, 0xb5)},
-                       L{tr("Receipts"), QColor(0xe0, 0x8e, 0x0b)}, L{tr("Travel"), QColor(0x1e, 0x6f, 0xd9)},
-                       L{tr("Newsletters"), QColor(0x78, 0x80, 0x88)}}) {
-        add(labels, l.name, folderIcon(l.color), QStringLiteral("label:") + l.name);
+    if (demoData()) { // sample folders: --demo and the tests only
+        for (const L &l : {L{tr("Family"), QColor(0x00, 0x89, 0x7b)}, L{tr("Work"), QColor(0x7b, 0x3f, 0xb5)},
+                           L{tr("Receipts"), QColor(0xe0, 0x8e, 0x0b)}, L{tr("Travel"), QColor(0x1e, 0x6f, 0xd9)},
+                           L{tr("Newsletters"), QColor(0x78, 0x80, 0x88)}}) {
+            add(labels, l.name, folderIcon(l.color), QStringLiteral("label:") + l.name);
+        }
     }
     m_mailboxes->expandAll();
     rebuildMailboxMenus();

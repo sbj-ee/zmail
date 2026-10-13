@@ -74,6 +74,13 @@ public:
     // Attach a Gmail session. Without one (tests, offline screenshots) the
     // window shows the built-in sample data.
     void setSession(zmail::MailSession *session);
+    // Built-in sample mail (fictional people at example.com) for screenshots
+    // and tests only. Off by default: a real account never sees it; the
+    // window is empty until the account's own mail is in. On with
+    // `zmail --demo` (or --offline) and in the test programs. Set before
+    // a MainWindow is made.
+    static void setDemoData(bool on);
+    static bool demoData();
     zmail::MailSession *session() const { return m_session; }
     bool isLive() const { return m_live; }
     // Opens the first-run / sign-in dialog (non-modal; returns it for tests).

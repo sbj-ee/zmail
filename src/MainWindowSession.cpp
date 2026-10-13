@@ -92,6 +92,10 @@ void MainWindow::setSession(zmail::MailSession *session)
     }
     connect(session, &zmail::MailSession::ready, this, [this]() {
         m_live = true;
+        // Whatever the preview held before the account's mail came in is
+        // not one of its messages: start from an empty preview.
+        m_view->clear();
+        m_shownId.clear();
         attachSync();
         reloadFromCache();
         populateMailboxes(); // the account's folders, not the sample ones, without waiting for a label refresh
@@ -119,9 +123,12 @@ void MainWindow::sessionStateChanged()
     using State = zmail::MailSession::State;
     const State st = m_session ? m_session->state() : State::NeedsClient;
     if (m_live && st != State::SignedIn) {
-        // Signed out (or the token was revoked): back to the sample data.
+        // Signed out (or the token was revoked): the account's mail goes;
+        // sample mail only in --demo / the tests.
         m_live = false;
-        m_model->setItems(sampleMail());
+        m_view->clear();
+        m_shownId.clear();
+        m_model->setItems(demoData() ? sampleMail() : QList<MailItem>{});
         populateMailboxes();
         selectMailbox(QStringLiteral("In"));
     }

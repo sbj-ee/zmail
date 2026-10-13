@@ -417,7 +417,9 @@ MainWindow::MainWindow(QWidget *parent)
     });
 
     m_model = new MessageListModel(this);
-    m_model->setItems(sampleMail());
+    if (demoData()) {
+        m_model->setItems(sampleMail());
+    }
     m_proxy = new MessageFilterProxy(this);
     m_proxy->setSourceModel(m_model);
     m_proxy->setHideSpam(QSettings().value(QStringLiteral("mail/hideSpam"), true).toBool());
@@ -1059,12 +1061,35 @@ void MainWindow::showMessage(const QModelIndex &proxyIndex)
         showLiveMessage(m_proxy->mapToSource(proxyIndex).row());
         return;
     }
+    if (!demoData()) {
+        m_view->clear();
+        m_shownId.clear();
+        updateMessageActions();
+        return;
+    }
     m_view->setMessage(sampleViewMessage(m_proxy->mapToSource(proxyIndex).row()));
     updateMessageActions();
 }
 
+namespace {
+bool g_demoData = false;
+}
+
+void MainWindow::setDemoData(bool on)
+{
+    g_demoData = on;
+}
+
+bool MainWindow::demoData()
+{
+    return g_demoData;
+}
+
 ViewMessage MainWindow::sampleViewMessage(int row) const
 {
+    if (!demoData()) {
+        return {}; // never sample mail outside --demo and the tests
+    }
     const MailItem &m = m_model->item(row);
     ViewMessage v;
     v.id = QStringLiteral("sample-%1").arg(row);

@@ -34,6 +34,8 @@ public:
     bool installClientFile(const QString &path);
 
     static QString setupStepsHtml();
+    // "Use a Gmail app password instead…": the IMAP/SMTP account dialog.
+    void openAppPasswordDialog();
 
 private:
     void refresh();
@@ -41,6 +43,7 @@ private:
     QWidget *buildSetupPage();
     QWidget *buildSignInPage();
     QWidget *buildWaitingPage();
+    QPushButton *makeAppPasswordButton(QWidget *parent, const char *name);
 
     zmail::MailSession *m_session;
     QStackedWidget *m_stack = nullptr;

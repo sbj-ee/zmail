@@ -65,10 +65,14 @@ add_library(zmail_app STATIC
   src/UpdateChecker.hpp
   src/core/AddressGuard.cpp
   src/core/AddressGuard.h
+  src/core/AppPasswordAccount.cpp
+  src/core/AppPasswordAccount.h
   src/core/AuthManager.cpp
   src/core/AuthManager.h
   src/core/ClientConfig.cpp
   src/core/ClientConfig.h
+  src/core/ConnectionTester.cpp
+  src/core/ConnectionTester.h
   src/core/ContactStore.cpp
   src/core/ContactStore.h
   src/core/GmailClient.cpp
@@ -127,6 +131,8 @@ add_library(zmail_app STATIC
   src/core/TokenStore.h
   src/core/Zip.cpp
   src/core/Zip.h
+  src/ui/AppPasswordDialog.cpp
+  src/ui/AppPasswordDialog.h
   src/ui/ComposeWindow.cpp
   src/ui/ConnectDialog.cpp
   src/ui/ConnectDialog.h

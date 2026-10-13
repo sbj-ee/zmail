@@ -34,6 +34,7 @@ zmail_add_test(tst_auth)
 zmail_add_test(tst_sync)
 zmail_add_test(tst_labels) # Labels as folders
 zmail_add_test(tst_connect)
+zmail_add_test(tst_apppassword) # Gmail (app password): keyring, Test button, account dialog
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)
@@ -52,3 +53,7 @@ endforeach()
 # Offline screenshot driver: zmail against the mock server.
 add_executable(zmail_mockshot mockshot.cpp)
 target_link_libraries(zmail_mockshot PRIVATE zmail_app zmail_mock)
+
+# Offscreen screenshots of the app-password account dialog (fake servers, fake password).
+add_executable(zmail_dialogshot dialogshot.cpp mock/FakeMailServer.h)
+target_link_libraries(zmail_dialogshot PRIVATE zmail_app zmail_mock Qt6::Test)

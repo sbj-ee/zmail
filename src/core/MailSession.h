@@ -66,6 +66,8 @@ public:
     void cancelSignIn();
     void signOut();
 
+    // Where secrets go (the system keyring in the app). Also holds app passwords.
+    TokenStore *tokenStore() const { return m_opts.store; }
     AuthManager *auth() const { return m_auth.get(); }
     GmailClient *api() const { return m_api.get(); }
     MailCache *cache() const { return m_cache.get(); }

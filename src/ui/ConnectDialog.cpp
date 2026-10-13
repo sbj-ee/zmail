@@ -3,6 +3,7 @@
 #include "core/AuthManager.h"
 #include "core/ClientConfig.h"
 #include "core/MailSession.h"
+#include "ui/AppPasswordDialog.h"
 #include "ui/Icons.h"
 
 #include <QApplication>
@@ -125,6 +126,10 @@ QWidget *ConnectDialog::buildSetupPage()
     row->addStretch();
     row->addWidget(choose);
     v->addLayout(row);
+    auto *alt = new QHBoxLayout;
+    alt->addStretch();
+    alt->addWidget(makeAppPasswordButton(w, "appPasswordButtonSetup"));
+    v->addLayout(alt);
     return w;
 }
 
@@ -190,6 +195,10 @@ QWidget *ConnectDialog::buildSignInPage()
     row->addStretch();
     row->addWidget(m_signIn);
     v->addLayout(row);
+    auto *alt = new QHBoxLayout;
+    alt->addStretch();
+    alt->addWidget(makeAppPasswordButton(w, "appPasswordButtonSignIn"));
+    v->addLayout(alt);
     v->addStretch();
     return w;
 }
@@ -223,6 +232,34 @@ QWidget *ConnectDialog::buildWaitingPage()
     v->addLayout(crow);
     v->addStretch();
     return w;
+}
+
+QPushButton *ConnectDialog::makeAppPasswordButton(QWidget *parent, const char *name)
+{
+    auto *b = new QPushButton(tr("Use a Gmail app password instead\u2026"), parent);
+    b->setObjectName(QString::fromLatin1(name));
+    b->setFlat(true);
+    b->setToolTip(tr("Connect over IMAP and SMTP with a Google app password: no OAuth client to set up"));
+    connect(b, &QPushButton::clicked, this, &ConnectDialog::openAppPasswordDialog);
+    return b;
+}
+
+void ConnectDialog::openAppPasswordDialog()
+{
+    auto *dlg = new AppPasswordDialog(m_session->tokenStore(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dlg, &AppPasswordDialog::saved, this, [this](const zmail::AppPasswordAccount &a) {
+        setNotice(tr("Saved %1 (app password in the system keyring). Reading mail over IMAP comes in the next "
+                     "zmail update; until then, Sign in with Google still works.")
+                      .arg(a.email),
+                  false);
+        if (m_stack->currentIndex() == SetupPage) {
+            m_setupError->setStyleSheet(QString());
+            m_setupError->setText(m_notice->text());
+            m_setupError->show();
+        }
+    });
+    dlg->open();
 }
 
 ConnectDialog::Page ConnectDialog::page() const

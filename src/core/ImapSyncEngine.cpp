@@ -4,6 +4,7 @@
 #include "MessageParser.h"
 #include "RawMime.h"
 
+#include <QRegularExpression>
 #include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -1922,6 +1923,133 @@ void ImapSyncEngine::serverSearch(const QString &query, SearchCb cb)
             });
         });
     }, /*front=*/true);
+}
+
+} // namespace zmail
+
+namespace zmail {
+
+void ImapSyncEngine::appendDraft(const QByteArray &mime, const QString &replaceId, DraftCb cb)
+{
+    if (!m_connected || !folder(QStringLiteral("DRAFT"))) {
+        cb(false, {}, {}, tr("Not connected to the mail server."));
+        return;
+    }
+    const int gen = m_generation;
+    enqueue([this, gen, mime, replaceId, cb](Done done) {
+        Folder *d = folder(QStringLiteral("DRAFT"));
+        if (!d) {
+            cb(false, {}, {}, tr("There's no Drafts folder."));
+            done();
+            return;
+        }
+        m_imap.command("APPEND " + d->wire + " (\\Seen \\Draft)", mime,
+                       [this, gen, replaceId, cb, done](const ImapClient::Reply &r) {
+            if (gen != m_generation) {
+                cb(false, {}, {}, tr("The connection was reset."));
+                return;
+            }
+            if (!r.ok) {
+                cb(false, {}, {}, r.text.left(200));
+                done();
+                return;
+            }
+            // "[APPENDUID <uidvalidity> <uid>] (Success)" (UIDPLUS; Gmail has it).
+            static const QRegularExpression re(QStringLiteral("APPENDUID\\s+\\d+\\s+(\\d+)"),
+                                               QRegularExpression::CaseInsensitiveOption);
+            const auto mm = re.match(r.text);
+            const qint64 uid = mm.hasMatch() ? mm.captured(1).toLongLong() : 0;
+            selectFolder(QStringLiteral("DRAFT"), [this, gen, uid, replaceId, cb, done](bool ok) {
+                Folder *f = ok ? folder(QStringLiteral("DRAFT")) : nullptr;
+                if (gen != m_generation || !f || uid <= 0) {
+                    // Saved, but we can't tell its id: the next sync shows it.
+                    cb(true, {}, {}, {});
+                    done();
+                    return;
+                }
+                const qint64 last = f->lastUid;
+                f->lastUid = std::min(f->lastUid, uid - 1); // read it even if a sync already got past it
+                fetchRange(f, QByteArray::number(uid), true, [this, uid, last, replaceId, cb, done](const QStringList &) {
+                    Folder *ff = folder(QStringLiteral("DRAFT"));
+                    if (ff) {
+                        ff->lastUid = std::max(ff->lastUid, last);
+                    }
+                    const QString id = ff ? ff->uidToId.value(uid) : QString();
+                    const QString thread = id.isEmpty() ? QString() : m_cache->summary(id).threadId;
+                    emit messagesChanged();
+                    emit labelsChanged();
+                    if (replaceId.isEmpty() || replaceId == id) {
+                        cb(true, id, thread, {});
+                        done();
+                        return;
+                    }
+                    removeDraft(replaceId, [cb, done, id, thread](bool, const QString &) {
+                        cb(true, id, thread, {}); // the new one is saved either way
+                        done();
+                    });
+                });
+            });
+        });
+    });
+}
+
+void ImapSyncEngine::deleteDraft(const QString &id, std::function<void(bool ok, const QString &error)> cb)
+{
+    if (!m_connected || id.isEmpty()) {
+        cb(false, tr("Not connected to the mail server."));
+        return;
+    }
+    enqueue([this, id, cb](Done done) {
+        removeDraft(id, [cb, done](bool ok, const QString &error) {
+            cb(ok, error);
+            done();
+        });
+    });
+}
+
+// In Drafts: flag \Deleted and expunge just that UID. Gmail then discards the
+// draft. Already gone counts as done.
+void ImapSyncEngine::removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then)
+{
+    const int gen = m_generation;
+    searchIn(QStringLiteral("DRAFT"), {id}, [this, gen, id, then](const QHash<QString, qint64> &found) {
+        if (gen != m_generation) {
+            then(false, tr("The connection was reset."));
+            return;
+        }
+        const qint64 uid = found.value(id);
+        if (uid <= 0) {
+            m_cache->remove(id);
+            emit messagesChanged();
+            then(true, {});
+            return;
+        }
+        const QByteArray set = QByteArray::number(uid);
+        m_imap.command("UID STORE " + set + " +FLAGS.SILENT (\\Deleted)",
+                       [this, gen, id, set, then](const ImapClient::Reply &r) {
+            if (gen != m_generation) {
+                then(false, tr("The connection was reset."));
+                return;
+            }
+            if (!r.ok) {
+                then(false, r.text.left(200));
+                return;
+            }
+            const QByteArray expunge = m_imap.hasCapability("UIDPLUS") ? "UID EXPUNGE " + set : QByteArray("EXPUNGE");
+            m_imap.command(expunge, [this, gen, id, then](const ImapClient::Reply &r2) {
+                if (gen != m_generation) {
+                    then(false, tr("The connection was reset."));
+                    return;
+                }
+                if (r2.ok) {
+                    m_cache->remove(id);
+                    emit messagesChanged();
+                    emit labelsChanged();
+                }
+                refreshCounts([then, ok = r2.ok, text = r2.text.left(200)] { then(ok, ok ? QString() : text); });
+            });
+        });
+    });
 }
 
 } // namespace zmail

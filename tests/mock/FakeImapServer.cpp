@@ -1,5 +1,7 @@
 #include "FakeImapServer.h"
 
+#include <QRegularExpression>
+
 #include "core/ImapClient.h"
 
 #include <QDateTime>
@@ -29,10 +31,37 @@ FakeImapServer::FakeImapServer(QObject *parent)
                     return;
                 }
                 s->buffer += s->socket->readAll();
-                int nl;
-                while (s->socket && (nl = s->buffer.indexOf("\r\n")) >= 0) {
-                    const QByteArray line = s->buffer.left(nl);
+                for (;;) {
+                    if (!s->socket) {
+                        return;
+                    }
+                    if (s->literalNeed >= 0) { // APPEND's message bytes
+                        if (s->buffer.size() < s->literalNeed) {
+                            return;
+                        }
+                        s->literal = s->buffer.left(s->literalNeed);
+                        s->buffer.remove(0, s->literalNeed);
+                        s->literalNeed = -1;
+                    }
+                    const int nl = s->buffer.indexOf("\r\n");
+                    if (nl < 0) {
+                        return;
+                    }
+                    QByteArray line = s->buffer.left(nl);
                     s->buffer.remove(0, nl + 2);
+                    if (!s->literalLine.isEmpty()) {
+                        line = std::exchange(s->literalLine, {}) + line;
+                        handle(s, line, std::exchange(s->literal, {}));
+                        continue;
+                    }
+                    static const QRegularExpression lit(QStringLiteral("\\{(\\d+)\\}$"));
+                    const auto m = s->idleTag.isEmpty() ? lit.match(QString::fromLatin1(line)) : QRegularExpressionMatch();
+                    if (m.hasMatch()) {
+                        s->literalLine = line.left(m.capturedStart());
+                        s->literalNeed = m.captured(1).toLongLong();
+                        reply(s, "+ go ahead\r\n");
+                        continue;
+                    }
                     handle(s, line);
                 }
             });
@@ -216,7 +245,7 @@ QByteArray FakeImapServer::fetchLine(const QString &folder, int seq, Msg *m, con
     return out + ")\r\n";
 }
 
-void FakeImapServer::handle(Session *s, const QByteArray &line)
+void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray &literal)
 {
     if (!s->idleTag.isEmpty()) {
         if (line.trimmed().toUpper() == "DONE") {
@@ -479,6 +508,81 @@ void FakeImapServer::handle(Session *s, const QByteArray &line)
             }
         }
         reply(s, tag + " OK Success\r\n");
+    } else if (cmd == "APPEND" && v.size() >= 2) {
+        const QString name = ImapClient::decodeMailboxName(v.at(1).text);
+        const Folder *dest = nullptr;
+        const QList<Folder> fs = folders();
+        for (const Folder &f : fs) {
+            if (f.name == name) {
+                dest = &f;
+            }
+        }
+        if (!dest) {
+            reply(s, tag + " NO [TRYCREATE] Folder doesn't exist. (Failure)\r\n");
+            return;
+        }
+        QSet<QString> flags;
+        if (v.size() >= 3 && v.at(2).isList()) {
+            for (const ImapValue &x : v.at(2).items) {
+                flags.insert(x.str());
+            }
+        }
+        QStringList labels;
+        if (!dest->label.isEmpty() && !dest->label.startsWith(QLatin1Char('*'))) {
+            labels.append(dest->label);
+        }
+        appended.append(literal);
+        const quint64 id = deliver(literal, labels, flags);
+        qint64 newUid = 0;
+        for (Msg *m : members(dest->name)) {
+            if (m->msgid == id) {
+                newUid = m->uid.value(dest->name);
+            }
+        }
+        reply(s, tag + " OK [APPENDUID " + QByteArray::number(m_uidValidity.value(dest->name, 1)) + ' '
+                     + QByteArray::number(newUid) + "] (Success)\r\n");
+    } else if (cmd == "EXPUNGE" && !s->selected.isEmpty()) {
+        // Plain EXPUNGE, or UID EXPUNGE <set> (UIDPLUS).
+        const QString folder = s->selected;
+        const auto ms = members(folder);
+        const qint64 star = ms.isEmpty() ? 0 : ms.last()->uid.value(folder);
+        const auto ranges = uid && v.size() >= 2 ? parseSet(v.at(1).text, star) : QList<QPair<qint64, qint64>>{{1, star}};
+        QString label;
+        for (const Folder &f : folders()) {
+            if (f.name == folder) {
+                label = f.label;
+            }
+        }
+        QList<quint64> gone;
+        for (Msg *m : ms) {
+            const qint64 u = m->uid.value(folder);
+            bool hit = false;
+            for (const auto &r : ranges) {
+                hit = hit || (u >= r.first && u <= r.second);
+            }
+            if (hit && m->flags.contains(QStringLiteral("\\Deleted"))) {
+                gone.append(m->msgid);
+            }
+        }
+        QByteArray out;
+        for (int i = int(gone.size()) - 1; i >= 0; --i) {
+            const auto now = members(folder);
+            for (int seq = 0; seq < now.size(); ++seq) {
+                if (now.at(seq)->msgid == gone.at(i)) {
+                    out += "* " + QByteArray::number(seq + 1) + " EXPUNGE\r\n";
+                }
+            }
+            Msg *m = find(gone.at(i));
+            m->flags.remove(QStringLiteral("\\Deleted"));
+            if (label.isEmpty() || label == QLatin1String("\\Draft") || label == QLatin1String("\\Trash")
+                || label == QLatin1String("\\Spam")) {
+                m->gone = true; // Gmail: expunged from All Mail / Drafts / Trash / Spam is deleted
+            } else {
+                m->labels.removeAll(label);
+            }
+            m->modseq = ++m_modseq;
+        }
+        reply(s, out + tag + " OK Success\r\n");
     } else if (cmd == "DELETE" && v.size() >= 2) {
         const QString name = ImapClient::decodeMailboxName(v.at(1).text);
         userFolders.removeAll(name);

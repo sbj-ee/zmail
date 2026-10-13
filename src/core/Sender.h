@@ -43,10 +43,11 @@ public:
 
     static Transport transportFor(qint64 bytes);
 
-    void send(const QByteArray &mime, const QString &threadId, ResultCb cb);
+    // Virtual so app-password accounts can send over SMTP (SmtpSender).
+    virtual void send(const QByteArray &mime, const QString &threadId, ResultCb cb);
     // existingDraftId empty -> drafts.create, else drafts.update.
-    void saveDraft(const QByteArray &mime, const QString &threadId, const QString &existingDraftId, ResultCb cb);
-    void deleteDraft(const QString &draftId, ResultCb cb);
+    virtual void saveDraft(const QByteArray &mime, const QString &threadId, const QString &existingDraftId, ResultCb cb);
+    virtual void deleteDraft(const QString &draftId, ResultCb cb);
 
     void setMaxResumes(int n) { m_maxResumes = n; }
 

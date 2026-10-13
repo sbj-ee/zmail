@@ -1,5 +1,6 @@
 #include "ImapClient.h"
 
+#include <utility>
 #include <QSslSocket>
 #include <QTimer>
 
@@ -360,6 +361,17 @@ void ImapClient::fail(const QString &reason)
 
 void ImapClient::command(const QByteArray &cmd, ReplyCb cb)
 {
+    submit({cmd, std::move(cb), {}, false});
+}
+
+void ImapClient::command(const QByteArray &cmd, const QByteArray &literal, ReplyCb cb)
+{
+    submit({cmd, std::move(cb), literal, true});
+}
+
+void ImapClient::submit(Pending p)
+{
+    ReplyCb &cb = p.cb;
     if (!m_socket) {
         Reply lost;
         lost.text = tr("Not connected.");
@@ -368,7 +380,7 @@ void ImapClient::command(const QByteArray &cmd, ReplyCb cb)
         }
         return;
     }
-    m_queue.enqueue({cmd, std::move(cb)});
+    m_queue.enqueue(std::move(p));
     if (m_idleState == IdleState::On) {
         m_idleState = IdleState::Stopping;
         m_socket->write("DONE\r\n");
@@ -399,7 +411,11 @@ void ImapClient::sendNext()
     m_currentTag = "z" + QByteArray::number(++m_tagCounter);
     m_inFlight = true;
     m_collected.clear();
-    m_socket->write(m_currentTag + ' ' + m_current.cmd + "\r\n");
+    if (m_current.hasLiteral) {
+        m_socket->write(m_currentTag + ' ' + m_current.cmd + " {" + QByteArray::number(m_current.literal.size()) + "}\r\n");
+    } else {
+        m_socket->write(m_currentTag + ' ' + m_current.cmd + "\r\n");
+    }
     m_timer->start(m_timeoutMs);
 }
 
@@ -460,6 +476,12 @@ void ImapClient::handleResponse(const QByteArray &respIn)
         return;
     }
     if (resp.startsWith('+')) {
+        if (m_inFlight && m_current.hasLiteral) { // go ahead: the literal, then the end of the command line
+            m_current.hasLiteral = false;
+            m_socket->write(std::exchange(m_current.literal, {}) + "\r\n");
+            m_timer->start(m_timeoutMs);
+            return;
+        }
         if (m_idleState == IdleState::Starting) {
             m_timer->stop(); // idling has no deadline; the engine re-IDLEs before Gmail's 29 min
             if (!m_queue.isEmpty()) {

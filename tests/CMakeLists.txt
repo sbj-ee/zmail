@@ -2,7 +2,7 @@ find_package(Qt6 REQUIRED COMPONENTS Test PrintSupport)
 
 # In-process mock of Google's OAuth + Gmail endpoints (tests and screenshots
 # only; never linked into the app).
-add_library(zmail_mock STATIC mock/MockGoogle.cpp mock/MockGoogle.h mock/FakeImapServer.cpp mock/FakeImapServer.h)
+add_library(zmail_mock STATIC mock/MockGoogle.cpp mock/MockGoogle.h mock/FakeImapServer.cpp mock/FakeImapServer.h mock/FakeSmtpServer.h)
 target_include_directories(zmail_mock PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(zmail_mock PUBLIC zmail_app)
 
@@ -37,6 +37,7 @@ zmail_add_test(tst_connect)
 zmail_add_test(tst_apppassword) # Gmail (app password): keyring, Test button, account dialog
 zmail_add_test(tst_imap) # Gmail (app password): IMAP read path, IDLE, CONDSTORE (fake server)
 zmail_add_test(tst_imapactions) # Gmail (app password): changing mail, folders, X-GM-RAW search, attachments
+zmail_add_test(tst_smtp) # Gmail (app password): SMTP send, Send Queued, drafts in [Gmail]/Drafts
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)

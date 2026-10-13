@@ -750,6 +750,13 @@ VacationDialog *MainWindow::showVacationDialog()
         statusBar()->showMessage(tr("Sign in to Gmail to use the vacation responder."), 6000);
         return nullptr;
     }
+    if (m_session->accountKind() == zmail::AccountKind::GmailAppPassword) {
+        // Gmail's auto-reply is only reachable through the Gmail API, not IMAP/SMTP.
+        statusBar()->showMessage(tr("The vacation responder isn't available for app-password accounts. Turn it on in "
+                                    "Gmail's web settings (Settings \u2192 General \u2192 Vacation responder)."),
+                                 12000);
+        return nullptr;
+    }
     auto *dlg = new VacationDialog(m_session, this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &VacationDialog::saved, this, [this](const zmail::VacationSettings &v) {
@@ -771,4 +778,34 @@ void MainWindow::updateVacationLabel()
         m_vacationLabel->setText(tr("\U0001F334 Vacation reply: %1").arg(m_session->vacation().summary()));
     }
     m_vacationLabel->setVisible(on);
+}
+
+// Settings > Your Name: the display name in From for app-password accounts
+// (Gmail API accounts use Gmail's own send-as name).
+bool MainWindow::editDisplayName(const QString *answerForTests)
+{
+    if (!m_live || !m_session) {
+        statusBar()->showMessage(tr("Sign in first."), 5000);
+        return false;
+    }
+    if (m_session->accountKind() != zmail::AccountKind::GmailAppPassword) {
+        statusBar()->showMessage(tr("This account's name comes from Gmail (Settings \u2192 Accounts \u2192 Send mail as)."),
+                                 8000);
+        return false;
+    }
+    QString name;
+    if (answerForTests) {
+        name = *answerForTests;
+    } else {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("Your Name"),
+                                     tr("The name people see when you write to them (blank: just the address):"),
+                                     QLineEdit::Normal, m_session->displayName(), &ok);
+        if (!ok) {
+            return false;
+        }
+    }
+    m_session->setAppPasswordDisplayName(name);
+    statusBar()->showMessage(tr("Mail now goes out as %1.").arg(m_session->fromHeader()), 6000);
+    return true;
 }

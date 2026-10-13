@@ -38,6 +38,11 @@ public:
             while (QTcpSocket *s = m_server.nextPendingConnection()) {
                 auto st = std::make_shared<State>();
                 ++connections;
+                if (!greetings.isEmpty()) { // e.g. "421 4.7.0 Try again later, closing connection."
+                    s->write(greetings.takeFirst() + "\r\n");
+                    s->disconnectFromHost();
+                    continue;
+                }
                 s->write("220 smtp.gmail.com ESMTP fake - gsmtp\r\n");
                 QObject::connect(s, &QTcpSocket::readyRead, s, [this, s, st] { onRead(s, *st); });
                 QObject::connect(s, &QTcpSocket::disconnected, s, &QObject::deleteLater);
@@ -54,6 +59,9 @@ public:
     QByteArray rejectRecipient;      // RCPT TO for this address answers 550
     bool rejectData = false;         // after DATA's ".": 552
     bool hangUpAfterData = false;    // drop the connection instead of answering "."
+    QList<QByteArray> greetings;     // next connections get these instead of 220, then are dropped
+    QList<QByteArray> authReplies;   // next AUTHs answer these (e.g. "454 4.7.0 Too many login attempts")
+    QByteArray dataReply;            // answer to "." instead of 250 (e.g. "550 5.4.5 Daily user sending limit exceeded.")
 
 private:
     struct State
@@ -78,7 +86,9 @@ private:
                         s->abort();
                         return;
                     }
-                    if (rejectData) {
+                    if (!dataReply.isEmpty()) {
+                        s->write(dataReply + "\r\n");
+                    } else if (rejectData) {
                         s->write("552 5.3.4 Message too big (fake)\r\n");
                     } else {
                         delivered.append(st.cur);
@@ -101,6 +111,8 @@ private:
             if (up.startsWith("EHLO") || up.startsWith("HELO")) {
                 s->write("250-smtp.gmail.com at your service\r\n250-SIZE 35882577\r\n250-8BITMIME\r\n"
                          "250-AUTH LOGIN PLAIN XOAUTH2\r\n250-ENHANCEDSTATUSCODES\r\n250 SMTPUTF8\r\n");
+            } else if (up.startsWith("AUTH PLAIN ") && !authReplies.isEmpty()) {
+                s->write(authReplies.takeFirst() + "\r\n");
             } else if (up.startsWith("AUTH PLAIN ")) {
                 const QByteArray dec = QByteArray::fromBase64(line.mid(11));
                 const QList<QByteArray> parts = dec.split('\0');

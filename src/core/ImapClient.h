@@ -94,6 +94,8 @@ public:
 signals:
     void untagged(const zmail::ImapUntagged &response); // also during IDLE
     void connectionLost(const QString &reason);
+    // A tagged NO saying Gmail is throttling the account ([THROTTLED], bandwidth limits).
+    void throttled(const QString &text);
 
 private:
     enum class IdleState { Off, Starting, On, Stopping };
@@ -124,6 +126,7 @@ private:
     QByteArray m_idleTag;
     QList<QByteArray> m_caps;
     QString m_selected;
+    QString m_bye; // the server's last BYE text, for the disconnect reason
     bool m_plaintext = false;
     int m_timeoutMs = 60000;
     std::function<void(const QByteArray &line)> m_greeting; // set until the greeting arrives

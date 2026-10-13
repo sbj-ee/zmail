@@ -1,4 +1,7 @@
 #include "ImapSyncEngine.h"
+#include "ServerLimits.h"
+
+#include <limits>
 
 #include "Log.h"
 #include "MessageParser.h"
@@ -85,27 +88,62 @@ ImapSyncEngine::ImapSyncEngine(const AppPasswordAccount &account, PasswordProvid
             return;
         }
         qCInfo(lcSync) << "IMAP connection lost:" << reason;
-        m_connected = false;
-        m_connecting = false;
-        ++m_generation;
-        m_ops.clear();
-        m_opRunning = false;
-        m_idleRenew->stop();
-        setBusy(false);
-        emit statusChanged(tr("Lost the connection to %1; reconnecting\u2026").arg(m_account.imapHost));
-        const int gen = m_generation;
-        QTimer::singleShot(m_reconnectDelayMs, this, [this, gen] {
-            if (m_running && gen == m_generation && !m_connected && !m_connecting) {
-                connectAndSync(false);
-            }
-        });
-        m_reconnectDelayMs = std::min(m_reconnectDelayMs * 2, kMaxReconnectDelayMs);
+        dropAndRetry(reason);
+    });
+    connect(&m_imap, &ImapClient::throttled, this, [this](const QString &text) {
+        if (!m_running) {
+            return;
+        }
+        // Stop asking: hang up and come back after the throttle backoff.
+        qCInfo(lcSync) << "IMAP throttled:" << text;
+        m_imap.close();
+        dropAndRetry(text);
+    });
+    m_retry->setSingleShot(true);
+    connect(m_retry, &QTimer::timeout, this, [this] {
+        if (m_running && !m_connected && !m_connecting && !m_authFailed) {
+            connectAndSync(false);
+        }
     });
 }
 
 ImapSyncEngine::~ImapSyncEngine()
 {
     stop();
+}
+
+void ImapSyncEngine::dropAndRetry(const QString &reason)
+{
+    m_connected = false;
+    m_connecting = false;
+    ++m_generation;
+    m_ops.clear();
+    m_opRunning = false;
+    m_idleRenew->stop();
+    setBusy(false);
+    const ServerLimits::Kind kind = ServerLimits::classifyImap(reason);
+    m_lastLimit = kind;
+    if (kind == ServerLimits::Kind::AuthFailed) {
+        // Retrying a refused password gets the account locked: wait for the user.
+        m_authFailed = true;
+        m_retry->stop();
+        emit syncError(ServerLimits::explain(kind, m_account.imapHost));
+        return;
+    }
+    const qint64 delay = ServerLimits::backoffMs(kind, m_retryAttempt, m_backoffScale);
+    // A throttle outranks an ordinary drop already scheduled; never shorten a wait.
+    if (m_retry->isActive() && m_retry->remainingTime() >= delay) {
+        return;
+    }
+    ++m_retryAttempt;
+    m_retry->start(int(std::min<qint64>(delay, std::numeric_limits<int>::max())));
+    const QString why = ServerLimits::explain(kind, m_account.imapHost);
+    if (kind == ServerLimits::Kind::None) {
+        emit statusChanged(tr("Lost the connection to %1; reconnecting\u2026").arg(m_account.imapHost));
+    } else {
+        emit statusChanged(why);
+        emit syncError(why);
+    }
 }
 
 void ImapSyncEngine::setPollInterval(int ms)
@@ -119,12 +157,15 @@ void ImapSyncEngine::start()
         return;
     }
     m_running = true;
+    m_authFailed = false;
+    m_retryAttempt = 0;
     connectAndSync(true);
 }
 
 void ImapSyncEngine::stop()
 {
     m_running = false;
+    m_retry->stop();
     ++m_generation;
     m_ops.clear();
     m_opRunning = false;
@@ -297,7 +338,7 @@ CachedMessage ImapSyncEngine::messageFromFetch(const ImapValue &attrs, const QSt
 
 void ImapSyncEngine::connectAndSync(bool full)
 {
-    if (m_connecting || !m_running) {
+    if (m_connecting || !m_running || m_authFailed) {
         return;
     }
     m_connecting = true;
@@ -322,12 +363,17 @@ void ImapSyncEngine::connectAndSync(bool full)
                         }
                         m_connecting = false;
                         if (!opened) {
-                            setBusy(false);
-                            emit syncError(err);
-                            return; // connectionLost schedules the retry
+                            m_imap.close(); // e.g. LOGIN answered NO: the socket is still up
+                            const auto kind = ServerLimits::classifyImap(err);
+                            if (kind == ServerLimits::Kind::None) {
+                                emit syncError(err);
+                            }
+                            dropAndRetry(err);
+                            return;
                         }
                         m_connected = true;
-                        m_reconnectDelayMs = 2000;
+                        m_retryAttempt = 0;
+                        m_lastLimit = ServerLimits::Kind::None;
                         enqueue([this, full](Done done) {
                             listFolders([this, full, done] {
                                 refreshCounts([this, full, done] {
@@ -1434,9 +1480,76 @@ void ImapSyncEngine::markNotJunk(const QString &id)
     modifyOptimistic({id}, {QStringLiteral("INBOX")}, {QStringLiteral("SPAM")}, tr("Marking as Not Junk"));
 }
 
-void ImapSyncEngine::snooze(const QString &, qint64) { notYet(tr("Snooze")); }
-void ImapSyncEngine::unsnooze(const QString &) { notYet(tr("Snooze")); }
-int ImapSyncEngine::wakeDue(qint64) { return 0; }
+// Snooze is local, as on the Gmail API path: the wake time lives in the
+// cache, and the message leaves INBOX (-X-GM-LABELS \\Inbox) until it wakes.
+void ImapSyncEngine::snooze(const QString &id, qint64 wakeMs)
+{
+    const CachedMessage m = m_cache->summary(id);
+    if (m.id.isEmpty() || wakeMs <= 0) {
+        return;
+    }
+    const bool hadInbox = m.labels.contains(QStringLiteral("INBOX"));
+    m_cache->setSnooze(id, wakeMs, hadInbox);
+    if (!hadInbox) {
+        emit messagesChanged();
+        return;
+    }
+    modifyOptimistic({id}, {}, {QStringLiteral("INBOX")}, tr("Snoozing"), [this, id](bool ok) {
+        if (!ok) {
+            m_cache->clearSnooze(id); // INBOX is back, so the user still sees it
+            emit messagesChanged();
+        }
+    });
+}
+
+void ImapSyncEngine::unsnooze(const QString &id)
+{
+    const auto row = m_cache->snooze(id);
+    if (row.messageId.isEmpty()) {
+        return;
+    }
+    const bool restore = row.hadInbox || row.wakeMs > 0;
+    m_cache->clearSnooze(id);
+    if (!restore) {
+        emit messagesChanged();
+        return;
+    }
+    // Always tell the server (+X-GM-LABELS is idempotent): a sync that raced
+    // the snooze may have put INBOX back in the cache while Gmail lacks it.
+    modifyOptimistic({id}, {QStringLiteral("INBOX")}, {}, tr("Unsnoozing"));
+}
+int ImapSyncEngine::wakeDue(qint64 nowMs)
+{
+    if (nowMs <= 0) {
+        nowMs = QDateTime::currentMSecsSinceEpoch();
+    }
+    const QStringList due = m_cache->dueSnoozes(nowMs);
+    if (due.isEmpty()) {
+        return 0;
+    }
+    for (const QString &id : due) {
+        const auto row = m_cache->snooze(id);
+        const QStringList labels = m_cache->summary(id).labels;
+        if (labels.contains(QStringLiteral("TRASH"))) {
+            m_cache->clearSnooze(id); // deleted while snoozed: stays in Trash
+            continue;
+        }
+        m_cache->markSnoozeWoke(id);
+        if (row.hadInbox) { // idempotent on the server, as in unsnooze()
+            modifyOptimistic({id}, {QStringLiteral("INBOX")}, {}, tr("Waking a snoozed message"),
+                             [this, id, row](bool ok) {
+                if (!ok) {
+                    // Still out of INBOX on the server: stay snoozed and due,
+                    // so the next wake check tries again.
+                    m_cache->setSnooze(id, row.wakeMs, row.hadInbox);
+                }
+            }, /*announce=*/false);
+        }
+    }
+    emit messagesChanged();
+    emit snoozesWoke(due);
+    return int(due.size());
+}
 
 void ImapSyncEngine::trash(const QString &id)
 {

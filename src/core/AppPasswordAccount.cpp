@@ -13,6 +13,7 @@ const QString kImapHost = QStringLiteral("imap/imapHost");
 const QString kImapPort = QStringLiteral("imap/imapPort");
 const QString kSmtpHost = QStringLiteral("imap/smtpHost");
 const QString kSmtpPort = QStringLiteral("imap/smtpPort");
+const QString kDisplayName = QStringLiteral("imap/displayName");
 QString tr(const char *s) { return QCoreApplication::translate("zmail::AppPasswordAccount", s); }
 } // namespace
 
@@ -30,6 +31,7 @@ AppPasswordAccount AppPasswordAccount::load(const QSettings &s)
     a.imapPort = s.value(kImapPort, a.imapPort).toInt();
     a.smtpHost = s.value(kSmtpHost, a.smtpHost).toString();
     a.smtpPort = s.value(kSmtpPort, a.smtpPort).toInt();
+    a.displayName = s.value(kDisplayName).toString();
     return a;
 }
 
@@ -41,6 +43,11 @@ void AppPasswordAccount::save(QSettings &s) const
     s.setValue(kImapPort, imapPort);
     s.setValue(kSmtpHost, smtpHost);
     s.setValue(kSmtpPort, smtpPort);
+    if (displayName.trimmed().isEmpty()) {
+        s.remove(kDisplayName);
+    } else {
+        s.setValue(kDisplayName, displayName.trimmed());
+    }
 }
 
 void AppPasswordAccount::clear(QSettings &s)

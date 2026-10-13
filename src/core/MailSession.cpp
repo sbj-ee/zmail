@@ -238,11 +238,26 @@ void MailSession::startAppPasswordAccount(const AppPasswordAccount &account)
     m_sync = std::move(engine);
     m_sync->setPollInterval(m_opts.pollIntervalMs);
     m_sync->setInitialCount(m_opts.initialCount);
-    m_displayName.clear();
+    m_displayName = account.displayName.trimmed(); // no Gmail API to ask: the account dialog's "Your name"
     m_vacation = {};
     setState(State::SignedIn);
     emit ready();
+    emit identityChanged();
     m_sync->start();
+}
+
+void MailSession::setAppPasswordDisplayName(const QString &name)
+{
+    if (m_kind != AccountKind::GmailAppPassword) {
+        return;
+    }
+    m_imapAccount.displayName = name.trimmed();
+    m_displayName = m_imapAccount.displayName;
+    if (m_opts.rememberAccount) {
+        QSettings settings;
+        m_imapAccount.save(settings);
+    }
+    emit identityChanged();
 }
 
 void MailSession::startAccount(const QString &account)
@@ -305,7 +320,18 @@ QString MailSession::fromHeader() const
     if (m_displayName.isEmpty() || addr.isEmpty()) {
         return addr;
     }
-    return QStringLiteral("%1 <%2>").arg(m_displayName, addr);
+    // "Morgan, Alex" needs quotes (RFC 5322 specials); plain names don't.
+    QString name = m_displayName;
+    static const QString specials = QStringLiteral("()<>[]:;@\\,.\"");
+    bool special = false;
+    for (const QChar c : name) {
+        special = special || specials.contains(c);
+    }
+    if (special) {
+        name.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('"'), QStringLiteral("\\\""));
+        name = QLatin1Char('"') + name + QLatin1Char('"');
+    }
+    return QStringLiteral("%1 <%2>").arg(name, addr);
 }
 
 void MailSession::syncSoon()

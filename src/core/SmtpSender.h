@@ -32,6 +32,10 @@ public:
 
     void setPlaintextForTests(bool on) { m_plaintext = on; }
     void setTimeoutMs(int ms) { m_timeoutMs = ms; }
+    // Temporary refusals before DATA are retried with backoff (ServerLimits).
+    void setMaxRetries(int n) { m_maxRetries = n; }
+    void setBackoffScaleForTests(double scale) { m_backoffScale = scale; }
+    int retries() const { return m_retries; } // retries made so far
 
     void send(const QByteArray &mime, const QString &threadId, ResultCb cb) override;
     void saveDraft(const QByteArray &mime, const QString &threadId, const QString &existingDraftId,
@@ -45,7 +49,15 @@ public:
     // lines starting with "." doubled, ending in CRLF . CRLF.
     static QByteArray dataPayload(const QByteArray &mime);
 
+signals:
+    void retrying(int inMs, const QString &why);
+
 private:
+    void attempt(const QStringList &rcpts, const QByteArray &payload, const QString &threadId, int tries, ResultCb cb);
+
+    int m_maxRetries = 2;
+    double m_backoffScale = 1.0;
+    int m_retries = 0;
     AppPasswordAccount m_account;
     PasswordProvider m_password;
     QPointer<ImapSyncEngine> m_imap;

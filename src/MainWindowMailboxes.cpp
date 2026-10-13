@@ -825,3 +825,15 @@ void MainWindow::moveMessagesToLabel(const QStringList &messageIds, const QStrin
                                  4000);
     });
 }
+
+QString MainWindow::newFolderPrefixForTests(const QString &key) const
+{
+    for (QTreeWidgetItemIterator it(m_mailboxes); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toString() == key) {
+            const bool userLabel = key.startsWith(QLatin1String("gmail:")) && key.mid(6).startsWith(QLatin1String("Label_"));
+            const QString full = (*it)->data(0, Qt::UserRole + 2).toString();
+            return userLabel && !full.isEmpty() ? full + QLatin1Char('/') : QString();
+        }
+    }
+    return {};
+}

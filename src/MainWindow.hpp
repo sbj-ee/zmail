@@ -126,6 +126,9 @@ public:
     void selectMailbox(const QString &key);
     // Settings > Your Name (app-password accounts). answerForTests skips the prompt.
     bool editDisplayName(const QString *answerForTests = nullptr);
+    // What New Folder… on the sidebar row `key` puts in front of the name
+    // ("Finance/" for the Finance folder); empty when the row takes none.
+    QString newFolderPrefixForTests(const QString &key) const;
     // View > Hide Spam from Folders (QSettings mail/hideSpam, default on).
     bool hideSpam() const;
     void setHideSpam(bool hide);

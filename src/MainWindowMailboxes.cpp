@@ -19,6 +19,7 @@
 #include "ui/MailboxWindow.h"
 #include "ui/Flags.h"
 #include "core/ContactStore.h"
+#include "core/ImapSyncEngine.h"
 #include "ui/NewMailSound.h"
 #include "ui/SoundDialog.h"
 #include "ui/SafeHtmlView.h"
@@ -107,7 +108,11 @@ void MainWindow::populateMailboxes()
         }
         return n;
     };
-    const bool showJunkFolder = !hideSpam() || m_proxy->mailbox() == QLatin1String("Junk");
+    // App-password (IMAP) accounts always list Gmail's Spam ([Gmail]/Spam):
+    // it is one of their standard mailboxes, where Junk sends mail and Not
+    // Junk takes it from. Hide Spam then only keeps spam out of the others.
+    const bool imapAccount = m_live && m_session && dynamic_cast<zmail::ImapSyncEngine *>(m_session->sync());
+    const bool showJunkFolder = imapAccount || !hideSpam() || m_proxy->mailbox() == QLatin1String("Junk");
     const QPalette palEarly = QApplication::palette();
     auto add = [&](QTreeWidgetItem *parent, const QString &name, const QIcon &ic, const QString &key,
                    int forcedTotal = -1, int unreadHint = 0) {

@@ -1510,10 +1510,12 @@ void ImapSyncEngine::unsnooze(const QString &id)
     }
     const bool restore = row.hadInbox || row.wakeMs > 0;
     m_cache->clearSnooze(id);
-    if (!restore || m_cache->summary(id).labels.contains(QStringLiteral("INBOX"))) {
+    if (!restore) {
         emit messagesChanged();
         return;
     }
+    // Always tell the server (+X-GM-LABELS is idempotent): a sync that raced
+    // the snooze may have put INBOX back in the cache while Gmail lacks it.
     modifyOptimistic({id}, {QStringLiteral("INBOX")}, {}, tr("Unsnoozing"));
 }
 int ImapSyncEngine::wakeDue(qint64 nowMs)
@@ -1533,7 +1535,7 @@ int ImapSyncEngine::wakeDue(qint64 nowMs)
             continue;
         }
         m_cache->markSnoozeWoke(id);
-        if (row.hadInbox && !labels.contains(QStringLiteral("INBOX"))) {
+        if (row.hadInbox) { // idempotent on the server, as in unsnooze()
             modifyOptimistic({id}, {QStringLiteral("INBOX")}, {}, tr("Waking a snoozed message"),
                              [this, id, row](bool ok) {
                 if (!ok) {

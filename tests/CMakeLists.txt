@@ -40,6 +40,7 @@ zmail_add_test(tst_imapactions) # Gmail (app password): changing mail, folders, 
 zmail_add_test(tst_smtp) # Gmail (app password): SMTP send, Send Queued, drafts in [Gmail]/Drafts
 zmail_add_test(tst_imapextras) # Gmail (app password): snooze, Gmail limits + backoff, display name, no vacation
 zmail_add_test(tst_imapfolders) # Gmail (app password): nested folders, drag-and-drop, rename/delete in the window
+zmail_add_test(tst_imapspam) # Gmail (app password): Spam always listed, Junk / Not Junk
 zmail_add_test(tst_contacts)
 zmail_add_test(tst_send)
 zmail_add_test(tst_viewer)

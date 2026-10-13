@@ -3,6 +3,8 @@
 //   zmail_dialogshot <outdir>   writes apppassword-empty.png, -ok.png, -error.png, connect.png
 //   zmail_dialogshot <outdir> imap   main window on an app-password (IMAP) account:
 //                                    imap-mainwindow.png, imap-idle-newmail.png
+//   zmail_dialogshot <outdir> imap-actions   changing mail over IMAP: imap-starred-trashed.png,
+//                                    imap-search.png (X-GM-RAW), imap-attachment.png
 #include "core/MailSession.h"
 #include "core/TokenStore.h"
 #include "core/ConnectionTester.h"
@@ -61,7 +63,9 @@ int main(int argc, char *argv[])
     QDir().mkpath(out);
     MemoryTokenStore store;
 
-    if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QLatin1String("imap")) {
+    const QString mode = argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString();
+    if (mode == QLatin1String("imap") || mode == QLatin1String("imap-actions")) {
+        const bool actions = mode == QLatin1String("imap-actions");
         test::FakeImapServer imap;
         imap.seedDemo(24);
         store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password); // the fake's made-up one
@@ -98,6 +102,56 @@ int main(int argc, char *argv[])
         }
         QTest::qWait(1500);
         w.statusBar()->clearMessage();
+        auto snap = [&](const char *name) {
+            QTest::qWait(1200);
+            const QString path = out + QLatin1Char('/') + QLatin1String(name);
+            w.grab().save(path);
+            std::printf("%s\n", qPrintable(path));
+        };
+        if (actions) {
+            auto *sync = session.sync();
+            auto idOf = [&](const char *subject) {
+                for (quint64 id = 0x18f3a0c2b4d50001ULL; id < 0x18f3a0c2b4d50100ULL; ++id) {
+                    if (auto *m = imap.find(id); m && m->raw.contains(subject)) {
+                        return QString::number(id, 16);
+                    }
+                }
+                return QString();
+            };
+            // Star one, trash two (one bulk MOVE), mark one read: all over STORE / UID MOVE.
+            sync->setFlag(idOf("Spare parts order"), QStringLiteral("red"));
+            sync->trashMany({idOf("Lunch on Thursday?"), idOf("free drink")});
+            sync->markRead(idOf("safety stand-down"));
+            QTest::qWaitFor([&] { return !sync->isBusy(); }, 5000);
+            w.statusBar()->showMessage(QStringLiteral("Starred 1, moved 2 to Trash, marked 1 read on imap.gmail.com (fake)"));
+            snap("imap-starred-trashed.png");
+            auto *search = w.findChild<QLineEdit *>(QStringLiteral("searchBox"));
+            search->setText(QStringLiteral("from:hydro"));
+            Q_EMIT search->returnPressed();
+            QTest::qWait(2500);
+            snap("imap-search.png");
+            search->clear();
+            QSignalSpy got(sync, &SyncEngine::newMail);
+            QTest::qWaitFor([&] { return imap.anyIdling(); }, 5000);
+            const QByteArray pdf("%PDF-1.4 fake demo bytes\n");
+            imap.deliver("From: Jordan Kim <jordan.kim@example.net>\r\nTo: alex.morgan@gmail.com\r\n"
+                         "Subject: Breaker spec sheet (attachment over IMAP)\r\nMIME-Version: 1.0\r\n"
+                         "Content-Type: multipart/mixed; boundary=b1\r\n\r\n--b1\r\nContent-Type: text/plain\r\n\r\n"
+                         "Spec sheet attached; File > Save Attachments fetches it over IMAP.\r\n--b1\r\n"
+                         "Content-Type: application/pdf; name=\"breaker-spec.pdf\"\r\n"
+                         "Content-Disposition: attachment; filename=\"breaker-spec.pdf\"\r\n"
+                         "Content-Transfer-Encoding: base64\r\n\r\n" + pdf.toBase64() + "\r\n--b1--\r\n");
+            got.wait(5000);
+            QTest::qWait(800);
+            if (list && list->model()->rowCount() > 0) {
+                list->setCurrentIndex(list->model()->index(0, 0));
+            }
+            QTest::qWait(1500);
+            w.statusBar()->clearMessage();
+            snap("imap-attachment.png");
+            QSettings().clear();
+            return 0;
+        }
         w.grab().save(out + QStringLiteral("/imap-mainwindow.png"));
         std::printf("%s\n", qPrintable(out + QStringLiteral("/imap-mainwindow.png")));
         QSignalSpy newMail(session.sync(), &SyncEngine::newMail);

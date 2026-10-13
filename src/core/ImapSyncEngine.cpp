@@ -530,7 +530,15 @@ void ImapSyncEngine::connectAndSync(bool full)
                                             }
                                         }
                                         auto step = std::make_shared<std::function<void()>>();
-                                        *step = [this, others, done, step]() mutable {
+                                        // Weak: a step that owned itself would never be freed when a
+                                        // callback it waits on is dropped (lost connection). The callbacks
+                                        // in flight keep it alive.
+                                        const std::weak_ptr<std::function<void()>> weakStep = step;
+                                        *step = [this, others, done, weakStep]() mutable {
+                                            const auto step = weakStep.lock();
+                                            if (!step) {
+                                                return;
+                                            }
                                             if (others.isEmpty()) {
                                                 emit messagesChanged();
                                                 done();
@@ -1003,7 +1011,15 @@ void ImapSyncEngine::pollNow(bool force)
             counts.clear();
         }
         auto step = std::make_shared<std::function<void()>>();
-        *step = [this, labels, counts, done, step]() mutable {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, labels, counts, done, weakStep]() mutable {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (labels.isEmpty()) {
                 refreshCounts([done] { done(); }, counts);
                 *step = nullptr;
@@ -1228,7 +1244,15 @@ void ImapSyncEngine::locate(const QStringList &ids, std::function<void(const Loc
     auto left = std::make_shared<QStringList>(ids);
     auto step = std::make_shared<std::function<void()>>();
     const int gen = m_generation;
-    *step = [this, gen, order, result, left, then, step]() mutable {
+    // Weak: a step that owned itself would never be freed when a
+    // callback it waits on is dropped (lost connection). The callbacks
+    // in flight keep it alive.
+    const std::weak_ptr<std::function<void()>> weakStep = step;
+    *step = [this, gen, order, result, left, then, weakStep]() mutable {
+        const auto step = weakStep.lock();
+        if (!step) {
+            return;
+        }
         if (gen != m_generation) {
             *step = nullptr;
             return;
@@ -1304,7 +1328,15 @@ void ImapSyncEngine::searchIn(const QString &labelId, const QStringList &ids,
             chunks->append(ids.mid(i, 50));
         }
         auto step = std::make_shared<std::function<void()>>();
-        *step = [this, gen, found, chunks, then, step]() {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, gen, found, chunks, then, weakStep]() {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (gen != m_generation) {
                 *step = nullptr;
                 return;
@@ -1394,7 +1426,15 @@ void ImapSyncEngine::applyLabels(const QStringList &ids, const QStringList &add,
         auto error = std::make_shared<QString>();
         auto step = std::make_shared<std::function<void()>>();
         const int gen = m_generation;
-        *step = [this, gen, groups, add, remove, ok, error, done, step]() {
+        // Weak: a step that owned itself would never be freed when a
+        // callback it waits on is dropped (lost connection). The callbacks
+        // in flight keep it alive.
+        const std::weak_ptr<std::function<void()>> weakStep = step;
+        *step = [this, gen, groups, add, remove, ok, error, done, weakStep]() {
+            const auto step = weakStep.lock();
+            if (!step) {
+                return;
+            }
             if (gen != m_generation) {
                 *step = nullptr;
                 return;

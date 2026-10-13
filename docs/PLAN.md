@@ -107,8 +107,7 @@ install under its own 100-user cap and within the personal-use exception.
 Matches the first-run dialog and the README's "Connect your Gmail" (PR #3):
 
 1. <https://console.cloud.google.com/>: **create a project** (e.g. `zmail`).
-2. **APIs & Services → Library**: enable the **Gmail API**. (People API later,
-   for contacts sync.)
+2. **APIs & Services → Library**: enable the **Gmail API**.
 3. **Google Auth Platform → Get started** (Branding): app name `zmail`,
    support/contact email stevebj.ee@gmail.com.
 4. **Audience**: **User type: External**, then **Publish app** → **In
@@ -137,10 +136,11 @@ comes from PKCE and the loopback redirect (`http://127.0.0.1:<random port>`)
 [9]. We still keep it out of git, so a public repo doesn't hand out a working
 client ID that others could burn quota on.
 
-**Incremental consent:** sign-in asks for Gmail only. Turning on contacts sync
-later starts a second authorization with `include_granted_scopes=true`, adding
-the People scopes to the same grant [9]. The keyring then holds one refresh
-token covering both.
+**Incremental consent:** sign-in asks for Gmail only. Changing the vacation
+responder later starts a second authorization with `include_granted_scopes=true`,
+adding `gmail.settings.basic` to the same grant [9]. (Google Contacts sync,
+which used the People scopes this way, was removed after 0.7.0: contacts are
+zmail-only.)
 
 ## 4. Architecture
 
@@ -602,10 +602,9 @@ Features:
 - **vCard 3.0 and 4.0** import and export
 - **groups** that expand to addresses on send (Bcc by default for groups of
   more than 10)
-- **optional read-only Google Contacts sync** through the People API
-  (`people.connections.list` with `syncToken`, plus `otherContacts.list`
-  [10]), using the same sign-in through incremental consent (§3). Google
-  contacts are read-only locally. Edits create a local overlay.
+- ~~optional read-only Google Contacts sync through the People API~~:
+  removed after 0.7.0. Contacts are zmail-only (`contacts.db`); rows an older
+  zmail synced keep working as ordinary contacts.
 
 Tie-ins: a contact's `sound` and `color` become implicit rules evaluated
 before the user's rule list. `trusted` feeds the security allowlist. All

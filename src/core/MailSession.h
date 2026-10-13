@@ -16,8 +16,6 @@ namespace zmail {
 class GmailClient;
 class MailCache;
 class ContactStore;
-class PeopleClient;
-class ContactsSync;
 class Sender;
 class SyncEngine;
 class TokenStore;
@@ -81,10 +79,7 @@ public:
     GmailClient *api() const { return m_api.get(); }
     MailCache *cache() const { return m_cache.get(); }
     ContactStore *contacts() const { return m_contacts.get(); }
-    ContactsSync *contactsSync() const { return m_contactsSync.get(); }
-    PeopleClient *people() const { return m_people.get(); }
     SyncEngine *sync() const { return m_sync.get(); }
-    void enableContactsSync(); // incremental consent if needed, then sync
 
     // Gmail's vacation responder. loadVacation() asks Google; vacation() is
     // what it last said (read once when the account starts). saveVacation()
@@ -135,8 +130,6 @@ private:
     std::unique_ptr<GmailClient> m_api;
     std::unique_ptr<MailCache> m_cache;
     std::unique_ptr<ContactStore> m_contacts;
-    std::unique_ptr<PeopleClient> m_people;
-    std::unique_ptr<ContactsSync> m_contactsSync;
     std::unique_ptr<SyncEngine> m_sync;
     std::unique_ptr<Sender> m_sender;
     QString m_displayName;

@@ -108,8 +108,6 @@ add_library(zmail_app STATIC
   src/core/Stationery.h
   src/core/Rules.h
   src/core/Pkce.h
-  src/core/PeopleClient.cpp
-  src/core/PeopleClient.h
   src/core/ReplyBuilder.cpp
   src/core/ReplyBuilder.h
   src/core/RichText.cpp

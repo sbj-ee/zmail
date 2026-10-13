@@ -63,11 +63,12 @@ struct AutocompleteHit {
     double score = 0;
 };
 
-// Local SQLite cache for Google Contacts (read-only sync) + local-only contacts.
-// Overlays (trusted) are keyed by email and never written back to Google.
-// Categories, extra fields, comments and "hidden" are keyed by contact id in
-// tables of their own, so a Google resync (which deletes and re-adds the
-// contact rows) leaves them alone.
+// zmail's own address book (SQLite, contacts.db). Contacts live only on this
+// machine; nothing is read from or written to Google. Rows that an older
+// zmail synced from Google Contacts (source "google" / "other") are kept as
+// they are and work like any other contact. Overlays (trusted) are keyed by
+// email; categories, extra fields, comments and "hidden" by contact id, in
+// tables of their own.
 // Sound/color overlays deferred until Rules land.
 class ContactStore
 {
@@ -88,7 +89,6 @@ public:
 
     void upsertContact(const Contact &c); // replaces emails for this id
     void removeContact(const QString &id);
-    void clearGoogleContacts(); // source google|other only
     Contact contact(const QString &id) const;
     QList<Contact> contacts(const QString &query = {}, int limit = 500) const;
     QList<Contact> contacts(const ContactQuery &query) const;

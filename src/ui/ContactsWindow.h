@@ -17,7 +17,6 @@ class QWidget;
 
 namespace zmail {
 class ContactStore;
-class ContactsSync;
 struct ContactQuery;
 }
 
@@ -30,17 +29,13 @@ class ContactEditDialog;
 // the contacts of the chosen one in the middle, and the chosen contact to
 // read on the right. A contact is changed in a window of its own (Edit, or
 // a double-click): its name, addresses, nickname, categories, extra fields,
-// comment and "hidden". All of that stays on this machine: nothing here is
-// written to Google, and a resync leaves it alone.
+// comment and "hidden". Contacts are zmail's own and stay on this machine:
+// nothing here is read from or written to Google.
 class ContactsWindow : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ContactsWindow(zmail::ContactStore *store, zmail::ContactsSync *sync = nullptr,
-                            QWidget *parent = nullptr);
-
-    // Prefer Settings→Sync Contacts path (enableContactsSync / re-auth) when set.
-    void setSyncTrigger(std::function<void()> trigger) { m_syncTrigger = std::move(trigger); }
+    explicit ContactsWindow(zmail::ContactStore *store, QWidget *parent = nullptr);
 
     // The left-hand choices that aren't categories.
     static constexpr const char *kAll = "\x01" "all";
@@ -72,7 +67,6 @@ public:
 
 public slots:
     void refresh();
-    void syncNow();
 
 private:
     zmail::ContactQuery query() const;
@@ -84,8 +78,6 @@ private:
     QString askCategoryName(const QString &title, const QString &current = {});
 
     zmail::ContactStore *m_store = nullptr;
-    zmail::ContactsSync *m_sync = nullptr;
-    std::function<void()> m_syncTrigger;
     QString m_group = QString::fromLatin1(kAll);
     QString m_detailId;     // the one contact on show in the detail pane
     bool m_loading = false; // filling widgets: their change signals save nothing

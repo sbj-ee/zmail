@@ -43,12 +43,6 @@ QStringList AuthManager::scopes()
             QStringLiteral("email")};
 }
 
-QStringList AuthManager::contactScopes()
-{
-    return {QStringLiteral("https://www.googleapis.com/auth/contacts.readonly"),
-            QStringLiteral("https://www.googleapis.com/auth/contacts.other.readonly")};
-}
-
 QStringList AuthManager::settingsScopes()
 {
     return {QStringLiteral("https://www.googleapis.com/auth/gmail.settings.basic")};
@@ -114,7 +108,7 @@ void AuthManager::startSignIn(const QString &loginHint)
     if (!extraScopes.isEmpty()) {
         // Named again along with the new ones, so the grant that comes back
         // lists them all whatever include_granted_scopes does.
-        for (const QString &s : contactScopes() + settingsScopes()) {
+        for (const QString &s : settingsScopes()) {
             if ((m_grantedScopes.contains(s) || extraScopes.contains(s)) && !want.contains(s)) {
                 want.append(s);
             }
@@ -140,16 +134,6 @@ void AuthManager::startSignIn(const QString &loginHint)
         cancelSignIn(); // nothing will come back; don't leave the port open
         emit signInFailed(tr("Couldn't open the web browser for Google sign-in."));
     }
-}
-
-void AuthManager::requestContactScopes()
-{
-    requestScopes(contactScopes());
-}
-
-bool AuthManager::hasContactScopes() const
-{
-    return hasScopes(contactScopes());
 }
 
 void AuthManager::requestScopes(const QStringList &scopes)

@@ -22,7 +22,6 @@
 #include "ui/ContactsWindow.h"
 #include "ui/MailboxWindow.h"
 #include "core/ContactStore.h"
-#include "core/PeopleClient.h"
 #include "ui/NewMailSound.h"
 #include "ui/SoundDialog.h"
 #include "ui/SafeHtmlView.h"

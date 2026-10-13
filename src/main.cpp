@@ -29,8 +29,8 @@ int main(int argc, char *argv[])
                              QStringLiteral("mode"));
     QCommandLineOption compose(QStringLiteral("compose"),
                                QStringLiteral("Open a sample reply in a compose window (preview)."));
-    QCommandLineOption offline(QStringLiteral("offline"),
-                               QStringLiteral("Don't connect to Gmail; show the built-in sample data."));
+    QCommandLineOption offline(QStringList{QStringLiteral("demo"), QStringLiteral("offline")},
+                               QStringLiteral("Screenshots/development: don't connect to Gmail; show the built-in sample data."));
     cli.addOption(theme);
     cli.addOption(compose);
     cli.addOption(offline);
@@ -41,6 +41,7 @@ int main(int argc, char *argv[])
                                        : QSettings().value(QLatin1String(zmail::ui::kThemeSettingKey)).toString();
     zmail::ui::applyThemeId(t); // built-in or custom (View > Theme > Theme Editor)
 
+    MainWindow::setDemoData(cli.isSet(offline)); // never sample mail on a real account
     MainWindow w;
     w.show();
     if (!cli.isSet(offline)) {

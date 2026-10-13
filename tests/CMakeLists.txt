@@ -7,7 +7,7 @@ target_include_directories(zmail_mock PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(zmail_mock PUBLIC zmail_app)
 
 function(zmail_add_test name)
-  add_executable(${name} ${name}.cpp)
+  add_executable(${name} ${name}.cpp DemoData.cpp)
   target_link_libraries(${name} PRIVATE zmail_app zmail_mock Qt6::Test)
   add_test(NAME ${name} COMMAND ${name})
   # Headless: no display needed in CI. Never touch the real keyring/config.
@@ -56,9 +56,16 @@ foreach(t tst_viewer tst_idle)
 endforeach()
 
 # Offline screenshot driver: zmail against the mock server.
-add_executable(zmail_mockshot mockshot.cpp)
+add_executable(zmail_mockshot mockshot.cpp DemoData.cpp)
 target_link_libraries(zmail_mockshot PRIVATE zmail_app zmail_mock)
 
 # Offscreen screenshots of the app-password account dialog (fake servers, fake password).
-add_executable(zmail_dialogshot dialogshot.cpp mock/FakeMailServer.h)
+add_executable(zmail_dialogshot dialogshot.cpp DemoData.cpp mock/FakeMailServer.h)
 target_link_libraries(zmail_dialogshot PRIVATE zmail_app zmail_mock Qt6::Test)
+
+# Built WITHOUT DemoData.cpp: the real app's default (no sample mail).
+add_executable(tst_nodemo tst_nodemo.cpp)
+target_link_libraries(tst_nodemo PRIVATE zmail_app zmail_mock Qt6::Test)
+add_test(NAME tst_nodemo COMMAND tst_nodemo)
+set_tests_properties(tst_nodemo PROPERTIES ENVIRONMENT
+  "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config;ZMAIL_MARK_READ_DELAY_MS=0;ZMAIL_SEND_DELAY_MS=0")

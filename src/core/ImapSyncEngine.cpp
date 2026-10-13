@@ -930,7 +930,13 @@ void ImapSyncEngine::syncFolder(const QString &labelId, bool full, Done then)
                 }
                 auto left = std::make_shared<QList<QByteArray>>(uidSets(missing, listed));
                 auto step = std::make_shared<std::function<void()>>();
-                *step = [this, gen, labelId, lowest, left, then, step] {
+                // Weak, like the other step loops: the fetch callback in flight keeps it alive.
+                const std::weak_ptr<std::function<void()>> weakStep = step;
+                *step = [this, gen, labelId, lowest, left, then, weakStep] {
+                    const auto step = weakStep.lock();
+                    if (!step) {
+                        return;
+                    }
                     if (gen != m_generation) {
                         *step = nullptr;
                         return;

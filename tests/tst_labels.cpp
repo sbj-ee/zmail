@@ -4,7 +4,7 @@
 #include "core/AuthManager.h"
 #include "core/GmailClient.h"
 #include "core/MailCache.h"
-#include "core/SyncEngine.h"
+#include "core/GmailSyncEngine.h"
 #include "core/TokenStore.h"
 #include "mock/MockGoogle.h"
 
@@ -26,7 +26,7 @@ struct Rig
     std::unique_ptr<AuthManager> auth;
     std::unique_ptr<GmailClient> api;
     MailCache cache;
-    std::unique_ptr<SyncEngine> sync;
+    std::unique_ptr<GmailSyncEngine> sync;
 
     Rig()
     {
@@ -40,7 +40,7 @@ struct Rig
         api = std::make_unique<GmailClient>(auth.get(), &nam, g.apiBase());
         api->setBackoffBaseMs(5);
         cache.open(QStringLiteral(":memory:"));
-        sync = std::make_unique<SyncEngine>(api.get(), &cache);
+        sync = std::make_unique<GmailSyncEngine>(api.get(), &cache);
         sync->setInitialCount(50);
         sync->setPollInterval(3600 * 1000);
     }

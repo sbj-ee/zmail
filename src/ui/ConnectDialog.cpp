@@ -249,15 +249,8 @@ void ConnectDialog::openAppPasswordDialog()
     auto *dlg = new AppPasswordDialog(m_session->tokenStore(), this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     connect(dlg, &AppPasswordDialog::saved, this, [this](const zmail::AppPasswordAccount &a) {
-        setNotice(tr("Saved %1 (app password in the system keyring). Reading mail over IMAP comes in the next "
-                     "zmail update; until then, Sign in with Google still works.")
-                      .arg(a.email),
-                  false);
-        if (m_stack->currentIndex() == SetupPage) {
-            m_setupError->setStyleSheet(QString());
-            m_setupError->setText(m_notice->text());
-            m_setupError->show();
-        }
+        // Signed in: the session goes to SignedIn, which closes this dialog.
+        m_session->startAppPasswordAccount(a);
     });
     dlg->open();
 }

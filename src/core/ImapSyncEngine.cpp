@@ -90,6 +90,18 @@ std::function<void(A...)> once(std::function<void(A...)> f)
 
 } // namespace
 
+struct ImapSyncEngine::JunkRun
+{
+    int gen = 0;
+    int total = 0;
+    int done = 0;
+    bool cancel = false;
+    bool listed = false;      // the op has read the folder's UIDs
+    QList<qint64> uids;       // ascending
+    QHash<qint64, QString> idOf;
+    qsizetype next = 0;
+};
+
 ImapSyncEngine::ImapSyncEngine(const AppPasswordAccount &account, PasswordProvider password, MailCache *cache,
                                QObject *parent)
     : SyncEngine(parent)
@@ -258,6 +270,9 @@ void ImapSyncEngine::stop()
     m_clock->stop();
     m_imap.close();
     m_busy = false;
+    if (m_junk) {
+        finishJunk(m_junk, tr("Stopped: the account was closed."));
+    }
 }
 
 void ImapSyncEngine::setBusy(bool b, const QString &status)
@@ -2028,6 +2043,201 @@ void ImapSyncEngine::emptyTrash()
             done();
         });
     }, /*front=*/false, [this] { emit trashEmptied(-1); });
+}
+
+// ---- Empty Junk ----------------------------------------------------------
+
+
+void ImapSyncEngine::countJunk(JunkCountCb cbIn)
+{
+    const auto cb = once(std::move(cbIn));
+    const auto cached = [this]() {
+        for (const CachedLabel &l : m_cache->labels()) {
+            if (l.id == QLatin1String("SPAM")) {
+                return l.total;
+            }
+        }
+        return 0;
+    };
+    if (!m_connected || !folder(QStringLiteral("SPAM"))) {
+        cb(cached(), false, m_connected ? tr("This account has no Spam folder.")
+                                        : tr("Not connected to %1.").arg(m_account.imapHost));
+        return;
+    }
+    enqueue([this, cb, cached](Done done) {
+        Folder *f = folder(QStringLiteral("SPAM"));
+        if (!f) {
+            cb(cached(), false, tr("This account has no Spam folder."));
+            done();
+            return;
+        }
+        const int gen = m_generation;
+        m_imap.command("STATUS " + f->wire + " (MESSAGES UNSEEN)", [this, gen, cb, cached, done](const ImapClient::Reply &r) {
+            if (gen != m_generation) {
+                return;
+            }
+            int total = -1;
+            int unread = 0;
+            for (const ImapUntagged &u : r.untagged) {
+                if (u.keyword == "STATUS" && u.values.size() >= 3 && u.values.at(2).isList()) {
+                    const ImapValue &kv = u.values.at(2);
+                    total = kv.get("MESSAGES") ? int(kv.get("MESSAGES")->num()) : -1;
+                    unread = kv.get("UNSEEN") ? int(kv.get("UNSEEN")->num()) : 0;
+                }
+            }
+            if (r.ok && total >= 0) {
+                m_cache->setLabelCounts(QStringLiteral("SPAM"), total, unread);
+                emit countsChanged();
+                cb(total, true, {});
+            } else {
+                cb(cached(), false, r.text.isEmpty() ? tr("The server didn't answer.")
+                                    : r.text == tr("Disconnected.") ? tr("The connection was lost.") : r.text.left(200));
+            }
+            done();
+        });
+    }, /*front=*/false, [cb, cached] { cb(cached(), false, tr("The connection was lost.")); });
+}
+
+void ImapSyncEngine::emptyJunk()
+{
+    if (m_junk) {
+        return; // one at a time
+    }
+    auto run = std::make_shared<JunkRun>();
+    run->gen = m_generation;
+    m_junk = run;
+    if (!m_connected || !folder(QStringLiteral("SPAM"))) {
+        finishJunk(run, m_connected ? tr("This account has no Spam folder.")
+                                    : tr("Not connected to %1.").arg(m_account.imapHost));
+        return;
+    }
+    enqueue([this, run](Done done) {
+        if (run->cancel) {
+            finishJunk(run, {});
+            done();
+            return;
+        }
+        run->gen = m_generation;
+        idsInFolder(QStringLiteral("SPAM"), [this, run, done](bool ok, const QHash<qint64, QString> &uidToId,
+                                                              const QHash<qint64, QStringList> &) {
+            if (!ok) {
+                endJunk(run, tr("Couldn't read the Spam folder."), done);
+                return;
+            }
+            run->uids = uidToId.keys();
+            std::sort(run->uids.begin(), run->uids.end());
+            run->idOf = uidToId;
+            run->total = int(run->uids.size());
+            run->listed = true;
+            emit junkEmptyProgress(0, run->total);
+            if (run->total > 0) {
+                emit statusChanged(tr("Emptying Junk: 0 of %1\u2026").arg(run->total));
+            }
+            junkStep(run, done);
+        });
+    }, /*front=*/false, [this, run] { finishJunk(run, lostMessage()); });
+}
+
+void ImapSyncEngine::cancelEmptyJunk()
+{
+    if (m_junk) {
+        m_junk->cancel = true; // takes effect when the batch in flight is answered
+    }
+}
+
+// Why the connection went under a run, for its report: Gmail's limit, said
+// the way the status bar says it, or just that it was lost.
+QString ImapSyncEngine::lostMessage() const
+{
+    const QString why = ServerLimits::explain(m_lastLimit, m_account.imapHost);
+    return why.isEmpty() ? tr("The connection to %1 was lost.").arg(m_account.imapHost)
+                         : tr("%1 Try Empty Junk again once zmail has reconnected.").arg(why);
+}
+
+void ImapSyncEngine::junkStep(std::shared_ptr<JunkRun> run, Done done)
+{
+    if (run->gen != m_generation || m_junk != run) {
+        return; // the connection went; its abort handler has reported
+    }
+    if (run->cancel || run->next >= run->uids.size()) {
+        endJunk(run, {}, done);
+        return;
+    }
+    const QList<qint64> chunk = run->uids.mid(run->next, kEmptyJunkBatch);
+    // One run of UIDs per batch: "first:last" where nothing in between is
+    // in the folder, so the command line stays short.
+    const QByteArray set = uidSets(chunk, run->uids, 1 << 20).value(0);
+    Folder *trash = folder(QStringLiteral("TRASH"));
+    const QByteArray dest = trash ? trash->wire : QByteArray("\"[Gmail]/Trash\"");
+    selectFolder(QStringLiteral("SPAM"), [this, run, done, chunk, set, dest](bool sel) {
+        if (run->gen != m_generation || m_junk != run) {
+            return;
+        }
+        if (!sel) {
+            endJunk(run, tr("Couldn't open the Spam folder."), done);
+            return;
+        }
+        m_imap.command(moveCmd(set, dest), [this, run, done, chunk](const ImapClient::Reply &r) {
+            if (run->gen != m_generation || m_junk != run) {
+                return;
+            }
+            if (r.ok) {
+                {
+                    const MailCache::Batch batch(*m_cache);
+                    for (qint64 uid : chunk) {
+                        const QString id = run->idOf.value(uid);
+                        if (!id.isEmpty() && m_cache->contains(id)) {
+                            m_cache->modifyLabels(id, {QStringLiteral("TRASH")},
+                                                  {QStringLiteral("SPAM"), QStringLiteral("INBOX")});
+                        }
+                    }
+                }
+                run->next += chunk.size();
+                run->done += int(chunk.size());
+                emit messagesChanged();
+                emit junkEmptyProgress(run->done, run->total);
+                emit statusChanged(tr("Emptying Junk: %1 of %2\u2026").arg(run->done).arg(run->total));
+                // Back to the event loop between batches: the window stays
+                // live and a Stop is heard.
+                QTimer::singleShot(0, this, [this, run, done] { junkStep(run, done); });
+                return;
+            }
+            // A throttle never gets here: ImapClient::throttled has already hung
+            // up, and the abort handler reports it. A hang-up answers pending
+            // commands "Disconnected." first; the abort handler reports that
+            // too (the zero timer is only a net in case none follows).
+            if (r.text == tr("Disconnected.")) {
+                QTimer::singleShot(0, this, [this, run] {
+                    if (m_junk == run && run->gen == m_generation) {
+                        finishJunk(run, lostMessage());
+                    }
+                });
+                return;
+            }
+            endJunk(run, tr("The server refused the move: %1").arg(r.text.left(200)), done);
+        });
+    });
+}
+
+// The batches are over (all moved, stopped, or something went wrong): fresh
+// counts for the folders involved, then the one junkEmptied().
+void ImapSyncEngine::endJunk(std::shared_ptr<JunkRun> run, const QString &error, Done done)
+{
+    refreshCounts([this, run, error, done] {
+        finishJunk(run, error);
+        done();
+    }, {QStringLiteral("SPAM"), QStringLiteral("TRASH"), QStringLiteral("INBOX"), QString::fromLatin1(kAllMailLabel)});
+}
+
+void ImapSyncEngine::finishJunk(const std::shared_ptr<JunkRun> &run, const QString &error)
+{
+    if (m_junk != run) {
+        return; // reported already
+    }
+    m_junk.reset();
+    emit messagesChanged();
+    emit labelsChanged();
+    emit junkEmptied(run->done, run->total, run->cancel && error.isEmpty() && run->done < run->total, error);
 }
 
 void ImapSyncEngine::createLabel(const QString &name, const QString &, std::function<void(const QString &id)> thenIn)

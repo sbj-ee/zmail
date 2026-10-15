@@ -339,6 +339,19 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Right-click **Trash → Empty Trash** removes everything in it from zmail.
   Gmail does not let a mail client with zmail's permission erase mail, so
   Gmail keeps those messages in its own Trash until it purges them.
+- Right-click **Junk / Suspicious → Empty Junk…** moves every message in
+  Spam to Trash, the same as Delete does anywhere else in zmail (nothing is
+  erased permanently; Gmail empties Trash itself after 30 days). zmail asks
+  Gmail how many messages Spam holds right now and shows that in the
+  confirmation (Cancel is the default button; if Gmail can't be asked it says
+  the number is only zmail's last count). The mail moves in batches of 200,
+  one batch at a time, so a big Spam folder doesn't block the window or trip
+  Gmail's limits: the Gmail API account goes through the same quota bucket and
+  429 backoff as the rest of zmail, and an app-password (IMAP) account hangs up
+  and waits out Gmail's throttle like every other IMAP command. The status bar
+  shows "Emptying Junk: N of M" with a **Stop** button (the right-click menu
+  says **Stop Emptying Junk** meanwhile); what has moved stays in Trash. If
+  Gmail refuses part of it, a message says how many moved and why it stopped.
 - Shift+click and Shift+arrows select a range from the current message, up
   or down.
 - **Settings → Contacts** is zmail's own address book, kept on this

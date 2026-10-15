@@ -69,6 +69,26 @@ public:
     virtual void setFlag(const QString &id, const QString &color) = 0;
     virtual void emptyTrash() = 0;
 
+    // Empty Junk (right-click on Junk / Suspicious): every message in Spam
+    // goes to Trash, in batches of kEmptyJunkBatch, one batch at a time, so a
+    // big folder neither blocks the window nor trips Gmail's limits (the IMAP
+    // backend waits ServerLimits::backoffMs after a throttle; the API backend
+    // goes through GmailClient's token bucket and 429 backoff). Trash, not
+    // erased: that is what Delete does everywhere else in zmail.
+    //   countJunk    asks the server how many messages Spam holds now. exact
+    //                is false when it could not be asked: count is then the
+    //                cached figure (may be out of date) and error says why.
+    //   emptyJunk    start; junkEmptyProgress() after each batch, then one
+    //                junkEmptied(). Ignored while one is already running.
+    //   cancelEmptyJunk  stops before the next batch (or ends a throttle wait);
+    //                what already moved stays moved.
+    static constexpr int kEmptyJunkBatch = 200;
+    using JunkCountCb = std::function<void(int count, bool exact, const QString &error)>;
+    virtual void countJunk(JunkCountCb cb) { cb(0, false, tr("Not supported by this account.")); }
+    virtual void emptyJunk() { emit junkEmptied(0, 0, false, tr("Not supported by this account.")); }
+    virtual void cancelEmptyJunk() {}
+    virtual bool emptyingJunk() const { return false; }
+
     virtual void createLabel(const QString &name, const QString &backgroundColor = {},
                              std::function<void(const QString &id)> then = {}) = 0;
     virtual void renameLabel(const QString &id, const QString &newName) = 0;
@@ -87,6 +107,10 @@ signals:
     void countsChanged(); // some labels' totals / unread counts are new (not their names)
     void trashEmptied(int messages);
     void labelEmptied(const QString &labelId, const QStringList &messageIds); // emptyLabel finished
+    void junkEmptyProgress(int done, int total); // emptyJunk(): `done` of `total` are in Trash
+    // emptyJunk() ended. deleted of total moved; cancelled: stopped on request;
+    // error: why it stopped early (empty if it did not). Both empty/false: all moved.
+    void junkEmptied(int deleted, int total, bool cancelled, const QString &error);
     // clearImportantFromFiled() ended; ok=false if the server refused part of it.
     void importantCleared(int messages, bool ok);
     // loadAll() ended: everything is in (complete), it was stopped, or a page failed.

@@ -17,6 +17,7 @@
 #include "ui/ConnectDialog.h"
 #include "ui/ContactsWindow.h"
 #include "ui/MailboxWindow.h"
+#include "ui/EmptyJunkPrompt.h"
 #include "ui/Flags.h"
 #include "core/ContactStore.h"
 #include "core/ImapSyncEngine.h"
@@ -505,6 +506,19 @@ QMenu *MainWindow::buildMailboxMenu(QTreeWidgetItem *item)
         empty->setObjectName(QStringLiteral("actionEmptyTrash"));
         menu->addSeparator();
     }
+    if (live && key == QLatin1String("Junk")) {
+        if (m_session->sync()->emptyingJunk()) {
+            QAction *stop = menu->addAction(tr("Stop Emptying &Junk"), menu, [this]() { stopEmptyJunk(); });
+            stop->setObjectName(QStringLiteral("actionStopEmptyJunk"));
+        } else {
+            QAction *empty = menu->addAction(icon(QStringLiteral("trash")), tr("&Empty Junk\u2026"), menu,
+                                             [this]() { emptyJunk(); });
+            empty->setObjectName(QStringLiteral("actionEmptyJunk"));
+            empty->setToolTip(tr("Move every message in Junk / Suspicious (Gmail Spam) to Trash"));
+            empty->setEnabled(!m_junkCounting);
+        }
+        menu->addSeparator();
+    }
     if (!key.isEmpty()) {
         QAction *all = menu->addAction(icon(QStringLiteral("mail-open")), tr("Mark All as &Read"), menu,
                                        [this, key]() { markAllRead(key); });
@@ -682,6 +696,134 @@ void MainWindow::emptyTrash(bool confirm)
     m_purgedBeforeEmpty = m_session->cache()->purged(); // for Undo
     m_session->sync()->emptyTrash();
     statusBar()->showMessage(tr("Emptying the Trash\u2026"), 4000);
+}
+
+void MainWindow::emptyJunk(bool confirm)
+{
+    if (!(m_live && m_session && m_session->sync())) {
+        return;
+    }
+    zmail::SyncEngine *sync = m_session->sync();
+    if (sync->emptyingJunk() || m_junkCounting) {
+        return;
+    }
+    if (!confirm) {
+        startEmptyJunk();
+        return;
+    }
+    // The count comes from the server, not the sidebar (which can be a
+    // minute behind). The question is shown once it answers.
+    m_junkCounting = true;
+    statusBar()->showMessage(tr("Counting messages in Junk\u2026"), 4000);
+    const QPointer<MainWindow> self(this);
+    const QPointer<zmail::SyncEngine> engine(sync);
+    sync->countJunk([self, engine](int count, bool exact, const QString &why) {
+        if (!self) {
+            return;
+        }
+        self->m_junkCounting = false;
+        if (!engine || !(self->m_live && self->m_session && self->m_session->sync() == engine)) {
+            return; // signed out or switched account meanwhile
+        }
+        if (exact && count == 0) {
+            self->statusBar()->showMessage(zmail::ui::EmptyJunkPrompt::result(0, 0, false, {}), 6000);
+            return;
+        }
+        self->confirmEmptyJunk(count, exact, why);
+    });
+}
+
+void MainWindow::confirmEmptyJunk(int count, bool exact, const QString &why)
+{
+    auto *box = new QMessageBox(QMessageBox::Warning, tr("Empty Junk"), zmail::ui::EmptyJunkPrompt::question(count, exact, why),
+                                QMessageBox::NoButton, this);
+    box->setObjectName(QStringLiteral("emptyJunkDialog"));
+    box->setInformativeText(zmail::ui::EmptyJunkPrompt::detail(exact));
+    QPushButton *go = box->addButton(tr("Empty Junk"), QMessageBox::DestructiveRole);
+    go->setObjectName(QStringLiteral("emptyJunkConfirm"));
+    QPushButton *cancel = box->addButton(QMessageBox::Cancel);
+    box->setDefaultButton(cancel); // Enter / Escape both mean no
+    box->setEscapeButton(cancel);
+    box->setAttribute(Qt::WA_DeleteOnClose);
+    box->setWindowModality(Qt::WindowModal);
+    connect(box, &QMessageBox::buttonClicked, this, [this, box, go](QAbstractButton *b) {
+        if (b == go) {
+            startEmptyJunk();
+        }
+        Q_UNUSED(box)
+    });
+    box->open();
+}
+
+void MainWindow::startEmptyJunk()
+{
+    if (!(m_live && m_session && m_session->sync()) || m_session->sync()->emptyingJunk()) {
+        return;
+    }
+    if (m_proxy->mailbox() == QLatin1String("Junk")) {
+        m_view->clear(); // the message on show is about to go
+    }
+    showJunkBar(true, 0, 0);
+    m_session->sync()->emptyJunk();
+}
+
+void MainWindow::stopEmptyJunk()
+{
+    if (m_live && m_session && m_session->sync()) {
+        m_session->sync()->cancelEmptyJunk();
+        if (m_junkLabel && m_junkBar && m_junkBar->isVisible()) {
+            m_junkLabel->setText(tr("Stopping\u2026"));
+        }
+    }
+}
+
+// "Emptying Junk: N of M  [Stop]" at the right of the status bar while it runs.
+void MainWindow::showJunkBar(bool show, int done, int total)
+{
+    if (!m_junkBar) {
+        if (!show) {
+            return;
+        }
+        m_junkBar = new QWidget(this);
+        m_junkBar->setObjectName(QStringLiteral("emptyJunkBar"));
+        auto *h = new QHBoxLayout(m_junkBar);
+        h->setContentsMargins(0, 0, 6, 0);
+        h->setSpacing(6);
+        m_junkLabel = new QLabel(m_junkBar);
+        m_junkLabel->setObjectName(QStringLiteral("emptyJunkLabel"));
+        auto *btn = new QToolButton(m_junkBar);
+        btn->setObjectName(QStringLiteral("emptyJunkStop"));
+        btn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        btn->setText(tr("Stop"));
+        btn->setToolTip(tr("Stop emptying Junk; what has moved stays in Trash"));
+        connect(btn, &QToolButton::clicked, this, &MainWindow::stopEmptyJunk);
+        h->addWidget(m_junkLabel);
+        h->addWidget(btn);
+        statusBar()->addPermanentWidget(m_junkBar);
+    }
+    m_junkBar->setVisible(show);
+    if (show) {
+        m_junkLabel->setText(total > 0 ? tr("Emptying Junk: %1 of %2").arg(done).arg(total) : tr("Emptying Junk\u2026"));
+    }
+}
+
+void MainWindow::onJunkEmptied(int deleted, int total, bool cancelled, const QString &error)
+{
+    showJunkBar(false);
+    statusBar()->showMessage(zmail::ui::EmptyJunkPrompt::result(deleted, total, cancelled, error), error.isEmpty() ? 10000 : 0);
+    if (!error.isEmpty()) {
+        // A partial failure is not a status-bar blink: say how far it got.
+        auto *box = new QMessageBox(QMessageBox::Warning, tr("Empty Junk"),
+                                    zmail::ui::EmptyJunkPrompt::result(deleted, total, cancelled, error), QMessageBox::Ok, this);
+        box->setObjectName(QStringLiteral("emptyJunkResult"));
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        box->setWindowModality(Qt::WindowModal);
+        box->open();
+    }
+    if (m_reloadTimer) {
+        m_reloadTimer->start();
+    }
+    updateMailboxCounts();
 }
 
 void MainWindow::setFlagOnSelected(const QString &color)

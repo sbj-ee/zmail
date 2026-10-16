@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.7.3: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.8.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -96,7 +96,9 @@ dragged to; contacts are zmail-only (Google Contacts sync removed). New in 0.7.2
 sturdier app-password (IMAP) sync: changes land on the right message,
 lost connections are handled cleanly, and the local cache is kept. New in 0.7.3:
 no sample mail on real accounts (use --demo for it), and the Spam mailbox
-always shows on app-password accounts. See
+always shows on app-password accounts. New in 0.8.0: right-click Junk /
+Suspicious > Empty Junk… moves everything in Spam to Trash (asks Gmail for the
+count first, works in batches you can Stop). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -222,7 +224,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.7.3_amd64.deb
+cd build && cpack -G DEB   # zmail_0.8.0_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -339,6 +341,19 @@ OAuth and Gmail endpoints (`tests/mock/MockGoogle`).
 - Right-click **Trash → Empty Trash** removes everything in it from zmail.
   Gmail does not let a mail client with zmail's permission erase mail, so
   Gmail keeps those messages in its own Trash until it purges them.
+- Right-click **Junk / Suspicious → Empty Junk…** moves every message in
+  Spam to Trash, the same as Delete does anywhere else in zmail (nothing is
+  erased permanently; Gmail empties Trash itself after 30 days). zmail asks
+  Gmail how many messages Spam holds right now and shows that in the
+  confirmation (Cancel is the default button; if Gmail can't be asked it says
+  the number is only zmail's last count). The mail moves in batches of 200,
+  one batch at a time, so a big Spam folder doesn't block the window or trip
+  Gmail's limits: the Gmail API account goes through the same quota bucket and
+  429 backoff as the rest of zmail, and an app-password (IMAP) account hangs up
+  and waits out Gmail's throttle like every other IMAP command. The status bar
+  shows "Emptying Junk: N of M" with a **Stop** button (the right-click menu
+  says **Stop Emptying Junk** meanwhile); what has moved stays in Trash. If
+  Gmail refuses part of it, a message says how many moved and why it stopped.
 - Shift+click and Shift+arrows select a range from the current message, up
   or down.
 - **Settings → Contacts** is zmail's own address book, kept on this

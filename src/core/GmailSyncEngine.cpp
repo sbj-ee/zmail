@@ -119,6 +119,9 @@ void GmailSyncEngine::stop()
     m_busy = false;
     m_labelsRefreshing = false;
     m_labelsRefreshAgain = false;
+    if (m_junk) {
+        finishJunk(m_junk, tr("Stopped: the account was closed."));
+    }
 }
 
 void GmailSyncEngine::touchCounts(const QStringList &labelIds)
@@ -1259,6 +1262,153 @@ void GmailSyncEngine::emptyTrash()
         emit labelsChanged(); // the sidebar's Trash count
         emit trashEmptied(int(ids.size()));
     });
+}
+
+// ---- Empty Junk ----------------------------------------------------------
+
+struct GmailSyncEngine::JunkRun
+{
+    int gen = 0;
+    int total = 0;
+    int done = 0;
+    bool cancel = false;
+    QStringList ids;  // every id in Spam when the run began
+    qsizetype next = 0;
+};
+
+void GmailSyncEngine::countJunk(JunkCountCb cb)
+{
+    const auto cached = [this]() {
+        for (const CachedLabel &l : m_cache->labels()) {
+            if (l.id == QLatin1String("SPAM")) {
+                return l.total;
+            }
+        }
+        return 0;
+    };
+    if (!m_running) {
+        cb(cached(), false, tr("Not signed in."));
+        return;
+    }
+    const int gen = m_generation;
+    m_api->getLabel(QStringLiteral("SPAM"), [this, gen, cb, cached](const QJsonObject &json, const ApiError &err) {
+        if (gen != m_generation) {
+            cb(cached(), false, tr("Signed out."));
+            return;
+        }
+        if (err.isError || !json.contains(QStringLiteral("messagesTotal"))) {
+            cb(cached(), false, err.isError ? (err.message.isEmpty() ? tr("HTTP %1").arg(err.httpStatus) : err.message)
+                                            : tr("Gmail didn't say."));
+            return;
+        }
+        cb(json.value(QStringLiteral("messagesTotal")).toInt(), true, {});
+    });
+}
+
+void GmailSyncEngine::emptyJunk()
+{
+    if (m_junk) {
+        return; // one at a time
+    }
+    auto run = std::make_shared<JunkRun>();
+    run->gen = m_generation;
+    m_junk = run;
+    if (!m_running) {
+        finishJunk(run, tr("Not signed in."));
+        return;
+    }
+    junkList(run, {});
+}
+
+void GmailSyncEngine::cancelEmptyJunk()
+{
+    if (m_junk) {
+        m_junk->cancel = true; // takes effect when the request in flight lands
+    }
+}
+
+// Every id in Spam, a page at a time (ids only; Gmail lists Spam when it is
+// asked for by label).
+void GmailSyncEngine::junkList(std::shared_ptr<JunkRun> run, const QString &pageToken)
+{
+    m_api->listMessages(QStringLiteral("SPAM"), 500, pageToken,
+                        [this, run](const QJsonObject &json, const ApiError &err) {
+        if (run->gen != m_generation || m_junk != run) {
+            return;
+        }
+        if (err.isError) {
+            reportError(err, tr("Listing Spam"));
+            finishJunk(run, tr("Couldn't list Spam: %1").arg(err.message.isEmpty() ? QString::number(err.httpStatus) : err.message));
+            return;
+        }
+        for (const auto &v : json.value(QStringLiteral("messages")).toArray()) {
+            run->ids.append(v.toObject().value(QStringLiteral("id")).toString());
+        }
+        const QString next = json.value(QStringLiteral("nextPageToken")).toString();
+        if (!next.isEmpty() && !run->cancel) {
+            junkList(run, next);
+            return;
+        }
+        run->total = int(run->ids.size());
+        emit junkEmptyProgress(0, run->total);
+        if (run->total > 0) {
+            emit statusChanged(tr("Emptying Junk: 0 of %1\u2026").arg(run->total));
+        }
+        junkStep(run);
+    }, GmailClient::Priority::Interactive); // someone is waiting: not behind background paging
+}
+
+void GmailSyncEngine::junkStep(std::shared_ptr<JunkRun> run)
+{
+    if (run->gen != m_generation || m_junk != run) {
+        return;
+    }
+    if (run->cancel || run->next >= run->ids.size()) {
+        refreshLabels({}, true); // Spam's, Trash's and the Inbox's new counts
+        finishJunk(run, {});
+        return;
+    }
+    const QStringList chunk = run->ids.mid(run->next, kEmptyJunkBatch);
+    const QStringList remove{QStringLiteral("SPAM"), kInbox};
+    m_api->batchModifyLabels(chunk, {QStringLiteral("TRASH")}, remove,
+                             [this, run, chunk, remove](const QJsonObject &, const ApiError &err) {
+        if (run->gen != m_generation || m_junk != run) {
+            return;
+        }
+        if (err.isError) {
+            // GmailClient has already retried with backoff (429 / 5xx, Retry-After).
+            reportError(err, tr("Emptying Junk"));
+            refreshLabels({}, true);
+            finishJunk(run, tr("Gmail refused the move: %1")
+                                .arg(err.message.isEmpty() ? QString::number(err.httpStatus) : err.message));
+            return;
+        }
+        {
+            const MailCache::Batch batch(*m_cache);
+            for (const QString &messageId : chunk) {
+                if (m_cache->contains(messageId)) {
+                    m_cache->modifyLabels(messageId, {QStringLiteral("TRASH")}, remove);
+                }
+            }
+        }
+        run->next += chunk.size();
+        run->done += int(chunk.size());
+        emit messagesChanged();
+        emit junkEmptyProgress(run->done, run->total);
+        emit statusChanged(tr("Emptying Junk: %1 of %2\u2026").arg(run->done).arg(run->total));
+        QTimer::singleShot(0, this, [this, run] { junkStep(run); });
+    });
+}
+
+void GmailSyncEngine::finishJunk(const std::shared_ptr<JunkRun> &run, const QString &error)
+{
+    if (m_junk != run) {
+        return; // reported already
+    }
+    m_junk.reset();
+    emit messagesChanged();
+    emit labelsChanged();
+    emit junkEmptied(run->done, run->total, run->cancel && error.isEmpty() && run->done < run->total, error);
 }
 
 void GmailSyncEngine::prunePurged()

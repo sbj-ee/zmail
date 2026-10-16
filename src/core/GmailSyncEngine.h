@@ -92,6 +92,15 @@ public:
     // Empty Trash: everything in Trash now leaves zmail (MailCache::purged).
     // emptied(n) reports how many, or -1 if Gmail couldn't be asked.
     void emptyTrash() override;
+    // Empty Junk: every message in Spam to Trash (batchModify, kEmptyJunkBatch
+    // ids at a time, one request in flight). Each call goes through
+    // GmailClient's quota bucket, in-flight cap and 429 / 5xx backoff (honouring
+    // Retry-After); when it finally gives up the run ends and reports how far
+    // it got. countJunk is labels.get SPAM (messagesTotal: exact).
+    void countJunk(JunkCountCb cb) override;
+    void emptyJunk() override;
+    void cancelEmptyJunk() override;
+    bool emptyingJunk() const override { return bool(m_junk); }
 
     // Labels as folders (users.labels.*). Create/rename use Gmail's "/" nesting
     // (e.g. "Projects/zmail"). deleteLabel removes the label only — messages
@@ -152,6 +161,11 @@ private:
     // Every message id in Gmail's Trash, a page at a time; ok=false if a page failed.
     void listTrash(std::function<void(bool ok, const QStringList &ids)> done, const QString &pageToken = {},
                    std::shared_ptr<QStringList> sofar = {});
+    struct JunkRun;
+    void junkList(std::shared_ptr<JunkRun> run, const QString &pageToken);
+    void junkStep(std::shared_ptr<JunkRun> run);
+    void finishJunk(const std::shared_ptr<JunkRun> &run, const QString &error);
+    std::shared_ptr<JunkRun> m_junk; // Empty Junk under way
     void prunePurged(); // forget purged ids Gmail has since erased or restored
     static constexpr int kEmptyFolderRounds = 20; // x 500 messages per Empty Folder
     static QStringList labelIds(const QJsonObject &message); // a message resource's labelIds

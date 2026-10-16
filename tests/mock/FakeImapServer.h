@@ -5,6 +5,7 @@
 // UID SEARCH (UID ranges, X-GM-MSGID), IDLE / DONE, NOOP, LOGOUT.
 // Plain TCP on localhost. Never linked into zmail. Passwords are fakes.
 #include <QByteArray>
+#include <functional>
 #include <QDateTime>
 #include <QHash>
 #include <QList>
@@ -55,6 +56,11 @@ public:
     QList<QByteArray> loginRefusals;    // next LOGINs answer these ("NO [ALERT] Too many ...")
     int throttleCommands = 0;           // next commands answer NO [THROTTLED]
     int connectAttempts = 0;
+    int throttleMoves = 0;              // next MOVE / COPY commands answer NO [THROTTLED]
+    int failMovesAfter = -1;            // once this many MOVE / COPY commands have worked, the rest answer NO [CANNOT]
+    int movesDone = 0;                  // MOVE / COPY commands that worked
+    bool holdMoves = false;             // MOVE / COPY run but are not answered until releaseMoves() (to watch a long run)
+    void releaseMoves();
     int refusedLogins = 0;         // every APPEND's message bytes          // STORE / MOVE answer NO (to test rollback)
 
     // New message; notifies IDLE sessions (* n EXISTS). Returns its X-GM-MSGID.
@@ -104,6 +110,7 @@ private:
     void moveTo(Msg *m, const QString &from, const QString &to, bool move);
     QList<QPair<qint64, qint64>> parseSet(const QByteArray &set, qint64 star) const;
 
+    QList<std::function<void()>> m_held; // answers holdMoves is keeping back
     QTcpServer m_server;
     QList<Msg> m_msgs;
     QList<Session *> m_sessions;

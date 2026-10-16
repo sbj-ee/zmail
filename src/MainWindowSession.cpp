@@ -205,6 +205,8 @@ void MainWindow::attachSync()
             statusBar()->showMessage(tr("The Trash is back as it was."), 4000);
         });
     });
+    connect(sync, &zmail::SyncEngine::junkEmptyProgress, this, [this](int done, int total) { showJunkBar(true, done, total); });
+    connect(sync, &zmail::SyncEngine::junkEmptied, this, &MainWindow::onJunkEmptied);
     connect(sync, &zmail::SyncEngine::countsChanged, this, &MainWindow::updateMailboxCounts);
     connect(sync, &zmail::SyncEngine::loadAllFinished, this, [this](const QString &, int loaded, bool complete) {
         rebuildMailboxMenus(); // back to "Load All Messages"

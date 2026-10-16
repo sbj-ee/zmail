@@ -8,6 +8,7 @@
 #include <QLocale>
 #include <QTcpSocket>
 #include <QTimeZone>
+#include <QTimer>
 
 namespace zmail::test {
 
@@ -186,6 +187,15 @@ QList<QPair<qint64, qint64>> FakeImapServer::parseSet(const QByteArray &set, qin
         out.append({a, b});
     }
     return out;
+}
+
+void FakeImapServer::releaseMoves()
+{
+    holdMoves = false;
+    const auto held = std::exchange(m_held, {});
+    for (const auto &answer : held) {
+        answer();
+    }
 }
 
 void FakeImapServer::reply(Session *s, const QByteArray &data)
@@ -488,6 +498,16 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
             reply(s, tag + " NO [CANNOT] Refused for the test\r\n");
             return;
         }
+        if (throttleMoves > 0) {
+            --throttleMoves;
+            reply(s, tag + " NO [THROTTLED] Account exceeded command or bandwidth limits. (Failure)\r\n");
+            return;
+        }
+        if (failMovesAfter >= 0 && movesDone >= failMovesAfter) {
+            reply(s, tag + " NO [CANNOT] Refused for the test (after " + QByteArray::number(movesDone) + " moves)\r\n");
+            return;
+        }
+        ++movesDone;
         const QString folder = s->selected;
         const QString dest = ImapClient::decodeMailboxName(v.at(2).text);
         const auto ms = members(folder);
@@ -505,6 +525,14 @@ void FakeImapServer::handle(Session *s, const QByteArray &line, const QByteArray
         }
         for (const quint64 id : moving) {
             moveTo(find(id), folder, dest, cmd == "MOVE");
+        }
+        if (holdMoves) {
+            m_held.append([this, s, tag] {
+                if (m_sessions.contains(s)) {
+                    reply(s, tag + " OK [COPYUID 1 1 1] (Success)\r\n");
+                }
+            });
+            return;
         }
         reply(s, tag + " OK [COPYUID 1 1 1] (Success)\r\n");
     } else if (cmd == "CREATE" && v.size() >= 2) {

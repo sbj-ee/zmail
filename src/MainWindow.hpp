@@ -154,6 +154,12 @@ public:
     // Flag the selected messages in a colour (ui/Flags.h); empty clears.
     void setFlagOnSelected(const QString &color);
     void emptyTrash(bool confirm = true); // right-click Trash > Empty Trash
+    // Right-click Junk / Suspicious > Empty Junk…: asks the server for the
+    // count, confirms (default button Cancel; the text says it is Trash, not
+    // erased), then moves Spam to Trash in batches. confirm=false skips only
+    // the question (tests, scripted use). stopEmptyJunk() cancels a run.
+    void emptyJunk(bool confirm = true);
+    void stopEmptyJunk();
     // File > Save Attachments: the shown message's attachments into a
     // folder (asked for when empty). savedAttachments() is what the last
     // call wrote, in order, once it has finished.
@@ -433,6 +439,15 @@ private:
     QStringList m_lastTrashed;        // ids the Undo puts back
     std::function<void()> m_undoOther; // or: what Undo does for a move / Empty Folder / Empty Trash
     void offerUndo(const QString &what, const QString &menuText, std::function<void()> undo);
+    // Empty Junk: the question (non-modal, so it can be inspected), and the
+    // "Emptying Junk: N of M [Stop]" bar in the status bar while it runs.
+    void confirmEmptyJunk(int count, bool exact, const QString &why);
+    void startEmptyJunk();
+    void showJunkBar(bool show, int done = 0, int total = 0);
+    void onJunkEmptied(int deleted, int total, bool cancelled, const QString &error);
+    QWidget *m_junkBar = nullptr;
+    QLabel *m_junkLabel = nullptr;
+    bool m_junkCounting = false; // waiting for the server's count
     QSet<QString> m_purgedBeforeEmpty; // Trash as it was hidden before the last Empty Trash
     QTimer *m_reloadTimer = nullptr;
     QAction *m_hideSpamAction = nullptr;

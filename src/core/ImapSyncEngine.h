@@ -97,6 +97,16 @@ public:
     bool untrash(const QString &id) override;
     void setFlag(const QString &id, const QString &color) override;
     void emptyTrash() override;
+    // Spam -> Trash, kEmptyJunkBatch UIDs per UID MOVE, one at a time; see
+    // SyncEngine. If Gmail throttles a batch, the engine's existing response
+    // applies: ImapClient::throttled hangs up and the reconnect waits
+    // ServerLimits::backoffMs (setBackoffScaleForTests shrinks it). The run
+    // ends there, reporting how far it got; what moved stays in Trash. Any
+    // other refusal ends it at once the same way.
+    void countJunk(JunkCountCb cb) override;
+    void emptyJunk() override;
+    void cancelEmptyJunk() override;
+    bool emptyingJunk() const override { return bool(m_junk); }
     void createLabel(const QString &name, const QString &backgroundColor = {},
                      std::function<void(const QString &id)> then = {}) override;
     void renameLabel(const QString &id, const QString &newName) override;
@@ -189,6 +199,12 @@ private:
     QStringList userLabels(const QStringList &labels) const;
     void idsInFolder(const QString &labelId, std::function<void(bool ok, const QHash<qint64, QString> &uidToId,
                                                                 const QHash<qint64, QStringList> &gmLabels)> then);
+    struct JunkRun;
+    QString lostMessage() const;
+    void junkStep(std::shared_ptr<JunkRun> run, Done done);
+    void endJunk(std::shared_ptr<JunkRun> run, const QString &error, Done done);
+    void finishJunk(const std::shared_ptr<JunkRun> &run, const QString &error);
+    std::shared_ptr<JunkRun> m_junk; // Empty Junk under way
     void dropAndRetry(const QString &reason);
     void scheduleRetry(const QString &reason);
     void removeDraft(const QString &id, std::function<void(bool ok, const QString &error)> then);

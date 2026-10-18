@@ -50,7 +50,7 @@ private slots:
     {
         MainWindow w;
         QCOMPARE(w.windowTitle(), QStringLiteral("zmail ") + QString::fromLatin1(zmail::kVersionString));
-        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.8.0"));
+        QCOMPARE(w.windowTitle(), QStringLiteral("zmail 0.9.0"));
     }
 
     void menuBarIsInWindowNotGlobal()
@@ -335,6 +335,23 @@ private slots:
         QVERIFY(w.findChild<QMenu *>(QStringLiteral("menuHelp")));
         QVERIFY(w.findChild<QAction *>(QStringLiteral("actionAbout"))->isEnabled());
         QVERIFY(w.findChild<QAction *>(QStringLiteral("actionCheckForUpdates")));
+    }
+
+    // Help > Check for Updates at Startup: on by default, remembered when turned off.
+    void startupUpdateCheckIsASetting()
+    {
+        QSettings().remove(QStringLiteral("updates/checkOnStartup"));
+        {
+            MainWindow w;
+            auto *startup = w.findChild<QAction *>(QStringLiteral("actionCheckUpdatesAtStartup"));
+            QVERIFY(startup && startup->isCheckable());
+            QVERIFY(startup->isChecked());
+            startup->setChecked(false);
+            QCOMPARE(QSettings().value(QStringLiteral("updates/checkOnStartup")).toBool(), false);
+        }
+        MainWindow again;
+        QVERIFY(!again.findChild<QAction *>(QStringLiteral("actionCheckUpdatesAtStartup"))->isChecked());
+        QSettings().remove(QStringLiteral("updates/checkOnStartup"));
     }
 
     void toolbarHasEudoraButtonsAndSearch()

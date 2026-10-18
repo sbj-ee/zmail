@@ -3,7 +3,7 @@
 // types, and mailto: links. (OAuth state handling is in tst_auth; action
 // pinning is the check_action_pins test.)
 #include "MainWindow.hpp"
-#include "UpdateChecker.hpp"
+#include "core/Update.h"
 #include "core/Mailto.h"
 #include "core/MimeBuilder.h"
 #include "core/ReplyBuilder.h"
@@ -66,7 +66,8 @@ private slots:
         QTest::newRow("other repo") << ok("https://github.com/sbj-ee/zmail-evil/releases") << releases;
         QTest::newRow("other owner") << ok("https://github.com/attacker/zmail/releases/tag/v9") << releases;
         QTest::newRow("http") << ok("http://github.com/sbj-ee/zmail/releases/tag/v0.4.0") << releases;
-        QTest::newRow("userinfo") << ok("https://github.com/sbj-ee/zmail/@evil.example/") << ok("https://github.com/sbj-ee/zmail/@evil.example/");
+        QTest::newRow("userinfo-looking path") << ok("https://github.com/sbj-ee/zmail/@evil.example/") << releases;
+        QTest::newRow("not under releases") << ok("https://github.com/sbj-ee/zmail/issues/1") << releases;
         QTest::newRow("prefix with userinfo") << ok("https://github.com@evil.example/sbj-ee/zmail/") << releases;
         QTest::newRow("dot-dot") << ok("https://github.com/sbj-ee/zmail/../../attacker/x") << releases;
         QTest::newRow("newline") << ok("https://github.com/sbj-ee/zmail/releases\nfile:///etc") << releases;
@@ -80,7 +81,8 @@ private slots:
     {
         QFETCH(QString, htmlUrl);
         QFETCH(QString, opened);
-        QCOMPARE(UpdateChecker::releasePageUrl(htmlUrl), opened);
+        // The dialog links to the release page only when this says it is ours.
+        QCOMPARE(zmail::isTrustedReleasePageUrl(htmlUrl), opened == htmlUrl);
     }
 
     // --- Threading headers and attachment types -------------------------

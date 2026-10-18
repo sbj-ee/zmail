@@ -3,7 +3,7 @@
 #include "MainWindowDetail.h"
 
 #include "AboutDialog.hpp"
-#include "UpdateChecker.hpp"
+#include "ui/UpdateManager.h"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/Unsubscribe.h"
@@ -397,25 +397,6 @@ MainWindow::MainWindow(QWidget *parent)
     // zterminal's menu bar. Keep the menu bar inside the window.
     menuBar()->setNativeMenuBar(false);
 
-    m_updates = new UpdateChecker(this);
-    connect(m_updates, &UpdateChecker::updateAvailable, this,
-            [this](const QString &tag, const QString &url) {
-                const auto choice = QMessageBox::question(
-                    this, tr("Update available"),
-                    tr("zmail %1 is available (you have %2).\n\nOpen the release page?")
-                        .arg(tag, QString::fromLatin1(zmail::kVersionString)));
-                if (choice == QMessageBox::Yes) {
-                    QDesktopServices::openUrl(QUrl(url));
-                }
-            });
-    connect(m_updates, &UpdateChecker::upToDate, this, [this]() {
-        statusBar()->showMessage(
-            tr("zmail %1 is up to date.").arg(QString::fromLatin1(zmail::kVersionString)), 5000);
-    });
-    connect(m_updates, &UpdateChecker::checkFailed, this, [this](const QString &reason) {
-        statusBar()->showMessage(tr("Update check failed: %1").arg(reason), 8000);
-    });
-
     m_model = new MessageListModel(this);
     if (demoData()) {
         m_model->setItems(sampleMail());
@@ -791,6 +772,12 @@ void MainWindow::buildMenus()
     about->setObjectName(QStringLiteral("actionAbout"));
     QAction *upd = help->addAction(tr("Check for &Updates\u2026"), this, &MainWindow::checkForUpdates);
     upd->setObjectName(QStringLiteral("actionCheckForUpdates"));
+    QAction *updAuto = help->addAction(tr("Check for Updates at &Startup"));
+    updAuto->setObjectName(QStringLiteral("actionCheckUpdatesAtStartup"));
+    updAuto->setCheckable(true);
+    updAuto->setChecked(zmail::UpdateManager::checkOnStartupEnabled());
+    updAuto->setToolTip(tr("Look for a new zmail about once a day, a few seconds after it starts"));
+    connect(updAuto, &QAction::toggled, this, [](bool on) { zmail::UpdateManager::setCheckOnStartup(on); });
 }
 
 void MainWindow::buildToolbar()
@@ -1482,9 +1469,9 @@ void MainWindow::showAbout()
 
 void MainWindow::checkForUpdates()
 {
-    statusBar()->showMessage(tr("Checking for updates\u2026"));
-    m_updates->checkForUpdates(QString::fromLatin1(zmail::kVersionString),
-                               QString::fromLatin1(zmail::kRepo));
+    // Offers the update in a dialog (version, release notes), then downloads,
+    // verifies and installs it; see ui/UpdateManager.h.
+    zmail::UpdateManager::instance().checkNow(this);
 }
 
 // ---- Gmail session ---------------------------------------------------------

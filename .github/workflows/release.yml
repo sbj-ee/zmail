@@ -1,0 +1,156 @@
+# Release: on a v* tag, build + test on Ubuntu 24.04, package the .deb, write
+# SHA256SUMS, sign it with minisign (SHA256SUMS.minisig) and create the GitHub
+# Release. Same pipeline and signing key as sbj-ee/zterminal.
+#
+# In-app updater (Help > Check for Updates): downloads SHA256SUMS +
+# SHA256SUMS.minisig (signature checked against the public key compiled into
+# zmail, src/core/UpdateSigningKey.cpp), then zmail_<version>_amd64.deb, checks
+# its SHA-256 against the signed list, and runs pkexec apt install.
+# A release without a valid signature is never installed by the app, so this
+# workflow refuses to publish one. See docs/RELEASING.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Least privilege: jobs get read-only contents unless they say otherwise.
+# Only publish writes (gh release create); the build job may mint an OIDC
+# token solely to sign a build-provenance attestation for the package.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    name: Build Linux ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write     # Sigstore signing for the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Qt 6 + build tools
+        timeout-minutes: 10
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq \
+            qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
+            libmd4c-dev libmd4c-html0-dev libzip-dev libhunspell-dev hunspell-en-us fonts-noto-color-emoji \
+            libsodium-dev libgl1-mesa-dev cmake ninja-build g++ dpkg-dev pkg-config
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DZMAIL_WERROR=ON
+
+      - name: Tag must match project() VERSION
+        run: |
+          version=$(sed -n 's/.*CMAKE_PROJECT_VERSION:STATIC=//p' build/CMakeCache.txt)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$GITHUB_REF_NAME project=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match project(zmail VERSION $version) in CMakeLists.txt"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (mock Google only; no network access to Google)
+        run: ctest --test-dir build --output-on-failure --timeout 180
+
+      - name: Package .deb
+        run: |
+          cd build
+          cpack -G DEB
+          deb="zmail_${VERSION}_amd64.deb"
+          test -f "$deb"
+          dpkg-deb -I "$deb"
+          dpkg-deb -c "$deb" | grep -q './usr/bin/zmail$'
+          dpkg-deb -f "$deb" Version | grep -qx "$VERSION"
+          dpkg-deb -f "$deb" Depends | grep -q 'libsodium'
+          sha256sum "$deb" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Signed SLSA build provenance for the .deb (verify with
+      # `gh attestation verify zmail_<v>_amd64.deb -R sbj-ee/zmail`).
+      - name: Attest build provenance (.deb)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: build/zmail_*_amd64.deb
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: zmail-release-linux
+          path: |
+            build/zmail_*_amd64.deb
+            build/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    name: Publish ${{ github.ref_name }}
+    needs: [linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # gh release create
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+
+      - name: Sign SHA256SUMS and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # minisign secret key (the whole minisign.key file) and its password;
+          # see docs/RELEASING.md. The release fails without them.
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          cp "dist/zmail-release-linux/zmail_${version}_amd64.deb" out/
+          cp dist/zmail-release-linux/SHA256SUMS out/SHA256SUMS
+          cat out/SHA256SUMS
+          (cd out && sha256sum -c SHA256SUMS)
+
+          # Sign SHA256SUMS. The app installs nothing without a valid
+          # SHA256SUMS.minisig from the key compiled into it.
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "::error::Secret MINISIGN_SECRET_KEY is not set: refusing to publish an unsigned release (see docs/RELEASING.md)"
+            exit 1
+          fi
+          sudo apt-get install -y -qq minisign
+          key="$RUNNER_TEMP/minisign.key"
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "${MINISIGN_PASSWORD:-}" \
+            | minisign -S -s "$key" -m out/SHA256SUMS -t "zmail $GITHUB_REF_NAME SHA256SUMS"
+          rm -f "$key"
+          # Check it against the public key compiled into this commit, so a
+          # release the app can't verify never goes out.
+          pub=$(gh api "repos/$GITHUB_REPOSITORY/contents/src/core/UpdateSigningKey.cpp?ref=$GITHUB_SHA" \
+                  -H "Accept: application/vnd.github.raw" \
+                | sed -n 's/.*kUpdateSigningPublicKey\[\] = "\(RW[A-Za-z0-9+/=]*\)".*/\1/p')
+          if [ -z "$pub" ]; then
+            echo "::error::src/core/UpdateSigningKey.cpp has no public key: paste the minisign public key first (docs/RELEASING.md)"
+            exit 1
+          fi
+          minisign -V -P "$pub" -m out/SHA256SUMS -x out/SHA256SUMS.minisig
+
+          gh release create "$GITHUB_REF_NAME" \
+            "out/zmail_${version}_amd64.deb" \
+            out/SHA256SUMS \
+            out/SHA256SUMS.minisig \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "zmail $version" \
+            --generate-notes \
+            --verify-tag

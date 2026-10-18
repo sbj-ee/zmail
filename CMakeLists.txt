@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 0.8.0 LANGUAGES CXX)
+project(zmail VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,6 +40,9 @@ find_package(Qt6Keychain REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MD4C_HTML REQUIRED IMPORTED_TARGET md4c-html)
 pkg_check_modules(LIBZIP REQUIRED IMPORTED_TARGET libzip)
+# Self-update (0.9.0): libsodium's Ed25519 verifies the minisign signature on a
+# release's SHA256SUMS. Ubuntu: libsodium-dev (runtime libsodium23).
+pkg_check_modules(SODIUM REQUIRED IMPORTED_TARGET libsodium>=1.0.18)
 option(ZMAIL_WITH_HUNSPELL "Spell check in the compose window (Hunspell)" ON)
 if(ZMAIL_WITH_HUNSPELL)
   pkg_check_modules(HUNSPELL IMPORTED_TARGET hunspell)
@@ -61,8 +64,6 @@ add_library(zmail_app STATIC
   src/MainWindowMailboxes.cpp
   src/MainWindowMessageActions.cpp
   src/MainWindowSession.cpp
-  src/UpdateChecker.cpp
-  src/UpdateChecker.hpp
   src/core/AddressGuard.cpp
   src/core/AddressGuard.h
   src/core/AppPasswordAccount.cpp
@@ -94,6 +95,17 @@ add_library(zmail_app STATIC
   src/core/Vacation.h
   src/ui/VacationDialog.cpp
   src/ui/VacationDialog.h
+  src/core/Minisign.cpp
+  src/core/Minisign.h
+  src/core/Update.cpp
+  src/core/Update.h
+  src/core/UpdateChecker.cpp
+  src/core/UpdateChecker.h
+  src/core/UpdateSigningKey.cpp
+  src/ui/UpdateDialog.cpp
+  src/ui/UpdateDialog.h
+  src/ui/UpdateManager.cpp
+  src/ui/UpdateManager.h
   src/core/Mailto.cpp
   src/core/Mailto.h
   src/core/Markdown.cpp
@@ -228,7 +240,7 @@ target_include_directories(zmail_app PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${ZMAIL_GENERATED_DIR}")
 target_link_libraries(zmail_app PUBLIC Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Svg Qt6::Sql Qt6::Multimedia Qt6::PrintSupport Qt6::DBus
-  qt6keychain PkgConfig::MD4C_HTML PkgConfig::LIBZIP)
+  qt6keychain PkgConfig::MD4C_HTML PkgConfig::LIBZIP PkgConfig::SODIUM)
 if(HUNSPELL_FOUND)
   target_link_libraries(zmail_app PUBLIC PkgConfig::HUNSPELL)
   target_compile_definitions(zmail_app PUBLIC ZMAIL_HAVE_HUNSPELL)

@@ -16,6 +16,11 @@ function(zmail_add_test name)
 endfunction()
 
 zmail_add_test(tst_version)
+zmail_add_test(tst_minisign) # minisign signatures on SHA256SUMS (real minisign output + generated keys)
+target_compile_definitions(tst_minisign PRIVATE ZMAIL_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
+zmail_add_test(tst_update) # self-update: release JSON, checksums, signatures, the whole flow against a local fake GitHub
+target_compile_definitions(tst_update PRIVATE ZMAIL_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
+set_tests_properties(tst_update PROPERTIES TIMEOUT 240)
 zmail_add_test(tst_lowsec)
 add_test(NAME check_action_pins COMMAND sh "${CMAKE_SOURCE_DIR}/tools/check-action-pins.sh")
 zmail_add_test(tst_listfixes)
@@ -64,6 +69,10 @@ target_link_libraries(zmail_mockshot PRIVATE zmail_app zmail_mock)
 # Offscreen screenshots of the app-password account dialog (fake servers, fake password).
 add_executable(zmail_dialogshot dialogshot.cpp DemoData.cpp mock/FakeMailServer.h)
 target_link_libraries(zmail_dialogshot PRIVATE zmail_app zmail_mock Qt6::Test)
+
+# Offscreen screenshots of the self-update flow (fake GitHub, made-up release).
+add_executable(zmail_updateshot updateshot.cpp DemoData.cpp)
+target_link_libraries(zmail_updateshot PRIVATE zmail_app zmail_mock Qt6::Test)
 
 # Built WITHOUT DemoData.cpp: the real app's default (no sample mail).
 add_executable(tst_nodemo tst_nodemo.cpp)

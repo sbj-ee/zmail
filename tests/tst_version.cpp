@@ -1,4 +1,4 @@
-#include "UpdateChecker.hpp"
+#include "core/Update.h"
 #include "version.hpp"
 
 #include <QtTest>
@@ -35,7 +35,7 @@ private slots:
         QFETCH(QString, tag);
         QFETCH(QString, current);
         QFETCH(bool, newer);
-        QCOMPARE(UpdateChecker::isNewer(tag, current), newer);
+        QCOMPARE(zmail::isNewerVersion(tag, current), newer);
     }
 };
 

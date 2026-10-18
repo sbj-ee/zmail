@@ -26,7 +26,6 @@ class QToolBar;
 class QTreeView;
 class QTreeWidget;
 class QTreeWidgetItem;
-class UpdateChecker;
 class ComposeWindow;
 
 namespace zmail {
@@ -355,7 +354,6 @@ private:
     QLabel *m_countLabel = nullptr;
     zmail::ui::MessageListModel *m_model = nullptr;
     zmail::ui::MessageFilterProxy *m_proxy = nullptr;
-    UpdateChecker *m_updates = nullptr;
     QActionGroup *m_themeGroup = nullptr;
     QMenu *m_themeMenu = nullptr;
     QAction *m_themeEditorAction = nullptr;

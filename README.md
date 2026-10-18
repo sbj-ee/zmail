@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.8.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.9.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -98,7 +98,10 @@ lost connections are handled cleanly, and the local cache is kept. New in 0.7.3:
 no sample mail on real accounts (use --demo for it), and the Spam mailbox
 always shows on app-password accounts. New in 0.8.0: right-click Junk /
 Suspicious > Empty Junk… moves everything in Spam to Trash (asks Gmail for the
-count first, works in batches you can Stop). See
+count first, works in batches you can Stop). New in 0.9.0: self-update. Help →
+Check for Updates (and a quiet daily check at startup) offers a newer release
+with its notes, downloads it, verifies the SHA-256 and the minisign signature,
+installs it and offers to restart; see [Updates](#updates). See
 [docs/PLAN.md](docs/PLAN.md).
 
 - Linux amd64 first, packaged as a `.deb`
@@ -219,12 +222,12 @@ flags/stars, read/unread, bulk actions, Gmail search syntax (`from:`,
 
 ```sh
 sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev \
-  libqt6sql6-sqlite libmd4c-dev libmd4c-html0-dev libzip-dev \
-  libhunspell-dev hunspell-en-us cmake ninja-build g++
+  libqt6sql6-sqlite libmd4c-dev libmd4c-html0-dev libzip-dev libsodium-dev \
+  libhunspell-dev hunspell-en-us cmake ninja-build g++ pkg-config
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.8.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.9.0_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -480,6 +483,62 @@ choice. A missing or unreadable custom file falls back to the built-in chime
 A message that leaves (Send, or File → Send Queued Messages) plays a short
 "swoosh" (`assets/sounds/sent.wav`). **Settings → Sounds → Sent mail** turns
 it off, and has its own **Test**.
+
+## Updates
+
+**Help → Check for Updates…** asks GitHub for the latest release. If it is newer
+than the version you are running, a dialog shows its version and release notes
+with **Install**, **Later** and **Skip This Version**. **Help → Check for Updates
+at Startup** (on by default) does the same quietly about once a day, a few
+seconds after zmail starts; it only speaks up when there is something newer, and
+never while you are on `--demo`.
+
+![The update dialog: version, release notes, Install / Later / Skip This Version](docs/screenshots/update-available.png)
+
+Install is the same flow zterminal has:
+
+1. Download `SHA256SUMS` and `SHA256SUMS.minisig`, and **check the signature**
+   with the minisign public key built into zmail
+   (`src/core/UpdateSigningKey.cpp`). Nothing else is downloaded if it is wrong.
+2. Download `zmail_<version>_amd64.deb` and check its SHA-256 against the signed
+   `SHA256SUMS`.
+3. Copy the package into a private (0700) folder, re-check the SHA-256, and run
+   `/usr/bin/pkexec /usr/bin/apt install -y <that .deb>`. The system's own
+   password prompt appears (polkit); zmail never sees the password and you do
+   not have to open a terminal.
+4. Offer **Restart Now / Later**. Restart closes the window the way File → Quit
+   does, so a message still being written asks "Save draft?" first, then zmail
+   starts again.
+
+![Downloading, with the Cancel button](docs/screenshots/update-downloading.png)
+![The restart prompt after the install, with one message still being written](docs/screenshots/update-restart.png)
+
+Safety rules, none of which can be turned off:
+
+- An update is installed only if `SHA256SUMS` carries a valid
+  `SHA256SUMS.minisig` from the release key and the package matches it. A release
+  without a signature, with a bad one, or without the `.deb` is offered only as a
+  link to its release page.
+- Only a zmail installed from the `.deb` (`/usr/bin/zmail`) is replaced; a
+  build-tree or `/usr/local` copy is not touched (the dialog says so, and the
+  verified package stays on disk with the `sudo apt install` command).
+- If `pkexec`/`apt` fail or the password prompt is dismissed, nothing is
+  half-installed: zmail keeps the verified `.deb`, shows the command, and opens
+  the release page.
+- The update flow reads and writes no mail, tokens or settings other than its own
+  last-check time and skipped version (`~/.config/zmail/update-state.ini`) and the
+  startup-check switch (`updates/checkOnStartup`).
+- This is a Linux amd64 feature: there is no macOS or Windows build of zmail, so on
+  any other platform Install is unavailable and the dialog links to the release
+  page.
+
+Releases are built, signed and published by `.github/workflows/release.yml`; see
+[docs/RELEASING.md](docs/RELEASING.md) (the signing key and the two repository
+secrets it needs). To check a release by hand:
+
+```sh
+minisign -Vm SHA256SUMS -P RWQfb7N3uguWMhJ7jsE/Z0hZ7pDWHQ9OEeWSBTlN/R5bxQ8HWSMxp/l9
+```
 
 ## License
 

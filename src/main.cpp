@@ -3,6 +3,7 @@
 #include "ui/ComposeWindow.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
+#include "ui/UpdateManager.h"
 #include "version.hpp"
 
 #include <QApplication>
@@ -53,6 +54,11 @@ int main(int argc, char *argv[])
             session->state() != zmail::MailSession::State::SignedIn) {
             w.showConnectDialog(); // first run, or signed out last time
         }
+    }
+    if (!cli.isSet(offline)) {
+        // A quiet check a few seconds after start (at most daily, Help > Check
+        // for Updates at Startup); it only speaks up when a newer release exists.
+        zmail::UpdateManager::instance().scheduleStartupCheck(&w);
     }
     if (cli.isSet(compose)) {
         w.openCompose(true);

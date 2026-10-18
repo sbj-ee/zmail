@@ -5,7 +5,6 @@
 #include "MainWindow.hpp"
 
 #include "AboutDialog.hpp"
-#include "UpdateChecker.hpp"
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/MessageParser.h"

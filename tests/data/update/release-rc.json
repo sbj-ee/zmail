@@ -1,0 +1,12 @@
+{
+  "html_url": "https://github.com/sbj-ee/zmail/releases/tag/v1.0.0-rc.1",
+  "tag_name": "v1.0.0-rc.1",
+  "name": "zmail 1.0.0 RC 1",
+  "draft": false,
+  "prerelease": true,
+  "body": "",
+  "assets": [
+    { "name": "zmail_1.0.0~rc.1_amd64.deb", "size": 10, "browser_download_url": "@BASE@/download/rc/zmail_1.0.0~rc.1_amd64.deb" },
+    { "name": "SHA256SUMS", "size": 10, "browser_download_url": "@BASE@/download/rc/SHA256SUMS" }
+  ]
+}

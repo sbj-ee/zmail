@@ -16,8 +16,8 @@ checked against Google's live documentation on 2026-10-03.
 
 It matches zterminal and zwriter: the same CMake layout, the generated
 `version.hpp` from `project(VERSION)`, the CPack `.deb`, the CI on
-ubuntu-24.04, and the GitHub-releases update checker (ported from zwriter's
-`UpdateChecker` in this PR). Qt also covers everything a mail client needs
+ubuntu-24.04, and the GitHub-releases update checker (first ported from zwriter's
+`UpdateChecker`; zterminal's verified self-updater since 0.9.0). Qt also covers everything a mail client needs
 from one vendor: networking with TLS (QNetworkAccessManager), SQLite (Qt SQL),
 D-Bus (QtDBus) for notifications, audio (Qt Multimedia), a sandboxed HTML
 engine (QtWebEngine) and rich-text editing (QTextEdit). There's nothing to
@@ -159,7 +159,7 @@ ui/  (MainWindow, three panes, Compose, Settings, RulesEditor, Scheduled, Contac
  ├─ notify/    Sounds (Qt Multimedia), Notifier (org.freedesktop.Notifications)
  ├─ contacts/  AddressBook, VCard, Autocomplete, GroupExpander
  ├─ theme/     ThemeManager (light/dark/system, accent, palette)
- └─ update/    UpdateChecker (GitHub releases/latest; ported from zwriter)
+ └─ update/    UpdateChecker + UpdateManager (GitHub releases/latest, minisign-verified install; from zterminal)
 ```
 
 Everything except the UI is a Qt-free-at-the-edges library (`zmail_core`)
@@ -738,9 +738,12 @@ The people are made up, the addresses are `example.*`, and the brands are
 Microsoft's fictional Contoso, Fabrikam, Northwind and Tailspin. No real
 people appear.
 
-**Update checker:** **Help → About** and **Help → Check for Updates** use
-zwriter's `UpdateChecker`: GitHub `releases/latest`, a 5 s timeout, soft
-failure, semver comparison, and a rate-limit message.
+**Update checker:** **Help → About** and **Help → Check for Updates**. Since
+0.9.0 this is zterminal's updater (`core/Update`, `core/UpdateChecker`,
+`core/Minisign`, `ui/UpdateManager`, `ui/UpdateDialog`): GitHub
+`releases/latest`, a 5 s timeout, semver comparison, a rate-limit message, and
+Install: a minisign-verified `SHA256SUMS`, a checked `.deb`, `pkexec apt
+install`, then a restart prompt. See README "Updates" and docs/RELEASING.md.
 
 ### 4.16 PR #3 (v0.2.0): what's implemented
 

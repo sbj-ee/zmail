@@ -9,7 +9,19 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
-## 0.9.1 — unreleased
+## 0.9.2
+
+- **Release workflow fix.** The v0.9.1 tag built and tested fine but its
+  Publish job failed (`cp: cannot stat 'dist/zmail-release-linux/...'`): with a
+  single artifact, `actions/download-artifact` extracts it straight into `dist/`
+  with no per-artifact subfolder. Publish now downloads the artifact by name
+  into `dist/linux` and finds the `.deb` and `SHA256SUMS` wherever they landed,
+  failing with a listing of `dist/` if either is missing. Publish also checks
+  that the signed `SHA256SUMS` lists exactly the `.deb` it ships. No change to
+  the app. Version 0.9.1 was tagged but never published; 0.9.2 is the first
+  release signed with `DBC46B23C3AF0EF3`.
+
+## 0.9.1 — tagged, not published (see 0.9.2)
 
 - **zmail's own release key.** The updater now trusts minisign key
   `DBC46B23C3AF0EF3` (zmail's own, replacing the zterminal key `32960BBA77B36F1F`

@@ -101,10 +101,14 @@ jobs:
     permissions:
       contents: write # gh release create
     steps:
+      # One artifact, downloaded by name into its own folder. (Without a name,
+      # download-artifact extracts a single artifact straight into dist/ with
+      # no per-artifact subfolder, which is what broke the v0.9.1 publish.)
       - name: Download artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: dist
+          name: zmail-release-linux
+          path: dist/linux
 
       - name: Sign SHA256SUMS and create the release
         env:
@@ -117,10 +121,27 @@ jobs:
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           mkdir -p out
-          cp "dist/zmail-release-linux/zmail_${version}_amd64.deb" out/
-          cp dist/zmail-release-linux/SHA256SUMS out/SHA256SUMS
+          # Find the files wherever download-artifact put them (flat or in a
+          # per-artifact subfolder).
+          find_one() {
+            local n
+            n=$(find dist -type f -name "$1" | wc -l)
+            if [ "$n" -ne 1 ]; then
+              echo "::error::expected exactly one $1 under dist/, found $n" >&2
+              find dist | sort >&2
+              exit 1
+            fi
+            find dist -type f -name "$1"
+          }
+          deb_src=$(find_one "zmail_${version}_amd64.deb")
+          sums_src=$(find_one SHA256SUMS)
+          cp "$deb_src" out/
+          cp "$sums_src" out/SHA256SUMS
           cat out/SHA256SUMS
           (cd out && sha256sum -c SHA256SUMS)
+          # The signed list must name exactly the package we ship.
+          test "$(wc -l < out/SHA256SUMS)" -eq 1
+          grep -q "  zmail_${version}_amd64.deb\$" out/SHA256SUMS
 
           # Sign SHA256SUMS. The app installs nothing without a valid
           # SHA256SUMS.minisig from the key compiled into it.

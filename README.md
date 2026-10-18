@@ -3,7 +3,7 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.9.0: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
+**Status:** v0.9.1: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
 move to Trash, new-mail chime), a reworked message viewer, and sending: New /
 Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
 25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
@@ -227,7 +227,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.9.0_amd64.deb
+cd build && cpack -G DEB   # zmail_0.9.1_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.
@@ -532,13 +532,16 @@ Safety rules, none of which can be turned off:
   any other platform Install is unavailable and the dialog links to the release
   page.
 
-Releases are built, signed and published by `.github/workflows/release.yml`; see
+Releases are signed with zmail's own minisign key, ID `DBC46B23C3AF0EF3` (public
+key below). They are built, signed and published by `.github/workflows/release.yml`; see
 [docs/RELEASING.md](docs/RELEASING.md) (the signing key and the two repository
 secrets it needs). To check a release by hand:
 
 ```sh
-minisign -Vm SHA256SUMS -P RWQfb7N3uguWMhJ7jsE/Z0hZ7pDWHQ9OEeWSBTlN/R5bxQ8HWSMxp/l9
+minisign -Vm SHA256SUMS -P RWTzDq/DI2vE2xMeF01QWTxP2lwwlxGL9M1UxQE4EFV5kVmTF84wwyi2
 ```
+
+(Key ID `DBC46B23C3AF0EF3`; `minisign -Vm` prints it for a good signature.)
 
 ## License
 

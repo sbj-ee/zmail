@@ -20,37 +20,41 @@ The in-app updater (Help → Check for Updates → Install) installs only releas
 whose `SHA256SUMS` verifies against the minisign public key compiled into zmail,
 so a compromised GitHub release alone can't push malware to users.
 
-zmail uses **the same release key as zterminal** (key ID `32960BBA77B36F1F`,
-public key below). The public key is already in `src/core/UpdateSigningKey.cpp`.
-What is left to do once, by the repository owner (nobody else holds the secret
-key, and it must never be committed or pasted into a chat):
+zmail has its **own release key**: key ID `DBC46B23C3AF0EF3` (public key below),
+generated with `minisign -G` in October 2026. Its public half is in
+`src/core/UpdateSigningKey.cpp`. The secret key lives only on the maintainer's
+machine (`~/.minisign/minisign.key`) and, with its password, in the two
+repository secrets `MINISIGN_SECRET_KEY` and `MINISIGN_PASSWORD` that
+`release.yml` uses. It must never be committed or pasted into a chat. To set or
+replace the secrets (the owner only):
 
 ```sh
-# the key file and its password are the ones already used for sbj-ee/zterminal
-gh secret set MINISIGN_SECRET_KEY -R sbj-ee/zmail < zterminal-release.key
+gh secret set MINISIGN_SECRET_KEY -R sbj-ee/zmail < ~/.minisign/minisign.key
 gh secret set MINISIGN_PASSWORD   -R sbj-ee/zmail    # paste the password when asked
 ```
 
-To give zmail a key of its own instead: `minisign -G -p zmail-release.pub -s
-zmail-release.key`, set the two secrets above from that key, copy the second line
-of the `.pub` file (it starts with `RW`) into `kUpdateSigningPublicKey` in
-`src/core/UpdateSigningKey.cpp` (and the README's "Updates" section), and update
-the key ID in `tests/tst_minisign.cpp` and replace
-`tests/data/minisign/release-key/` with a `SHA256SUMS` and `.minisig` signed by
-the new key. Keep the secret key and its password in a password manager plus an
-offline backup: if it is lost, users on the old key can't update in the app (they
-install the next release by hand); if it leaks, rotate it (below).
+To change the key: `minisign -G -p zmail-release.pub -s zmail-release.key`, set
+the two secrets above from the new key, copy the second line of the `.pub` file
+(it starts with `RW`) into `kUpdateSigningPublicKey` in
+`src/core/UpdateSigningKey.cpp`, and update the key ID in this file, in the
+README's "Updates" section and in `tests/tst_minisign.cpp`
+(`compiledReleaseKeyIsValid`). `tests/data/minisign/release-key/` holds a real
+signature made by a *different* key (zterminal's, with its public key as a
+constant in the test): it only proves the verifier reads real minisign output
+and does not need to change. Keep the secret key and its password in a password
+manager plus an offline backup: if it is lost, users can't update in the app
+(they install the next release by hand); if it leaks, rotate it (below).
 
 Check a release by hand:
 
 ```sh
-minisign -Vm SHA256SUMS -P RWQfb7N3uguWMhJ7jsE/Z0hZ7pDWHQ9OEeWSBTlN/R5bxQ8HWSMxp/l9
+minisign -Vm SHA256SUMS -P RWTzDq/DI2vE2xMeF01QWTxP2lwwlxGL9M1UxQE4EFV5kVmTF84wwyi2
 ```
 
 ## Releases before the first signed one
 
 0.8.0 and earlier have no `SHA256SUMS.minisig`, and 0.8.0 has no updater: install
-the first signed release (0.9.0 or later) by hand,
+the first signed release (0.9.1 or later) by hand,
 `sudo apt install ./zmail_<version>_amd64.deb`, after verifying it with
 `minisign -Vm` and `sha256sum -c`. From then on updates are signature-checked.
 A release published without a signature is offered by the app only as a link
@@ -64,8 +68,8 @@ with the new key, so tell users to install that release by hand.
 
 ## Current release key
 
-Key ID `32960BBA77B36F1F`:
+Key ID `DBC46B23C3AF0EF3`:
 
 ```
-RWQfb7N3uguWMhJ7jsE/Z0hZ7pDWHQ9OEeWSBTlN/R5bxQ8HWSMxp/l9
+RWTzDq/DI2vE2xMeF01QWTxP2lwwlxGL9M1UxQE4EFV5kVmTF84wwyi2
 ```

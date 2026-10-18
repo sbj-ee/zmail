@@ -9,6 +9,19 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 0.9.1 — unreleased
+
+- **zmail's own release key.** The updater now trusts minisign key
+  `DBC46B23C3AF0EF3` (zmail's own, replacing the zterminal key `32960BBA77B36F1F`
+  that 0.9.0 embedded), the key that `release.yml` signs releases with. 0.9.0 was
+  never released; releases are checked against this key only. Docs
+  (`docs/RELEASING.md`, README "Updates") name the new key. The real-signature
+  test (a published zterminal `SHA256SUMS`, checked with a real minisign
+  signature) now pins zterminal's key as a constant in the test instead of
+  reading the embedded key, so it still proves real-minisign interoperability;
+  new tests pin the embedded key's ID and public key bytes. No behaviour change
+  otherwise.
+
 ## 0.9.0 — unreleased
 
 - **Self-update**, the same as zterminal's. Help → Check for Updates… shows a

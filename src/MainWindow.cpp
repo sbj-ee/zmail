@@ -962,10 +962,7 @@ void MainWindow::buildPanes()
             if (key == m_proxy->mailbox()) {
                 return; // selectMailbox already set this (avoids a rebuild loop)
             }
-            selectMailbox(key);
-            if (m_live && m_session->sync()) {
-                m_session->sync()->ensureLabel(labelForMailbox(key));
-            }
+            selectMailbox(key); // loads the folder too
             // Live mail: don't auto-open (that would mark the newest message read).
             if (m_live) {
                 m_view->clear();

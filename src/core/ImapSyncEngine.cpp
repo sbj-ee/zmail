@@ -561,10 +561,14 @@ void ImapSyncEngine::connectAndSync(bool full)
                                             m_cache->setAside(m_unverified.values()); // and forgets bodies nobody reclaimed
                                             m_unverified.clear();
                                         }
-                                        // After a reconnect: catch up the other folders already shown.
+                                        // After a reconnect or a full resync: catch up the other
+                                        // folders already shown. A full resync has just cleared
+                                        // every synced mark and set their mail aside, so the
+                                        // folders the app opened are read again too.
                                         QStringList others;
                                         for (const Folder &f : m_folders) {
-                                            if (f.synced && f.labelId != QLatin1String("INBOX")) {
+                                            if ((f.synced || m_wanted.contains(f.labelId))
+                                                && f.labelId != QLatin1String("INBOX")) {
                                                 others.append(f.labelId);
                                             }
                                         }
@@ -1140,6 +1144,9 @@ void ImapSyncEngine::pollNow(bool force)
 
 void ImapSyncEngine::ensureLabel(const QString &labelId)
 {
+    if (!labelId.isEmpty()) {
+        m_wanted.insert(labelId); // also when asked before the folders are listed
+    }
     Folder *f = folder(labelId);
     if (!f || f->synced) {
         return;

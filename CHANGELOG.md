@@ -9,6 +9,17 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.0
+
+- **First stable release.** No change to how zmail works from 0.9.3: the same
+  app, with the version moved to 1.0.0 (window title, About, update checks,
+  `zmail_1.0.0_amd64.deb`).
+- **README for a public 1.0:** a feature overview, an Install section (download
+  from Releases, check `SHA256SUMS.minisig` with key `DBC46B23C3AF0EF3` and the
+  SHA-256, `apt install` the `.deb`), an app-password quick start, and the
+  long per-version status paragraph replaced by a pointer to this changelog.
+  The README no longer says Gmail is OAuth-only.
+
 ## 0.9.3
 
 - **Junk / Suspicious count matched by its list.** On an app-password (IMAP)

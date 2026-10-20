@@ -9,6 +9,20 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 0.9.3
+
+- **Junk / Suspicious count matched by its list.** On an app-password (IMAP)
+  account the sidebar could say `2 / 2` for Junk / Suspicious while the list
+  said "No junk mail." and the status bar "Junk: 0 messages". The badge is the
+  server's count for `[Gmail]/Spam` (IMAP `STATUS`), but the folder's mail was
+  only fetched when the row was clicked: opening Junk another way (View ›
+  Show Spam, a rebuild of the sidebar) showed the count over an empty list,
+  and a full resync set Spam's mail aside and never read it again. Opening a
+  mailbox in any way now loads its folder, and a full resync or reconnect
+  reads again every folder zmail had opened, so the badge and the list come
+  from the same folder. Tests: `tst_imapspam` `junkBadgeMatchesListFromShowSpam`,
+  `junkListSurvivesFullResync`.
+
 ## 0.9.2
 
 - **Release workflow fix.** The v0.9.1 tag built and tested fine but its

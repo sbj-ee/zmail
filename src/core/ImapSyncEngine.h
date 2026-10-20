@@ -212,6 +212,9 @@ private:
     // After start(): cached from an earlier run and not yet shown by the server
     // again. What the Inbox doesn't vouch for is set aside once it is read.
     QSet<QString> m_unverified;
+    // Folders the app has opened (ensureLabel): read again after a full
+    // resync or reconnect, which clears every folder's synced mark.
+    QSet<QString> m_wanted;
     bool m_sweepPending = false; // start() has yet to set the unverified aside
     bool m_startPending = false; // start() has yet to reach the server (it may take some tries)
 

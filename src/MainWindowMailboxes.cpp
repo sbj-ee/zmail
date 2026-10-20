@@ -405,6 +405,14 @@ void MainWindow::selectMailbox(const QString &key)
         m_autoLoadRows = -1;
     }
     m_proxy->setMailbox(key);
+    // Every way of opening a mailbox loads it (a click, View > Show Spam, a
+    // rebuild of the tree): its count comes from the server folder, so the
+    // list must too, or the badge says "2 / 2" over "No junk mail.".
+    if (m_live && m_session && m_session->sync()) {
+        if (const QString label = labelForMailbox(key); !label.isEmpty()) {
+            m_session->sync()->ensureLabel(label);
+        }
+    }
     // Hide Spam omits Junk from the tree unless it is the current mailbox.
     if (hideSpam() && (prev == QLatin1String("Junk")) != (key == QLatin1String("Junk"))) {
         populateMailboxes();

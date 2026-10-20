@@ -5,6 +5,7 @@
 #include "MainWindow.hpp"
 #include "core/AppPasswordAccount.h"
 #include "core/MailSession.h"
+#include "core/SyncEngine.h"
 #include "core/TokenStore.h"
 #include "mock/FakeImapServer.h"
 
@@ -154,6 +155,40 @@ private slots:
         r.tree->setCurrentItem(r.item(QStringLiteral("In")));
         QTRY_VERIFY_WITH_TIMEOUT(r.select("Double your balance today"), 10000);
         QVERIFY(!r.select("You have been selected")); // still in Spam, kept out of In by Hide Spam
+    }
+    // Regression (0.9.3): View > Show Spam opened Junk / Suspicious without
+    // loading [Gmail]/Spam, so the sidebar said "1 / 1" (the server's count)
+    // over an empty list saying "No junk mail.". Opening a mailbox any way
+    // at all now loads it: badge and list both read the Spam folder.
+    void junkBadgeMatchesListFromShowSpam()
+    {
+        Rig r;
+        QTRY_VERIFY_WITH_TIMEOUT(r.w->isLive(), 15000);
+        QTRY_COMPARE_WITH_TIMEOUT(r.count(QStringLiteral("Junk")), QStringLiteral("1 / 1"), 10000);
+        r.w->showSpamFolder(); // View > Show Spam, not a click on the row
+        QTRY_VERIFY_WITH_TIMEOUT(r.select("Double your balance today"), 10000);
+        QCOMPARE(r.list->model()->rowCount(), 1);
+        QCOMPARE(r.total(QStringLiteral("Junk")), QString::number(r.list->model()->rowCount()));
+    }
+
+    // Regression (0.9.3): a full resync (sign-in again, account change)
+    // set aside everything outside the Inbox and caught up only folders
+    // still marked synced, which it had just cleared: an open Junk emptied
+    // while its badge kept the server count. Folders that were open are
+    // read again.
+    void junkListSurvivesFullResync()
+    {
+        Rig r;
+        QTRY_VERIFY_WITH_TIMEOUT(r.w->isLive(), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(r.item(QStringLiteral("Junk")), 10000);
+        r.tree->setCurrentItem(r.item(QStringLiteral("Junk")));
+        QTRY_VERIFY_WITH_TIMEOUT(r.select("Double your balance today"), 10000);
+        r.session->sync()->stop();
+        r.session->sync()->start(); // a fresh, full sync
+        QTest::qWait(1500);
+        QTRY_VERIFY_WITH_TIMEOUT(r.select("Double your balance today"), 10000);
+        QCOMPARE(r.list->model()->rowCount(), 1);
+        QTRY_COMPARE_WITH_TIMEOUT(r.total(QStringLiteral("Junk")), QStringLiteral("1"), 10000);
     }
 };
 

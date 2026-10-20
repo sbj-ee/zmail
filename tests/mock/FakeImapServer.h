@@ -41,7 +41,7 @@ public:
     ~FakeImapServer() override;
 
     quint16 port() const { return m_server.serverPort(); }
-    QString user = QStringLiteral("alex.morgan@gmail.com");
+    QString user = QStringLiteral("alex.morgan@example.com");
     QString password = QStringLiteral("abcdefghijklmnop"); // made up
     bool idleCapable = true;
     bool condstoreCapable = true;

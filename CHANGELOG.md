@@ -19,6 +19,10 @@ status paragraph and on the
   SHA-256, `apt install` the `.deb`), an app-password quick start, and the
   long per-version status paragraph replaced by a pointer to this changelog.
   The README no longer says Gmail is OAuth-only.
+- **No personal or real-domain addresses in the docs or tests.** `docs/PLAN.md`
+  no longer names a personal address; test fixtures and the screenshots made
+  from them use `example.com` / `.example` addresses only (offscreen, fake
+  servers, made-up mail).
 
 ## 0.9.3
 

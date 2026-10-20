@@ -298,7 +298,7 @@ private slots:
         Rig r(3);
         const QByteArray pdf("%PDF-1.4 fake test bytes\n\x01\x02\x03", 28);
         const QByteArray raw =
-            "From: Jordan Kim <jordan.kim@example.net>\r\nTo: alex.morgan@gmail.com\r\nSubject: Breaker spec sheet\r\n"
+            "From: Jordan Kim <jordan.kim@example.net>\r\nTo: alex.morgan@example.com\r\nSubject: Breaker spec sheet\r\n"
             "Message-ID: <spec@example.net>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=b1\r\n\r\n"
             "--b1\r\nContent-Type: text/plain\r\n\r\nSpec sheet attached.\r\n"
             "--b1\r\nContent-Type: application/pdf; name=\"breaker-spec.pdf\"\r\n"

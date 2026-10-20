@@ -1,7 +1,7 @@
 # zmail: plan
 
-zmail is a local Linux desktop mail client for one Gmail account
-(stevebj.ee@gmail.com). Its signature feature comes from Eudora: a custom
+zmail is a local Linux desktop mail client for one Gmail
+account. Its signature feature comes from Eudora: a custom
 sound, and a color, per sender or per rule when new mail arrives. This document
 covers the stack, the architecture, the Google setup, the feature scope for v1,
 tests and milestones. It is the plan of record for PR #1. Nothing here is built
@@ -109,7 +109,7 @@ Matches the first-run dialog and the README's "Connect your Gmail" (PR #3):
 1. <https://console.cloud.google.com/>: **create a project** (e.g. `zmail`).
 2. **APIs & Services → Library**: enable the **Gmail API**.
 3. **Google Auth Platform → Get started** (Branding): app name `zmail`,
-   support/contact email stevebj.ee@gmail.com.
+   support/contact email: your own address.
 4. **Audience**: **User type: External**, then **Publish app** → **In
    production** (unverified; don't submit for verification). No test-user
    list is needed in production, and refresh tokens don't hit the 7-day
@@ -171,7 +171,7 @@ has a fake implementation for tests.
 a PKCE verifier and S256 challenge plus a `state` value, and opens the
 browser with `QDesktopServices::openUrl`. It accepts exactly one matching
 redirect, then exchanges the code. The refresh token goes to the keyring
-under service `zmail`, account `stevebj.ee@gmail.com`. Access tokens stay in
+under service `zmail`, account `<your Gmail address>`. Access tokens stay in
 memory only. No password is ever requested or stored. If the keyring is
 locked or missing, zmail refuses to persist tokens, and never falls back to a
 plaintext file.
@@ -451,7 +451,7 @@ Checks:
   `dmarc=fail`, or `spf`/`dkim` fail or none on a domain that claims a brand,
   adds weight.
 - **Sender spoofing and lookalikes:** a display name that contains a
-  different email address or domain ("PayPal <x@evil.tld>"). Confusable
+  different email address or domain ("PayPal <x@evil.example>"). Confusable
   characters, detected by comparing the Unicode TR39 skeleton of the domain
   and display name (with a bundled confusables table) against known
   contacts, frequent correspondents and a bundled brand list. The brand list is editable in Settings → Security,

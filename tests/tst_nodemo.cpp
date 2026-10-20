@@ -26,7 +26,7 @@ namespace {
 
 QByteArray mail(const char *from, const char *subject, const char *date, const char *body)
 {
-    return QByteArray("From: ") + from + "\r\nTo: Stephen Johnson <stephen@gmail.com>\r\nSubject: " + subject
+    return QByteArray("From: ") + from + "\r\nTo: Stephen Johnson <stephen@example.com>\r\nSubject: " + subject
            + "\r\nDate: " + date + "\r\nMessage-ID: <" + QByteArray(subject).toHex().left(24)
            + "@mail.test>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + body + "\r\n";
 }
@@ -78,13 +78,13 @@ struct Live
 
     Live()
     {
-        imap.deliver(mail("Dana Whitfield <dana.whitfield@lakeshore-electric.com>", "Panel schedule for the Oak St job",
+        imap.deliver(mail("Dana Whitfield <dana.whitfield@lakeshore-electric.example>", "Panel schedule for the Oak St job",
                           "Mon, 12 Oct 2026 09:14:00 -0500", "Revised panel schedule attached for review."));
         imap.deliver(mail("Chicago Public Library <noreply@chipublib.org>", "Your hold is ready for pickup",
                           "Mon, 12 Oct 2026 13:02:00 -0500", "Your hold is ready at the Lincoln Park branch."));
-        imap.deliver(mail("Mark Ostrowski <mark.ostrowski@outlook.com>", "Saturday tee time",
+        imap.deliver(mail("Mark Ostrowski <mark.ostrowski@example.net>", "Saturday tee time",
                           "Tue, 13 Oct 2026 07:45:00 -0500", "8:10 at Harborside, still on?"));
-        imap.deliver(mail("ComEd <billing@comed.com>", "Your October bill is ready",
+        imap.deliver(mail("Northside Power <billing@northside-power.example>", "Your October bill is ready",
                           "Tue, 13 Oct 2026 08:30:00 -0500", "Amount due: $112.40."));
         store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password);
         AppPasswordAccount a;

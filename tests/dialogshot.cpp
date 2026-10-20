@@ -66,7 +66,7 @@ void shoot(QWidget *w, const QString &path)
 void fill(ui::AppPasswordDialog &d, const QString &pw)
 {
     d.findChild<QLineEdit *>(QStringLiteral("displayNameEdit"))->setText(QStringLiteral("Alex Morgan"));
-    d.findChild<QLineEdit *>(QStringLiteral("emailEdit"))->setText(QStringLiteral("alex.morgan@gmail.com"));
+    d.findChild<QLineEdit *>(QStringLiteral("emailEdit"))->setText(QStringLiteral("alex.morgan@example.com"));
     d.findChild<QLineEdit *>(QStringLiteral("appPasswordEdit"))->setText(pw);
 }
 bool waitTest(ui::AppPasswordDialog &d)
@@ -222,7 +222,7 @@ int main(int argc, char *argv[])
             d.subject = QStringLiteral("From line with your name");
             c.setDraft(d);
             c.findChild<QTextEdit *>(QStringLiteral("composeBody"))
-                ->setPlainText(QStringLiteral("From now shows \u201cAlex Morgan <alex.morgan@gmail.com>\u201d: set in the account "
+                ->setPlainText(QStringLiteral("From now shows \u201cAlex Morgan <alex.morgan@example.com>\u201d: set in the account "
                                               "dialog or Settings \u2192 Your Name\u2026"));
             c.resize(820, 420);
             c.show();
@@ -263,7 +263,7 @@ int main(int argc, char *argv[])
             snap("imap-drafts.png");
             for (const char *subj : {"Site visit moved to Thursday", "Invoice 4471 follow-up"}) {
                 MailCache::QueuedMessage q;
-                q.mime = QByteArray("From: Alex Morgan <alex.morgan@gmail.com>\r\nTo: Marcus Lee <marcus.lee@example.org>\r\n"
+                q.mime = QByteArray("From: Alex Morgan <alex.morgan@example.com>\r\nTo: Marcus Lee <marcus.lee@example.org>\r\n"
                                     "Subject: ") + subj + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\n"
                                     "Sent with File > Send Queued Messages over SMTP.\r\n";
                 q.subject = QString::fromLatin1(subj);
@@ -310,7 +310,7 @@ int main(int argc, char *argv[])
             QSignalSpy got(sync, &SyncEngine::newMail);
             QTest::qWaitFor([&] { return imap.anyIdling(); }, 5000);
             const QByteArray pdf("%PDF-1.4 fake demo bytes\n");
-            imap.deliver("From: Jordan Kim <jordan.kim@example.net>\r\nTo: alex.morgan@gmail.com\r\n"
+            imap.deliver("From: Jordan Kim <jordan.kim@example.net>\r\nTo: alex.morgan@example.com\r\n"
                          "Subject: Breaker spec sheet (attachment over IMAP)\r\nMIME-Version: 1.0\r\n"
                          "Content-Type: multipart/mixed; boundary=b1\r\n\r\n--b1\r\nContent-Type: text/plain\r\n\r\n"
                          "Spec sheet attached; File > Save Attachments fetches it over IMAP.\r\n--b1\r\n"

@@ -23,7 +23,7 @@ namespace {
 
 QByteArray mail(const char *from, const char *subject, const char *date)
 {
-    return QByteArray("From: ") + from + "\r\nTo: Stephen Johnson <stephen@gmail.com>\r\nSubject: " + subject
+    return QByteArray("From: ") + from + "\r\nTo: Stephen Johnson <stephen@example.com>\r\nSubject: " + subject
            + "\r\nDate: " + date + "\r\nMessage-ID: <" + QByteArray(subject).toHex().left(24)
            + "@mail.test>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello.\r\n";
 }
@@ -40,11 +40,11 @@ struct Rig
 
     Rig()
     {
-        keep = imap.deliver(mail("Dana Whitfield <dana.whitfield@lakeshore-electric.com>", "Panel schedule for the Oak St job",
+        keep = imap.deliver(mail("Dana Whitfield <dana.whitfield@lakeshore-electric.example>", "Panel schedule for the Oak St job",
                                  "Mon, 12 Oct 2026 09:14:00 -0500"));
-        junk = imap.deliver(mail("Prize Desk <winner@prize-desk.biz>", "You have been selected",
+        junk = imap.deliver(mail("Prize Desk <winner@prize-desk.example>", "You have been selected",
                                  "Tue, 13 Oct 2026 06:02:00 -0500"));
-        spam = imap.deliver(mail("Crypto Alerts <alerts@coin-boost.top>", "Double your balance today",
+        spam = imap.deliver(mail("Crypto Alerts <alerts@coin-boost.example>", "Double your balance today",
                                  "Mon, 12 Oct 2026 22:40:00 -0500"),
                             {QStringLiteral("\\Spam")});
         store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password);

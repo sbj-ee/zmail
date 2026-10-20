@@ -59,7 +59,7 @@ struct Engine
 
 QByteArray mail(const QByteArray &subject)
 {
-    return "From: Alex Morgan <alex.morgan@gmail.com>\r\nTo: priya@northwind.example\r\nSubject: " + subject
+    return "From: Alex Morgan <alex.morgan@example.com>\r\nTo: priya@northwind.example\r\nSubject: " + subject
         + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHello.\r\n";
 }
 
@@ -315,7 +315,7 @@ private slots:
         auto *name = d.findChild<QLineEdit *>(QStringLiteral("displayNameEdit"));
         QVERIFY(name);
         name->setText(QStringLiteral("  Alex Morgan "));
-        d.findChild<QLineEdit *>(QStringLiteral("emailEdit"))->setText(QStringLiteral("alex.morgan@gmail.com"));
+        d.findChild<QLineEdit *>(QStringLiteral("emailEdit"))->setText(QStringLiteral("alex.morgan@example.com"));
         QCOMPARE(d.account().displayName, QStringLiteral("Alex Morgan"));
 
         FakeImapServer imap;
@@ -342,17 +342,17 @@ private slots:
         MainWindow w;
         w.setSession(&session);
         session.restoreSaved();
-        QCOMPARE(session.fromHeader(), QStringLiteral("Alex Morgan <alex.morgan@gmail.com>"));
+        QCOMPARE(session.fromHeader(), QStringLiteral("Alex Morgan <alex.morgan@example.com>"));
 
         QSignalSpy identity(&session, &MailSession::identityChanged);
         const QString answer = QStringLiteral("Morgan, Alex");
         QVERIFY(w.editDisplayName(&answer));
         QCOMPARE(identity.count(), 1);
-        QCOMPARE(session.fromHeader(), QStringLiteral("\"Morgan, Alex\" <alex.morgan@gmail.com>"));
+        QCOMPARE(session.fromHeader(), QStringLiteral("\"Morgan, Alex\" <alex.morgan@example.com>"));
         QCOMPARE(AppPasswordAccount::load(QSettings()).displayName, answer);
         const QString blank;
         QVERIFY(w.editDisplayName(&blank));
-        QCOMPARE(session.fromHeader(), QStringLiteral("alex.morgan@gmail.com"));
+        QCOMPARE(session.fromHeader(), QStringLiteral("alex.morgan@example.com"));
 
         // No vacation responder over IMAP/SMTP: say where to set it instead.
         QVERIFY(!w.showVacationDialog());

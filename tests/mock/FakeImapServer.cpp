@@ -860,7 +860,7 @@ QByteArray FakeImapServer::makeMessage(const QString &fromName, const QString &f
     const QDateTime date = dateIn.isValid() ? dateIn : QDateTime::currentDateTime();
     QByteArray m;
     m += "From: " + fromName.toUtf8() + " <" + fromAddr.toUtf8() + ">\r\n";
-    m += "To: Alex Morgan <alex.morgan@gmail.com>\r\n";
+    m += "To: Alex Morgan <alex.morgan@example.com>\r\n";
     // Non-ASCII subjects go out as RFC 2047 encoded-words, as real mail does.
     bool ascii = true;
     for (const QChar c : subject) {
@@ -929,7 +929,7 @@ void FakeImapServer::seedDemo(int count)
                             QString::fromUtf8(p.text), html, when),
                 labels, flags, QLocale::c().toString(when.toUTC(), QStringLiteral("dd-MMM-yyyy HH:mm:ss +0000")));
     }
-    deliver(makeMessage(QStringLiteral("Alex Morgan"), QStringLiteral("alex.morgan@gmail.com"),
+    deliver(makeMessage(QStringLiteral("Alex Morgan"), QStringLiteral("alex.morgan@example.com"),
                         QStringLiteral("Re: Lunch on Thursday?"), QStringLiteral("Thursday works. See you at noon.")),
             {QStringLiteral("\\Sent")}, {QStringLiteral("\\Seen")});
 }

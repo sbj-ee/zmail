@@ -51,7 +51,7 @@ public:
     }
     quint16 port() const { return m_server.serverPort(); }
 
-    QString user = QStringLiteral("alex.morgan@gmail.com");
+    QString user = QStringLiteral("alex.morgan@example.com");
     QString password = QStringLiteral("abcdefghijklmnop"); // made up
     QList<Delivery> delivered;
     QList<QByteArray> commands;      // command lines; AUTH's argument is masked

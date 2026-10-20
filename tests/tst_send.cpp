@@ -270,7 +270,7 @@ private slots:
         OutgoingMessage m;
         m.from = QStringLiteral("Demo User <demo.user@example.com>");
         m.to = QStringLiteral("\"Raman, Priya\" <priya.raman@example.com>, h.lindqvist@example.com");
-        m.cc = QStringLiteral("José Núñez <jose@example.es>");
+        m.cc = QStringLiteral("José Núñez <jose@example.org>");
         m.bcc = QStringLiteral("audit@example.com");
         m.subject = QStringLiteral("Q4 budget — numbers attached ✓");
         m.text = QStringLiteral("Hi Priya,\n\nNumbers attached. Café at 3?\n");
@@ -289,10 +289,10 @@ private slots:
         QCOMPARE(p.headers.value("to"),
                  QStringLiteral("\"Raman, Priya\" <priya.raman@example.com>, h.lindqvist@example.com"));
         QVERIFY(p.headers.value("cc").startsWith(QStringLiteral("=?UTF-8?")));
-        QCOMPARE(decodeWords(p.headers.value("cc")), QStringLiteral("José Núñez <jose@example.es>"));
+        QCOMPARE(decodeWords(p.headers.value("cc")), QStringLiteral("José Núñez <jose@example.org>"));
         QCOMPARE(p.headers.value("bcc"), QStringLiteral("audit@example.com")); // Gmail strips it on delivery
         QCOMPARE(decodeWords(p.headers.value("subject")), m.subject);
-        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/0.9.3")));
+        QVERIFY(p.headers.value("user-agent").startsWith(QStringLiteral("zmail/1.0.0")));
 
         // multipart/mixed( multipart/alternative(text, html), attachment )
         const QString ct = p.headers.value("content-type");
@@ -368,8 +368,8 @@ private slots:
 
     void addressListsSplitOnUnquotedCommas()
     {
-        QCOMPARE(MimeBuilder::splitAddresses(QStringLiteral("\"Raman, Priya\" <p@x.com>, b@x.com,, <c@x.com>")),
-                 (QStringList{QStringLiteral("\"Raman, Priya\" <p@x.com>"), QStringLiteral("b@x.com"), QStringLiteral("<c@x.com>")}));
+        QCOMPARE(MimeBuilder::splitAddresses(QStringLiteral("\"Raman, Priya\" <p@x.example>, b@x.example,, <c@x.example>")),
+                 (QStringList{QStringLiteral("\"Raman, Priya\" <p@x.example>"), QStringLiteral("b@x.example"), QStringLiteral("<c@x.example>")}));
     }
 
     // ---- formats -----------------------------------------------------------------

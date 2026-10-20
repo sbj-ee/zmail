@@ -47,9 +47,9 @@ using zmail::test::MockGoogle;
 
 namespace {
 
-QByteArray mail(const QString &subject, const char *from = "Crypto Alerts <alerts@coin-boost.top>")
+QByteArray mail(const QString &subject, const char *from = "Crypto Alerts <alerts@coin-boost.example>")
 {
-    return QByteArray("From: ") + from + "\r\nTo: Alex Morgan <alex.morgan@gmail.com>\r\nSubject: " + subject.toUtf8()
+    return QByteArray("From: ") + from + "\r\nTo: Alex Morgan <alex.morgan@example.com>\r\nSubject: " + subject.toUtf8()
            + "\r\nDate: Mon, 12 Oct 2026 22:40:00 -0500\r\nMessage-ID: <" + subject.toUtf8().toHex().left(24)
            + "@mail.test>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello.\r\n";
 }
@@ -76,7 +76,7 @@ struct ImapRig
     explicit ImapRig(int spamCount, bool start = true)
     {
         for (int i = 0; i < 3; ++i) {
-            inbox << server.deliver(mail(QStringLiteral("Panel schedule %1").arg(i), "Dana Whitfield <dana@lakeshore-electric.com>"));
+            inbox << server.deliver(mail(QStringLiteral("Panel schedule %1").arg(i), "Dana Whitfield <dana@lakeshore-electric.example>"));
         }
         for (int i = 0; i < spamCount; ++i) {
             spam << server.deliver(mail(QStringLiteral("Double your balance %1").arg(i)), {QStringLiteral("\\Spam")});
@@ -167,7 +167,7 @@ struct ApiRig
     static MockGoogle::Message msg(const QString &subject, const QStringList &labels)
     {
         MockGoogle::Message m;
-        m.from = QStringLiteral("Crypto Alerts <alerts@coin-boost.top>");
+        m.from = QStringLiteral("Crypto Alerts <alerts@coin-boost.example>");
         m.to = QStringLiteral("demo.user@example.com");
         m.subject = subject;
         m.text = QStringLiteral("Body of ") + subject;
@@ -207,7 +207,7 @@ struct UiRig
 
     explicit UiRig(int spamCount)
     {
-        imap.deliver(mail(QStringLiteral("Panel schedule for the Oak St job"), "Dana Whitfield <dana.whitfield@lakeshore-electric.com>"));
+        imap.deliver(mail(QStringLiteral("Panel schedule for the Oak St job"), "Dana Whitfield <dana.whitfield@lakeshore-electric.example>"));
         imap.deliver(mail(QStringLiteral("Lunch on Thursday?"), "Sam Ortiz <sam.ortiz@example.org>"));
         imap.deliver(mail(QStringLiteral("Your October statement is ready"), "Northside Credit Union <statements@northside-cu.example>"));
         for (int i = 0; i < spamCount; ++i) {
@@ -215,7 +215,7 @@ struct UiRig
                                       : i < 4 ? QStringList{QStringLiteral("You have been selected"), QStringLiteral("Final notice: claim your prize"),
                                                             QStringLiteral("Cheap meds, no prescription")}.at(i - 1)
                                               : QStringLiteral("Prize notice %1").arg(i),
-                                      i % 2 ? "Prize Desk <winner@prize-desk.biz>" : "Crypto Alerts <alerts@coin-boost.top>"),
+                                      i % 2 ? "Prize Desk <winner@prize-desk.example>" : "Crypto Alerts <alerts@coin-boost.example>"),
                                  {QStringLiteral("\\Spam")});
         }
         store.values.insert(AppPasswordAccount::appPasswordKey(imap.user), imap.password);

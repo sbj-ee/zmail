@@ -3,114 +3,82 @@
 A local Linux desktop email client for Gmail that plays a custom sound for
 new mail, per sender or per rule, the way Eudora did.
 
-**Status:** v0.9.3: Gmail sign-in, sync (Inbox, labels, read + mark-as-read,
-move to Trash, new-mail chime), a reworked message viewer, and sending: New /
-Reply / Reply All / Forward, HTML, plain or Markdown, attachments (with the
-25 MB check and an optional zip), drafts, signatures and spell check, plus search operators, list right-click
-menus with Undo Delete, a sign-in Retry banner, a new-mail sound mute
-(Ctrl+Shift+M), and Settings → Sounds (custom WAV, Test, Default). New in
-0.4.0: Mark as Junk / Not Junk with a Hide Spam filter, Snooze (presets and a
-Snoozed mailbox), full-text search across the local cache, read-only Google
-Contacts, the Boilermakers, Badgers and Packers themes, and a Theme Editor
-for custom themes (`*.ztheme.json`, shared with zterminal). New in 0.4.1:
-security hardening (no local file reads from mail or quoted replies, remote
-images default to Ask over HTTPS only with private addresses refused, OAuth
-state, header and `mailto:` fixes). New in 0.4.2: Delete works in every
-mailbox, not just In: a message deleted from a Gmail label, Starred, Sent,
-Snoozed, Junk or search results now leaves the list (it stays in Trash, and
-Undo Delete still puts it back), and if Gmail refuses the Delete the message
-and the selection come back with the error in the status bar. New in 0.5.0:
-styled signatures (rich-text editor, sanitized HTML, generated plain text)
-and Labels as folders (sidebar counts, New/Rename/Delete Folder, drag-to-move
-that peels INBOX / the source user label). New in 0.5.1:
-account-status circle in the status bar (green connected, grey offline,
-red on sync error). New in 0.5.2:
-message list multi-select (Shift/Ctrl range+toggle, bulk Delete/Junk/Snooze/
-Mark Read). New in 0.5.3:
-Gmail label-count fetch throttle (max in-flight + 429 cooldown) so startup
-no longer livelocks the UI thread. New in 0.5.4:
-sync fixes (snoozes survive a full resync, a failed fetch no longer skips
-mail, folders can't get stuck loading), a faster message list and cache,
-interactive Gmail calls ahead of background sync, a stricter HTML sanitizer,
-and the theme editor's colour picker no longer freezes it on Wayland. New in 0.5.5:
-a zmail app icon (a green Z on a light envelope, matching zterminal's style),
-installed at all Linux hicolor sizes, plus a window icon. New in 0.5.6:
-mail with deeply nested tables no longer freezes the window (images are
-shared rather than copied per layout, table nesting is capped at 8 levels),
-Settings → Message List (text size and row spacing), and one folder per
-message (a move drops the other labels; drag onto In to move back). New in 0.5.7:
-deleting a message takes it out of its folder, and right-click a folder for
-Empty Folder. New in 0.5.8: a folder whose list is too short to scroll now
-loads the rest of its mail (it could show 2 messages under a count of 212),
-and the 0.5.7 startup pass that removed labels from mail in Trash is gone. New in 0.5.9:
-Contacts can be organised (categories, your own fields, a comment per
-contact) and hidden; all of it local, none of it written to Google. New in 0.5.10:
-coloured flags, Empty Trash, dragging a message to a folder works again (a
-list reload while the mouse button was down cancelled the drag), and range
-selection always starts from the current message. New in 0.5.11:
-the Contacts list separates one contact from the next, and contacts can be
-exported to JSON. New in 0.5.12: the Snooze entry in the message
-right-click menu has its label. New in 0.5.13: the folder under a dragged
-message lights up, and a message's right-click menu can add its sender to
-Contacts. New in 0.5.14: a message whose tables would stall the window is
-shown simplified, with a button for the full layout. New in 0.6.0:
-Filters, as in Eudora (Settings → Filters): ordered rules that colour,
-flag, move, mark read and play a sound, first match wins. New in 0.6.1:
-nicknames (a contact's short name, or a category's name for everyone in
-it, typed in To, Cc or Bcc). New in 0.6.2: Save Attachments, Print, Copy
-and View as Plain Text, dates as 01/01/2026, and counts that read "1
-message" rather than "1 message(s)". New in 0.6.3: the queue (Send Later
-puts a message in Out; Send Queued Messages delivers what is waiting). New
-in 0.6.4: Eudora's Mailbox and Transfer menus, and its shortcut keys. New
-in 0.6.5: stationery (New Message With, Reply With). New in 0.6.6: a
-mailbox can open in a window of its own. New in 0.6.7: one Settings
-window, Undo for moves and emptying, editable queued messages, new-mail
-notifications, a shortcut list, flag search, and a round of polish. New in
-0.6.8: contacts are edited in a window of their own, name and addresses
-included. New in 0.6.9: Load All Messages for a mailbox, and large
-deletes go to Gmail in batches. New in 0.6.10: live folder counts, shown
-as unread / total. New in 0.6.11: an Archive mailbox, coloured folder
-icons, filed mail leaves Gmail's Important, Send Later takes a date and
-time, Out is called Sent, and the Trash and Drafts counts are right.
-0.6.12 fixes Archive, whose folder Gmail refused to create. New in
-0.6.13: an All Mail mailbox. New in 0.6.14: Ctrl+click opens a
-folder's menu, for when there is no mouse. New in 0.6.15: dialogs
-are tinted, to stand out from the main window. New in 0.6.16: a
-Queue mailbox for mail that is waiting to be sent. 0.6.17 makes
-dialogs easier to tell from the main window: a stronger tint, lists
-included, and a coloured frame. New in 0.6.18: All Mail has a count,
-and a message is marked read only after 10 seconds in the preview. New
-in 0.6.19: one-click unsubscribe from mailing lists, the mark-as-read
-delay as a setting, Gmail's vacation responder, calendar invitations
-shown as a card, and a swoosh when mail is sent. New in 0.6.20: Send
-waits two minutes in Queue first (a setting) and Undo Send takes it
-back, and Send Later's time can be set to the current hour. New in
-0.6.21: six more new-mail sounds to choose from. New in 0.6.22: an
-image sized by its height alone keeps its shape, and quitting with a
-message still being written no longer touches freed memory. New in
-0.6.23: quitting asks about each message still being written (Save
-draft?) instead of dropping it. New in 0.7.0: a "Gmail (app
-password)" account type over IMAP and SMTP, alongside Google sign-in. New in 0.7.1:
-folders on app-password accounts can be nested, renamed, deleted and
-dragged to; contacts are zmail-only (Google Contacts sync removed). New in 0.7.2:
-sturdier app-password (IMAP) sync: changes land on the right message,
-lost connections are handled cleanly, and the local cache is kept. New in 0.7.3:
-no sample mail on real accounts (use --demo for it), and the Spam mailbox
-always shows on app-password accounts. New in 0.8.0: right-click Junk /
-Suspicious > Empty Junk… moves everything in Spam to Trash (asks Gmail for the
-count first, works in batches you can Stop). New in 0.9.0: self-update. Help →
-Check for Updates (and a quiet daily check at startup) offers a newer release
-with its notes, downloads it, verifies the SHA-256 and the minisign signature,
-installs it and offers to restart; see [Updates](#updates). See
-[docs/PLAN.md](docs/PLAN.md).
+![zmail with an app-password account (fake server, made-up mail)](docs/screenshots/imap-mainwindow.png)
 
-- Linux amd64 first, packaged as a `.deb`
-- Gmail over OAuth 2.0 only; no passwords are ever stored, and tokens live in
-  the OS keyring (Secret Service / libsecret)
-- Local offline cache with full-text search
+**Version 1.0.0.** Linux amd64, packaged as a `.deb`. Release history is in
+[CHANGELOG.md](CHANGELOG.md) (and, before 0.9.0, on the
+[Releases](https://github.com/sbj-ee/zmail/releases) page).
+
+## Features
+
+- **Two ways to connect Gmail:** a 16-letter app password over IMAP + SMTP (no
+  Google Cloud project needed), or Google sign-in (OAuth 2.0). Secrets live
+  only in the OS keyring (Secret Service / libsecret), never in a file.
+- **Eudora-style mail:** In, Queue, Sent, Snoozed, Junk / Suspicious, Archive,
+  All Mail and Trash, nested folders (Gmail labels) with live unread / total
+  counts, Filters, coloured flags, nicknames, stationery, Send Later and Undo
+  Send, and a custom new-mail sound per sender or rule.
+- **Composing:** HTML, plain text or Markdown, attachments (25 MB check,
+  optional zip), drafts, styled signatures and spell check.
+- **Reading safely:** a strict HTML sanitizer, remote images blocked or asked
+  for (HTTPS only), one-click unsubscribe, calendar invitations as a card.
+- **Local cache with full-text search** and Gmail search syntax (`from:`,
+  `has:attachment`, `is:unread`, …).
+- **Themes** (including a Theme Editor; files shared with zterminal).
+- **Signed self-update** from GitHub Releases (minisign + SHA-256).
 - C++20, Qt 6 Widgets, CMake/CPack (same stack as
   [zterminal](https://github.com/sbj-ee/zterminal) and
-  [zwriter](https://github.com/sbj-ee/zwriter))
+  [zwriter](https://github.com/sbj-ee/zwriter)).
+
+## Install
+
+zmail is built for **Ubuntu 24.04 / Pop!_OS 24.04 (amd64)**. Each release on the
+[Releases page](https://github.com/sbj-ee/zmail/releases) has three files:
+`zmail_<version>_amd64.deb`, `SHA256SUMS` and `SHA256SUMS.minisig`. There is no
+macOS (`.dmg`) or Windows build.
+
+1. Download the three files into one folder, e.g. with the GitHub CLI:
+
+   ```sh
+   gh release download v1.0.0 --repo sbj-ee/zmail
+   ```
+
+2. Check the signature on `SHA256SUMS` with zmail's release key
+   (ID `DBC46B23C3AF0EF3`; `sudo apt install minisign` if you don't have it):
+
+   ```sh
+   minisign -Vm SHA256SUMS -P RWTzDq/DI2vE2xMeF01QWTxP2lwwlxGL9M1UxQE4EFV5kVmTF84wwyi2
+   ```
+
+   It must say `Signature and comment signature verified` and name key ID
+   `DBC46B23C3AF0EF3`. Stop if it doesn't.
+
+3. Check the package against the signed checksums:
+
+   ```sh
+   sha256sum -c SHA256SUMS
+   ```
+
+4. Install it (apt pulls in the Qt 6 libraries it needs):
+
+   ```sh
+   sudo apt install ./zmail_1.0.0_amd64.deb
+   ```
+
+Start **zmail** from the app menu, then connect your account (below). Later
+versions arrive through the [in-app updater](#updates), which does steps 2–4 for
+you.
+
+## Quick start: Gmail with an app password
+
+1. Turn on 2-Step Verification for your Google account.
+2. Create an app password named `zmail` at
+   [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+3. In zmail's **Connect your Gmail** dialog choose **Use a Gmail app password
+   instead…**, enter your address and the 16 letters, click **Test**, then
+   **Save**.
+
+Details, limits and the OAuth alternative are in the next section.
 
 ## Connect your Gmail
 
@@ -227,7 +195,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_0.9.3_amd64.deb
+cd build && cpack -G DEB   # zmail_1.0.0_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

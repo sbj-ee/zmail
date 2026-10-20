@@ -25,7 +25,7 @@ namespace {
 
 QByteArray mail(const QByteArray &subject, const QByteArray &extraHeaders = {}, const QByteArray &body = "Hello.\r\n")
 {
-    return "From: Alex Morgan <alex.morgan@gmail.com>\r\n"
+    return "From: Alex Morgan <alex.morgan@example.com>\r\n"
            "To: \"Raman, Priya\" <priya@northwind.example>, marcus.lee@example.org\r\n"
            "Cc: Dana <dana@whitfield.example>\r\n"
            + extraHeaders + "Subject: " + subject + "\r\nMessage-ID: <" + subject.toHex().left(16)
@@ -129,7 +129,7 @@ private slots:
         QVERIFY2(res.ok, qPrintable(res.err.message));
         QCOMPARE(r.smtp.delivered.size(), 1);
         const auto &d = r.smtp.delivered.first();
-        QCOMPARE(d.from, QByteArray("alex.morgan@gmail.com"));
+        QCOMPARE(d.from, QByteArray("alex.morgan@example.com"));
         QCOMPARE(d.rcpts.size(), 4);
         QVERIFY(d.rcpts.contains("boss@northwind.example"));
         QVERIFY(!d.data.contains("boss@northwind.example")); // Bcc stays out of the message

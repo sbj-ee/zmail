@@ -3,6 +3,7 @@
 #include "ImapSyncEngine.h"
 #include "Limits.h"
 #include "Log.h"
+#include "MimeBuilder.h"
 #include "ServerLimits.h"
 
 #include <QPointer>
@@ -47,7 +48,8 @@ QStringList addresses(const QByteArray &value)
     bool quoted = false;
     int angle = 0;
     auto flush = [&] {
-        const QString part = QString::fromUtf8(cur).trimmed();
+        // Control characters (a CR/LF would end the RCPT TO line and start a command) never get this far.
+        const QString part = MimeBuilder::stripControl(QString::fromUtf8(cur)).trimmed();
         cur.clear();
         if (part.isEmpty()) {
             return;
@@ -179,7 +181,7 @@ private:
                                 .arg(QString::fromUtf8(text).left(200)));
             }
             m_step = Step::MailFrom;
-            write("MAIL FROM:<" + m_account.email.toUtf8() + "> SIZE=" + QByteArray::number(m_payload.size()));
+            write("MAIL FROM:<" + MimeBuilder::stripControl(m_account.email).toUtf8() + "> SIZE=" + QByteArray::number(m_payload.size()));
             return;
         case Step::MailFrom:
             if (code != 250) {

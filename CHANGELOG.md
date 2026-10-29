@@ -9,6 +9,14 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.2
+
+- **No line breaks in outgoing addresses, whatever their source.** Address
+  headers, the Message-ID, and the SMTP `MAIL FROM` / `RCPT TO` commands now drop
+  control characters. The compose fields and `mailto:` links already did, but an
+  address copied from a received message (a Reply-To, say) could have carried a
+  CR/LF into a header or an SMTP command. Now it can't, wherever it came from.
+
 ## 1.0.1
 
 - **Self-update only fetches from GitHub's release addresses.** The asset URLs in

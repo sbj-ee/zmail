@@ -16,6 +16,7 @@
 #include "core/ReplyBuilder.h"
 #include "core/RichText.h"
 #include "core/Sender.h"
+#include "core/SmtpSender.h"
 #include "core/Signatures.h"
 #include "core/SpellChecker.h"
 #include "core/SyncEngine.h"
@@ -264,6 +265,29 @@ private slots:
     void init() { QSettings().clear(); }
 
     // ---- MIME ------------------------------------------------------------------
+
+    void controlCharactersNeverStartAHeaderOrCommand()
+    {
+        OutgoingMessage m;
+        m.from = QStringLiteral("Demo User <demo.user@example.com>");
+        m.to = QStringLiteral("Eve <eve@example.com\r\nBcc: victim@example.net>, \"Mal\r\nX-Evil: 1\" <mal@example.org>");
+        m.subject = QStringLiteral("hello");
+        m.messageId = QStringLiteral("<id@example.com>\r\nX-Injected: 1");
+        m.text = QStringLiteral("body");
+        const QByteArray raw = MimeBuilder::build(m);
+        const QByteArray head = raw.left(raw.indexOf("\r\n\r\n"));
+        for (const QByteArray &line : head.split('\n')) {
+            QVERIFY2(!line.startsWith("Bcc:") && !line.startsWith("X-Evil:") && !line.startsWith("X-Injected:"), line.constData());
+        }
+        for (const QString &rcpt : SmtpSender::envelopeRecipients(raw)) {
+            QVERIFY2(!rcpt.contains(QLatin1Char('\r')) && !rcpt.contains(QLatin1Char('\n')), qPrintable(rcpt));
+        }
+        const QStringList direct = SmtpSender::envelopeRecipients("To: a@example.com\r\n\tb@example.org\r\n\r\nx");
+        QVERIFY(!direct.isEmpty());
+        for (const QString &rcpt : direct) {
+            QVERIFY(!rcpt.contains(QLatin1Char('\r')) && !rcpt.contains(QLatin1Char('\n')));
+        }
+    }
 
     void mimeHeadersAndBase64()
     {

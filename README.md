@@ -5,7 +5,7 @@ new mail, per sender or per rule, the way Eudora did.
 
 ![zmail with an app-password account (fake server, made-up mail)](docs/screenshots/imap-mainwindow.png)
 
-**Version 1.0.2.** Linux amd64, packaged as a `.deb`. Release history is in
+**Version 1.0.3.** Linux amd64, packaged as a `.deb`. Release history is in
 [CHANGELOG.md](CHANGELOG.md) (and, before 0.9.0, on the
 [Releases](https://github.com/sbj-ee/zmail/releases) page).
 
@@ -40,7 +40,7 @@ macOS (`.dmg`) or Windows build.
 1. Download the three files into one folder, e.g. with the GitHub CLI:
 
    ```sh
-   gh release download v1.0.2 --repo sbj-ee/zmail
+   gh release download v1.0.3 --repo sbj-ee/zmail
    ```
 
 2. Check the signature on `SHA256SUMS` with zmail's release key
@@ -62,7 +62,7 @@ macOS (`.dmg`) or Windows build.
 4. Install it (apt pulls in the Qt 6 libraries it needs):
 
    ```sh
-   sudo apt install ./zmail_1.0.2_amd64.deb
+   sudo apt install ./zmail_1.0.3_amd64.deb
    ```
 
 Start **zmail** from the app menu, then connect your account (below). Later
@@ -195,7 +195,7 @@ sudo apt install qt6-base-dev qt6-svg-dev qt6-multimedia-dev qtkeychain-qt6-dev 
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-cd build && cpack -G DEB   # zmail_1.0.2_amd64.deb
+cd build && cpack -G DEB   # zmail_1.0.3_amd64.deb
 ```
 
 The version lives only in `project(zmail VERSION ...)` in `CMakeLists.txt`.

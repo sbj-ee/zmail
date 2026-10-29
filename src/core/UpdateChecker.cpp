@@ -206,6 +206,13 @@ void UpdateDownloader::start(const ReleaseInfo &release, const QString &dir)
 
 void UpdateDownloader::fetch(const ReleaseAsset &asset, const QString &path)
 {
+    if (!isTrustedAssetUrl(asset.url)) {
+        // Reported asynchronously, like every other outcome of start().
+        const QString msg = QStringLiteral("%1 is not at a GitHub release address zmail trusts, so nothing was downloaded.")
+                                .arg(asset.name);
+        QMetaObject::invokeMethod(this, [this, msg] { fail(msg); }, Qt::QueuedConnection);
+        return;
+    }
     delete m_file;
     m_file = new QFile(path);
     if (!m_file->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -216,11 +223,6 @@ void UpdateDownloader::fetch(const ReleaseAsset &asset, const QString &path)
     m_received = 0;
     m_tooLarge = false;
     m_badRedirect = false;
-    if (!isTrustedAssetUrl(asset.url)) {
-        fail(QStringLiteral("%1 is not at a GitHub release address zmail trusts, so nothing was downloaded.")
-                 .arg(asset.name));
-        return;
-    }
     QNetworkRequest req = makeRequest(QUrl(asset.url), m_stallMs, "application/octet-stream");
     // GitHub redirects downloads to its own storage; follow that and nothing else.
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);

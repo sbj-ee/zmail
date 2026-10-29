@@ -208,8 +208,10 @@ QByteArray MimeBuilder::encodeAddressList(const QString &list)
     QList<QByteArray> parts;
     for (const QString &a : splitAddresses(list)) {
         const auto na = MessageParser::splitAddress(a);
-        const QString name = na.first == na.second ? QString() : na.first;
-        const QByteArray addr = na.second.toLatin1(); // IDN/EAI addresses aren't supported yet
+        // No line breaks or other control characters, whatever the source (a
+        // received Reply-To, a link, a contact): one could start another header.
+        const QString name = na.first == na.second ? QString() : stripControl(na.first);
+        const QByteArray addr = stripControl(na.second).toLatin1(); // IDN/EAI addresses aren't supported yet
         if (name.isEmpty()) {
             parts << addr;
         } else if (!isAscii(name)) {
@@ -303,7 +305,7 @@ QByteArray MimeBuilder::build(const OutgoingMessage &m)
     if (!m.bcc.trimmed().isEmpty()) h += foldHeader("Bcc", encodeAddressList(m.bcc));
     h += foldHeader("Subject", encodeHeaderText(m.subject));
     const QString from = MessageParser::splitAddress(m.from).second;
-    h += "Message-ID: " + (m.messageId.isEmpty() ? makeMessageId(from) : m.messageId).toLatin1() + "\r\n";
+    h += "Message-ID: " + (m.messageId.isEmpty() ? makeMessageId(from) : stripControl(m.messageId)).toLatin1() + "\r\n";
     const QString inReplyTo = stripControl(m.inReplyTo).trimmed();
     if (!inReplyTo.isEmpty()) {
         h += "In-Reply-To: " + inReplyTo.toLatin1() + "\r\n";

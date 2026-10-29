@@ -229,6 +229,52 @@ std::optional<ReleaseAsset> ReleaseInfo::signatureAsset() const
     return std::nullopt;
 }
 
+namespace {
+bool &assetHostCheck()
+{
+    static bool on = true;
+    return on;
+}
+
+bool plainHttps(const QUrl &u)
+{
+    return u.isValid() && u.scheme() == QLatin1String("https") && u.port() == -1 && u.userInfo().isEmpty();
+}
+} // namespace
+
+void setAssetHostCheckForTests(bool on)
+{
+    assetHostCheck() = on;
+}
+
+bool isTrustedAssetUrl(const QString &url)
+{
+    if (!assetHostCheck()) {
+        return true;
+    }
+    for (const QChar c : url) {
+        if (c.unicode() <= 0x20 || c.unicode() == 0x7f || c == QLatin1Char('\\')) {
+            return false;
+        }
+    }
+    const QUrl u(url, QUrl::StrictMode);
+    const QString path = u.path();
+    return plainHttps(u) && u.host() == QLatin1String("github.com")
+        && path.startsWith(QLatin1String("/sbj-ee/zmail/releases/download/"))
+        && !path.contains(QLatin1String("/../")) && !path.contains(QLatin1String("/./"))
+        && !path.endsWith(QLatin1String("/.."));
+}
+
+bool isTrustedAssetRedirect(const QUrl &url)
+{
+    if (!assetHostCheck()) {
+        return true;
+    }
+    const QString host = url.host().toLower();
+    return plainHttps(url)
+        && (host == QLatin1String("github.com") || host.endsWith(QLatin1String(".githubusercontent.com")));
+}
+
 bool isTrustedReleasePageUrl(const QString &url)
 {
     // The URL comes from the API reply (untrusted): no whitespace, control

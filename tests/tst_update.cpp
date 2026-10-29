@@ -24,6 +24,7 @@
 #include <QNetworkProxy>
 #include <QSettings>
 #include <QProgressDialog>
+#include <QScopeGuard>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -116,6 +117,60 @@ private slots:
         QNetworkProxy::setApplicationProxy(QNetworkProxy::NoProxy);
         QSettings().remove(QStringLiteral("updates/checkOnStartup"));
         setUpdateSigningPublicKeyForTests(signKey.publicKeyBase64());
+        setAssetHostCheckForTests(false); // the mock server is http://127.0.0.1; assetUrlsMustBeGitHub turns it back on
+    }
+
+    void assetUrlsMustBeGitHub()
+    {
+        setAssetHostCheckForTests(true);
+        const auto restore = qScopeGuard([] { setAssetHostCheckForTests(false); });
+        const QString base = QStringLiteral("https://github.com/sbj-ee/zmail/releases/download/v1.0.1/");
+        QVERIFY(isTrustedAssetUrl(base + QStringLiteral("SHA256SUMS")));
+        for (const char *bad : {"http://github.com/sbj-ee/zmail/releases/download/v1.0.1/a",
+                                "https://evil.example/sbj-ee/zmail/releases/download/v1.0.1/a",
+                                "https://github.com.evil.example/sbj-ee/zmail/releases/download/v1.0.1/a",
+                                "https://user@github.com/sbj-ee/zmail/releases/download/v1.0.1/a",
+                                "https://github.com:8443/sbj-ee/zmail/releases/download/v1.0.1/a",
+                                "https://github.com/other/zmail/releases/download/v1.0.1/a",
+                                "https://github.com/sbj-ee/zmail/releases/download/../../../x",
+                                "https://github.com/sbj-ee/zmail/releases/download/v1/a b", ""}) {
+            QVERIFY2(!isTrustedAssetUrl(QString::fromLatin1(bad)), bad);
+        }
+        QVERIFY(isTrustedAssetRedirect(QUrl(QStringLiteral("https://objects.githubusercontent.com/x"))));
+        QVERIFY(isTrustedAssetRedirect(QUrl(QStringLiteral("https://github.com/x"))));
+        QVERIFY(!isTrustedAssetRedirect(QUrl(QStringLiteral("http://objects.githubusercontent.com/x"))));
+        QVERIFY(!isTrustedAssetRedirect(QUrl(QStringLiteral("https://githubusercontent.com.evil.example/x"))));
+        QVERIFY(!isTrustedAssetRedirect(QUrl(QStringLiteral("https://evilgithubusercontent.com/x"))));
+
+        // A release whose assets are somewhere else is refused before anything is fetched.
+        MockGitHub gh;
+        serveRelease(gh);
+        const auto rel = ReleaseInfo::fromJson(fixture(QStringLiteral("release-0.10.0.json"), gh.base()));
+        QVERIFY(rel);
+        UpdateDownloader d;
+        QSignalSpy done(&d, &UpdateDownloader::finished);
+        QTemporaryDir dir;
+        d.start(*rel, dir.path());
+        QVERIFY(done.wait(5000));
+        QVERIFY(!done.takeFirst().at(0).toBool());
+        QVERIFY(!QFile::exists(dir.filePath(QStringLiteral("SHA256SUMS"))));
+    }
+
+    void oversizedAssetIsCutOff()
+    {
+        MockGitHub gh;
+        serveRelease(gh);
+        gh.routes[QStringLiteral("/download/v0.10.0/SHA256SUMS")].body = QByteArray(200 * 1024, 'x');
+        const auto rel = ReleaseInfo::fromJson(fixture(QStringLiteral("release-0.10.0.json"), gh.base()));
+        QVERIFY(rel);
+        UpdateDownloader d;
+        QSignalSpy done(&d, &UpdateDownloader::finished);
+        QTemporaryDir dir;
+        d.start(*rel, dir.path());
+        QVERIFY(done.wait(5000));
+        const auto args = done.takeFirst();
+        QVERIFY(!args.at(0).toBool());
+        QVERIFY2(args.at(2).toString().contains(QLatin1String("larger")), qPrintable(args.at(2).toString()));
     }
 
     void semverCompare_data()

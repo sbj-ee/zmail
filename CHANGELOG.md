@@ -9,6 +9,16 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.1
+
+- **Self-update only fetches from GitHub's release addresses.** The asset URLs in
+  the release API reply are untrusted, so the downloader now refuses anything but
+  `https://github.com/sbj-ee/zmail/releases/download/...` and follows a redirect
+  only to https on `github.com` or `*.githubusercontent.com`. Downloads are also
+  capped (64 KiB for `SHA256SUMS` and its signature, 512 MiB for the package) and
+  cut off past that. The minisign and SHA-256 checks are unchanged and still
+  decide what is installed.
+
 ## 1.0.0
 
 - **First stable release.** No change to how zmail works from 0.9.3: the same

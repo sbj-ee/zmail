@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 1.0.2 LANGUAGES CXX)
+project(zmail VERSION 1.0.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -27,6 +27,26 @@ if(ZMAIL_SANITIZE)
   # all be instrumented. A UBSan report fails the test instead of only printing.
   add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
   add_link_options(-fsanitize=address,undefined)
+endif()
+
+# Hardening for the shipped binary, which parses untrusted HTML, MIME and
+# images: position-independent executable, stack protector and stack-clash
+# protection, control-flow protection (x86), fortified libc calls, and a
+# read-only GOT (full RELRO). Ubuntu's GCC defaults to most of these; naming
+# them keeps another toolchain from quietly dropping one, and CI checks the
+# result (tools/check-hardening.sh). Fortify needs optimisation and doesn't mix
+# with the sanitizers, so it is left out of Debug and sanitizer builds.
+option(ZMAIL_HARDEN "Build with exploit-mitigation compiler and linker flags" ON)
+if(ZMAIL_HARDEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZMAIL_SANITIZE)
+  include(CheckPIESupported)
+  check_pie_supported(LANGUAGES CXX)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+  add_compile_options(-fstack-protector-strong -fstack-clash-protection
+    "$<$<NOT:$<CONFIG:Debug>>:-U_FORTIFY_SOURCE>" "$<$<NOT:$<CONFIG:Debug>>:-D_FORTIFY_SOURCE=3>")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_compile_options(-fcf-protection=full)
+  endif()
+  add_link_options(-Wl,-z,relro,-z,now,-z,noexecstack)
 endif()
 
 # Ubuntu 24.04 ships Qt 6.4.2; that is the floor.

@@ -9,6 +9,15 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.3
+
+- **Release builds are hardened explicitly.** The CMake build now asks for PIE,
+  stack protector and stack-clash protection, `-fcf-protection` (x86), fortified
+  libc calls, full RELRO and a non-executable stack (`ZMAIL_HARDEN`, on by
+  default; off for sanitizer builds). Ubuntu's GCC already defaults to most of
+  these; CI and the release build now check the finished binary with
+  `tools/check-hardening.sh`, so a toolchain change can't drop one unnoticed.
+
 ## 1.0.2
 
 - **No line breaks in outgoing addresses, whatever their source.** Address

@@ -62,6 +62,9 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: Check binary hardening (PIE, RELRO, BIND_NOW, NX stack, stack protector)
+        run: ./tools/check-hardening.sh build/zmail
+
       - name: Test (mock Google only; no network access to Google)
         run: ctest --test-dir build --output-on-failure --timeout 180
 

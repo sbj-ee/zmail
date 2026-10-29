@@ -27,6 +27,11 @@ QNetworkRequest makeRequest(const QUrl &url, int timeoutMs, const QByteArray &ac
     return req;
 }
 
+// What a legitimate release asset can weigh. A reply that goes past this is
+// cut off (the API's own "size" is untrusted too).
+constexpr qint64 kMaxSumsBytes = 64 * 1024;    // SHA256SUMS, SHA256SUMS.minisig
+constexpr qint64 kMaxPackageBytes = 512 * 1024 * 1024;
+
 } // namespace
 
 QString UpdateChecker::defaultApiUrl()
@@ -208,7 +213,26 @@ void UpdateDownloader::fetch(const ReleaseAsset &asset, const QString &path)
         return;
     }
     m_current = asset.name;
-    m_reply = m_nam->get(makeRequest(QUrl(asset.url), m_stallMs, "application/octet-stream"));
+    m_received = 0;
+    m_tooLarge = false;
+    m_badRedirect = false;
+    if (!isTrustedAssetUrl(asset.url)) {
+        fail(QStringLiteral("%1 is not at a GitHub release address zmail trusts, so nothing was downloaded.")
+                 .arg(asset.name));
+        return;
+    }
+    QNetworkRequest req = makeRequest(QUrl(asset.url), m_stallMs, "application/octet-stream");
+    // GitHub redirects downloads to its own storage; follow that and nothing else.
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::UserVerifiedRedirectPolicy);
+    m_reply = m_nam->get(req);
+    connect(m_reply, &QNetworkReply::redirected, this, [this, reply = m_reply](const QUrl &to) {
+        if (isTrustedAssetRedirect(to)) {
+            emit reply->redirectAllowed();
+        } else {
+            m_badRedirect = true;
+            reply->abort();
+        }
+    });
     connect(m_reply, &QNetworkReply::readyRead, this, &UpdateDownloader::onReadyRead);
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this, asset](qint64 got, qint64 total) {
         emit progress(asset.name, got, total > 0 ? total : (asset.size > 0 ? asset.size : -1));
@@ -218,9 +242,21 @@ void UpdateDownloader::fetch(const ReleaseAsset &asset, const QString &path)
 
 void UpdateDownloader::onReadyRead()
 {
-    if (m_reply && m_file) {
-        m_file->write(m_reply->readAll());
+    if (m_reply && m_file && !take(m_reply)) {
+        m_reply->abort();
     }
+}
+
+bool UpdateDownloader::take(QNetworkReply *reply)
+{
+    const QByteArray chunk = reply->readAll();
+    m_received += chunk.size();
+    if (m_received > (m_stage == 3 ? kMaxPackageBytes : kMaxSumsBytes)) {
+        m_tooLarge = true;
+        return false;
+    }
+    m_file->write(chunk);
+    return true;
 }
 
 void UpdateDownloader::cancel()
@@ -256,6 +292,14 @@ void UpdateDownloader::onFinished()
         fail(QStringLiteral("Download cancelled."));
         return;
     }
+    if (m_tooLarge) {
+        fail(QStringLiteral("%1 is larger than a release file should be, so the download was stopped.").arg(m_current));
+        return;
+    }
+    if (m_badRedirect) {
+        fail(QStringLiteral("GitHub sent %1 to an address zmail doesn't trust, so nothing was installed.").arg(m_current));
+        return;
+    }
     if (reply->error() != QNetworkReply::NoError || status >= 400) {
         QString why;
         if (status == 404) {
@@ -268,7 +312,10 @@ void UpdateDownloader::onFinished()
         fail(why);
         return;
     }
-    m_file->write(reply->readAll());
+    if (!take(reply)) { // whatever is left, through the same size limit
+        fail(QStringLiteral("%1 is larger than a release file should be, so the download was stopped.").arg(m_current));
+        return;
+    }
     m_file->close();
     auto readBack = [](const QString &path) {
         QFile f(path);

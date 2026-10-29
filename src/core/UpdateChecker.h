@@ -85,6 +85,7 @@ signals:
 private:
     void fetch(const ReleaseAsset &asset, const QString &path);
     void onReadyRead();
+    bool take(QNetworkReply *reply); // reply's bytes into the file; false once past the size limit
     void onFinished();
     void fail(const QString &error);
 
@@ -100,6 +101,9 @@ private:
     QString m_current; // asset being downloaded
     int m_stage = 0;   // 0 idle, 1 SHA256SUMS, 2 SHA256SUMS.minisig, 3 package
     int m_stallMs = 30000;
+    qint64 m_received = 0; // bytes of the asset being downloaded
+    bool m_tooLarge = false;
+    bool m_badRedirect = false;
     bool m_cancelled = false;
 };
 

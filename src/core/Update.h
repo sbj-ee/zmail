@@ -86,6 +86,16 @@ ChecksumResult verifyChecksum(const QString &filePath, const QByteArray &sha256s
 // (the URL comes from the API response, so don't open anything else).
 bool isTrustedReleasePageUrl(const QString &url);
 
+// Where release assets may come from. The asset URLs are in the API reply
+// (untrusted), so the downloader only fetches
+// https://github.com/sbj-ee/zmail/releases/download/..., and only follows a
+// redirect to https on github.com or *.githubusercontent.com (where GitHub
+// keeps the files). The signature still decides what is installed; this keeps
+// the downloader from being pointed at other hosts at all.
+bool isTrustedAssetUrl(const QString &url);
+bool isTrustedAssetRedirect(const QUrl &url);
+void setAssetHostCheckForTests(bool on); // false: any URL (the tests' local server); default true
+
 // Updates are only installed when SHA256SUMS carries a valid minisign
 // signature (SHA256SUMS.minisig) by the release key: base64 public key line,
 // compiled in (core/UpdateSigningKey.cpp). Empty: this build can't verify

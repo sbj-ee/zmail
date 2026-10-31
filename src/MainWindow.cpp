@@ -7,6 +7,7 @@
 #include "core/MailCache.h"
 #include "core/MailSession.h"
 #include "core/Unsubscribe.h"
+#include "core/AuthResults.h"
 #include "core/MessageParser.h"
 #include "core/ReplyBuilder.h"
 #include "core/Signatures.h"
@@ -383,6 +384,12 @@ ViewMessage zmail::ui::detail::liveViewMessage(const zmail::CachedMessage &c, bo
         v.warning = QStringLiteral("<b>\u26a0 %1</b> %2")
                         .arg(esc(QObject::tr("Gmail put this message in Spam.")),
                              esc(QObject::tr("Links and remote images are blocked; check the sender before replying.")));
+    }
+    // What Gmail found when it checked the sender (its own topmost
+    // Authentication-Results), and a display name posing as another address.
+    const QString auth = zmail::Auth::warningHtml(zmail::Auth::parse(c.authResults), c.fromName, c.fromAddr);
+    if (!auth.isEmpty()) {
+        v.warning = v.warning.isEmpty() ? auth : v.warning + QStringLiteral("<br>") + auth;
     }
     return v;
 }

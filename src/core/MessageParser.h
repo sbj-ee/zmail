@@ -30,6 +30,8 @@ struct Body
     // List-Unsubscribe / List-Unsubscribe-Post, as sent ("" = none).
     QString listUnsubscribe;
     QString listUnsubscribePost;
+    // The topmost Authentication-Results header, as sent ("" = none).
+    QString authResults;
     // The first calendar part (text/calendar, *.ics): its text when Gmail
     // sent it inline, otherwise the attachment to fetch it from.
     QString calendar;

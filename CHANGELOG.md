@@ -9,7 +9,7 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
-## 1.1.2
+## 1.1.2 - 2026-10-31
 
 - Accessibility: screen readers now announce names, and descriptions where
   useful, for the search box, mailbox tree, message list, message pane, status

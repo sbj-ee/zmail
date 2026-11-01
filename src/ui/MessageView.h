@@ -98,18 +98,31 @@ public:
     // The header and body as one document, for File > Print. The caller owns it.
     QTextDocument *printableDocument() const;
     bool layoutSimplified() const { return m_simplified; }
+    // A large message's body is being sanitized and prepared off the UI
+    // thread (offthread::kDefaultThresholdBytes); the pane says so meanwhile.
+    bool preparingBody() const { return m_preparing; }
     void showFullLayout();
 
 signals:
     void zoomChanged(qreal zoom);
     void mailtoRequested(const QUrl &url); // a mailto: link in the body
     void unsubscribeRequested(const QString &messageId); // the Unsubscribe button
+    void bodyPrepared(); // an off-thread body preparation finished and was shown
 
 protected:
     bool eventFilter(QObject *obj, QEvent *ev) override;
     void changeEvent(QEvent *ev) override;
 
 private:
+    struct PreparedBody
+    {
+        QString html;
+        int blocked = 0;
+        int trackers = 0;
+        bool simplified = false;
+    };
+    // Pure string work, safe on any thread: sanitize, HtmlFit::prepare, trackers.
+    static PreparedBody prepareBody(const QString &bodyHtml, bool showImages, bool fullLayout, bool blockTrackers);
     void render();
     void renderHeader();
     void renderCalendar();
@@ -118,6 +131,11 @@ private:
     int bodyWidth() const;
 
     ViewMessage m_msg;
+    PreparedBody m_prepared;
+    QString m_preparedKey;  // what m_prepared was made from
+    QString m_pendingKey;   // what the off-thread job in flight is making
+    quint64 m_renderGen = 0; // bumped when the message changes: stale results are dropped
+    bool m_preparing = false;
     QLabel *m_warning = nullptr;
     QWidget *m_header = nullptr;
     QGridLayout *m_headerGrid = nullptr;

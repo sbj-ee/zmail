@@ -1,5 +1,7 @@
 #include "GmailSyncEngine.h"
 
+#include "OffThread.h"
+
 #include <memory>
 
 #include "CalendarInvite.h"
@@ -756,9 +758,23 @@ void GmailSyncEngine::fetchBody(const QString &id, MessageCb cb)
                                             : (err.message.isEmpty() ? tr("HTTP %1").arg(err.httpStatus) : err.message));
             return;
         }
-        CachedMessage meta = MessageParser::fromMetadata(json);
-        const MessageParser::Body body = MessageParser::bodyFromFull(json);
-        meta.hasAttachment = !body.attachments.isEmpty();
+        // The MIME walk and base64url decoding of a large message run on the
+        // thread pool; the cache is written back on this thread.
+        const qsizetype size = json.value(QStringLiteral("sizeEstimate")).toVariant().toLongLong();
+        auto parse = [json]() {
+            Parsed p{MessageParser::fromMetadata(json), MessageParser::bodyFromFull(json)};
+            p.meta.hasAttachment = !p.body.attachments.isEmpty();
+            return p;
+        };
+        offthread::run(this, offthread::isLarge(size), std::move(parse), [this, id, cb](const Parsed &p) {
+            stored(id, p.meta, p.body, cb);
+        });
+    });
+}
+
+void GmailSyncEngine::stored(const QString &id, const CachedMessage &meta, const MessageParser::Body &body, MessageCb cb)
+{
+    {
         auto store = [this, id, cb, meta, body](const QString &calendar) {
             {
                 const MailCache::Batch batch(*m_cache);
@@ -779,7 +795,7 @@ void GmailSyncEngine::fetchBody(const QString &id, MessageCb cb)
                                                   : MessageParser::decodeBase64Url(att.value(QStringLiteral("data")).toString());
             store(QString::fromUtf8(raw).left(CalendarInvite::kMaxBytes));
         });
-    });
+    }
 }
 
 void GmailSyncEngine::fetchFull(const QString &id, FullCb cb)

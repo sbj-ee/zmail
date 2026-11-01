@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MessageParser.h"
+
 #include "AppPasswordAccount.h"
 #include "ImapClient.h"
 #include "ServerLimits.h"
@@ -190,6 +192,14 @@ private:
     void selectFolder(const QString &labelId, std::function<void(bool ok)> then);
     void fetchRaw(const QString &id, std::function<void(const QByteArray &raw, const QString &error)> cb);
     QJsonObject fullJson(const QString &id, const QByteArray &raw) const;
+    // fullJson() from a summary already read from the cache: no SQLite, so it
+    // can run on a worker thread.
+    static QJsonObject fullJsonFrom(const QString &id, const QByteArray &raw, const CachedMessage &before);
+    struct ParsedBody
+    {
+        CachedMessage meta;
+        MessageParser::Body body;
+    };
     QByteArray gmLabel(const QString &labelId) const;
     QByteArray moveCmd(const QByteArray &set, const QByteArray &destWire) const;
     void applyLabels(const QStringList &ids, const QStringList &add, const QStringList &remove,

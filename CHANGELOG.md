@@ -9,6 +9,17 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.1.0
+
+- Messages of 256 KB or more are now parsed (sync engines), sanitized and
+  prepared for layout (viewer) on a worker thread, so the window stays
+  responsive on huge mail. SQLite access stays on the main thread. The viewer
+  shows "Preparing message…" meanwhile, and a generation guard drops results
+  for a message that is no longer selected. The final HtmlFit pass, which
+  edits the live document, still runs on the UI thread.
+- Tests: tst_offthread, plus tst_imap and tst_sync re-run with every message
+  treated as large.
+
 ## 1.0.5
 
 - **Searches with punctuation or a leading minus work again.** The search box

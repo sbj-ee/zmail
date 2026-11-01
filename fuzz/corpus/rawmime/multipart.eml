@@ -1,0 +1,23 @@
+From: a@example.com
+Content-Type: multipart/mixed; boundary="b1"
+
+--b1
+Content-Type: multipart/alternative; boundary=b2
+
+--b2
+Content-Type: text/plain
+
+text
+--b2
+Content-Type: text/html
+Content-Transfer-Encoding: base64
+
+PGI+aGk8L2I+
+--b2--
+--b1
+Content-Type: text/calendar; method=REQUEST
+Content-Disposition: attachment; filename*=UTF-8''invite%20x.ics
+
+BEGIN:VCALENDAR
+END:VCALENDAR
+--b1--

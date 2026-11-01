@@ -53,8 +53,10 @@ void walk(const QJsonObject &part, Body &out, int depth)
         !filename.isEmpty() || header(headers, QStringLiteral("Content-Disposition")).startsWith(QLatin1String("attachment"), Qt::CaseInsensitive);
 
     if (mime.startsWith(QLatin1String("multipart/"))) {
-        for (const auto &p : part.value(QStringLiteral("parts")).toArray()) {
-            walk(p.toObject(), out, depth + 1);
+        // At most 1000 parts per multipart, as RawMime reads them.
+        const QJsonArray parts = part.value(QStringLiteral("parts")).toArray();
+        for (qsizetype i = 0; i < parts.size() && i < 1000; ++i) {
+            walk(parts.at(i).toObject(), out, depth + 1);
         }
         return;
     }

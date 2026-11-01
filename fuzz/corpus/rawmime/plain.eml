@@ -1,0 +1,9 @@
+From: "Ada" <ada@example.com>
+To: bob@example.org
+Subject: =?UTF-8?B?SGVsbG8=?=
+Authentication-Results: mx.google.com; spf=pass; dkim=pass; dmarc=pass
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+Hi =C3=A9 there=
+

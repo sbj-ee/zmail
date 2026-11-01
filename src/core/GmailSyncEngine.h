@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MailCache.h"
+#include "MessageParser.h"
 #include "SyncEngine.h"
 
 #include <QDateTime>
@@ -138,6 +139,14 @@ public:
     int fullSyncs() const override { return m_fullSyncs; }
 
 private:
+    struct Parsed
+    {
+        CachedMessage meta;
+        MessageParser::Body body;
+    };
+    // fetchBody's second half, back on this thread: the cache, and an .ics
+    // attachment fetched when Gmail didn't send it inline.
+    void stored(const QString &id, const CachedMessage &meta, const MessageParser::Body &body, MessageCb cb);
     void fullSync(const QString &reason);
     // force=true: always re-fetch counts (startup / full sync / folder CRUD).
     // force=false: skip if a full label-count refresh ran recently (history poll).

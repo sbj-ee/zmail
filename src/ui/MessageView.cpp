@@ -1,5 +1,7 @@
 #include "MessageView.h"
 
+#include "core/OffThread.h"
+
 #include "HtmlFit.h"
 #include "RemoteImages.h"
 #include "SafeHtmlView.h"
@@ -270,6 +272,9 @@ void MessageView::applyBodyPalette()
 
 void MessageView::clear()
 {
+    ++m_renderGen; // a body still being prepared is for nothing now
+    m_preparing = false;
+    m_pendingKey.clear();
     m_msg = {};
     m_empty = true;
     m_showImages = false;
@@ -298,6 +303,11 @@ void MessageView::setMessage(const ViewMessage &m)
         m_body->clearRemoteImages();
         m_body->setRemoteImagesAllowed(m_showImages);
         m_fullLayout = false;
+    }
+    if (!same) {
+        ++m_renderGen; // drop a body still being prepared for the previous message
+        m_preparing = false;
+        m_pendingKey.clear();
     }
     m_msg = m;
     m_empty = false;
@@ -490,6 +500,21 @@ int MessageView::bodyWidth() const
     return std::max(1, m_body->contentsRect().width() - extent);
 }
 
+MessageView::PreparedBody MessageView::prepareBody(const QString &bodyHtml, bool showImages, bool fullLayout,
+                                                  bool blockTrackers)
+{
+    PreparedBody p;
+    QString html = SafeHtmlView::sanitize(bodyHtml, &p.blocked, showImages);
+    int tableDepth = HtmlFit::kMaxTableDepth;
+    html = HtmlFit::prepare(html, fullLayout ? 0 : HtmlFit::kLayoutBudget, &tableDepth);
+    p.simplified = tableDepth < HtmlFit::kMaxTableDepth;
+    if (blockTrackers) {
+        html = SafeHtmlView::dropTrackers(html, &p.trackers); // even in "Always load"
+    }
+    p.html = html;
+    return p;
+}
+
 void MessageView::render()
 {
     if (m_empty) {
@@ -523,13 +548,56 @@ void MessageView::render()
     if (!m_msg.loading && !m_msg.bodyHtml.isEmpty() && !m_plain) {
         m_body->setLineWrapMode(QTextEdit::FixedPixelWidth);
         m_body->setLineWrapColumnOrWidth(vw);
-        QString html = SafeHtmlView::sanitize(m_msg.bodyHtml, &m_blocked, m_showImages);
-        int tableDepth = HtmlFit::kMaxTableDepth;
-        html = prefix + HtmlFit::prepare(html, m_fullLayout ? 0 : HtmlFit::kLayoutBudget, &tableDepth);
-        m_simplified = tableDepth < HtmlFit::kMaxTableDepth;
-        if (m_showImages && RemoteImages::blockTrackers()) {
-            html = SafeHtmlView::dropTrackers(html, &m_trackers); // even in "Always load"
+        // Sanitizing and HtmlFit's string passes, kept for re-renders (resize,
+        // zoom, dark mode) until the message or what they depend on changes.
+        // A large message's are done on the thread pool (offthread::run);
+        // until they're back the pane says so, and a result for a message
+        // that is no longer shown is dropped (m_renderGen).
+        const bool trackers = m_showImages && RemoteImages::blockTrackers();
+        const QString key = QStringLiteral("%1|%2%3%4|%5|%6")
+                                .arg(m_msg.id)
+                                .arg(int(m_showImages))
+                                .arg(int(m_fullLayout))
+                                .arg(int(trackers))
+                                .arg(m_msg.bodyHtml.size())
+                                .arg(qHash(m_msg.bodyHtml));
+        if (key != m_preparedKey) {
+            const QString source = m_msg.bodyHtml;
+            const bool show = m_showImages;
+            const bool full = m_fullLayout;
+            auto work = [source, show, full, trackers]() { return prepareBody(source, show, full, trackers); };
+            if (!offthread::isLarge(source.size())) {
+                m_prepared = work();
+                m_preparedKey = key;
+            } else if (!(m_preparing && m_pendingKey == key)) {
+                const quint64 gen = ++m_renderGen;
+                m_preparing = true;
+                m_pendingKey = key;
+                offthread::run(this, true, std::move(work), [this, gen, key](const PreparedBody &p) {
+                    if (gen != m_renderGen) {
+                        return; // stale: another message (or none) is shown now
+                    }
+                    m_preparing = false;
+                    m_pendingKey.clear();
+                    m_prepared = p;
+                    m_preparedKey = key;
+                    render();
+                    emit bodyPrepared();
+                });
+            }
         }
+        if (key != m_preparedKey) {
+            doc->clear();
+            doc->setDefaultFont(zoomed(base, m_zoom));
+            m_body->setHtml(prefix + QStringLiteral("<p><i>%1</i></p>").arg(esc(tr("Preparing message\u2026"))));
+            m_imagesBar->hide();
+            m_layoutBar->hide();
+            return;
+        }
+        m_blocked = m_prepared.blocked;
+        m_trackers = m_prepared.trackers;
+        m_simplified = m_prepared.simplified;
+        const QString html = prefix + m_prepared.html;
         qreal z = m_zoom;
         for (int pass = 0; pass < 2; ++pass) {
             // setDefaultFont() lays the whole document out again: empty it

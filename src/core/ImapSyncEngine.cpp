@@ -1,4 +1,6 @@
 #include "ImapSyncEngine.h"
+
+#include "OffThread.h"
 #include "ServerLimits.h"
 
 #include <algorithm>
@@ -1249,7 +1251,11 @@ void ImapSyncEngine::loadAllStep()
 
 QJsonObject ImapSyncEngine::fullJson(const QString &id, const QByteArray &raw) const
 {
-    const CachedMessage before = m_cache->summary(id);
+    return fullJsonFrom(id, raw, m_cache->summary(id));
+}
+
+QJsonObject ImapSyncEngine::fullJsonFrom(const QString &id, const QByteArray &raw, const CachedMessage &before)
+{
     QJsonObject json;
     json.insert(QStringLiteral("id"), id);
     json.insert(QStringLiteral("threadId"), before.threadId);
@@ -1327,20 +1333,28 @@ void ImapSyncEngine::fetchBody(const QString &id, MessageCb cb)
             cb(m_cache->message(id), error);
             return;
         }
-        const QJsonObject json = fullJson(id, raw);
-        CachedMessage meta = MessageParser::fromMetadata(json);
-        const MessageParser::Body body = MessageParser::bodyFromFull(json);
-        meta.hasAttachment = !body.attachments.isEmpty();
-        if (meta.snippet.isEmpty()) {
-            meta.snippet = body.text.simplified().left(200);
-        }
-        {
-            const MailCache::Batch batch(*m_cache);
-            m_cache->upsert(meta);
-            m_cache->setBody(id, body.text, body.html, body.attachments,
-                             {body.listUnsubscribe, body.listUnsubscribePost, body.calendar, body.authResults});
-        }
-        cb(m_cache->message(id), {});
+        // The cache is read here, on this thread; the MIME parse of a large
+        // message runs on the thread pool; the cache is written back here.
+        const CachedMessage before = m_cache->summary(id);
+        auto parse = [id, raw, before]() {
+            const QJsonObject json = fullJsonFrom(id, raw, before);
+            ParsedBody p{MessageParser::fromMetadata(json), MessageParser::bodyFromFull(json)};
+            p.meta.hasAttachment = !p.body.attachments.isEmpty();
+            if (p.meta.snippet.isEmpty()) {
+                p.meta.snippet = p.body.text.simplified().left(200);
+            }
+            return p;
+        };
+        offthread::run(this, offthread::isLarge(raw.size()), std::move(parse), [this, id, cb](const ParsedBody &p) {
+            const MessageParser::Body &body = p.body;
+            {
+                const MailCache::Batch batch(*m_cache);
+                m_cache->upsert(p.meta);
+                m_cache->setBody(id, body.text, body.html, body.attachments,
+                                 {body.listUnsubscribe, body.listUnsubscribePost, body.calendar, body.authResults});
+            }
+            cb(m_cache->message(id), {});
+        });
     });
 }
 

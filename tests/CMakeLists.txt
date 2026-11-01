@@ -58,6 +58,14 @@ zmail_add_test(tst_snooze)
 zmail_add_test(tst_rules) # filters: matching, storage, the editor, what they do to mail
 zmail_add_test(tst_extras) # unsubscribe, read delay, vacation responder, invitations, sent sound
 zmail_add_test(tst_sanitizer) # corpus + seeded random property tests
+zmail_add_test(tst_offthread) # 1.1.0: large-message parse/sanitize/HtmlFit off the UI thread, stale-result guard
+# The same suites with every message counted as large, so the sync engines'
+# off-thread parse paths run end to end.
+foreach(t tst_imap tst_sync)
+  add_test(NAME ${t}_offthread COMMAND ${t})
+  set_tests_properties(${t}_offthread PROPERTIES ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config-offthread;ZMAIL_MARK_READ_DELAY_MS=0;ZMAIL_SEND_DELAY_MS=0;ZMAIL_OFFTHREAD_BYTES=0")
+endforeach()
 zmail_add_test(tst_authresults) # 1.0.4: SPF/DKIM/DMARC + display-name banner (synthetic headers)
 foreach(t tst_viewer tst_idle)
   target_compile_definitions(${t} PRIVATE ZMAIL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")

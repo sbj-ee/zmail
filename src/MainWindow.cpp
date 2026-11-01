@@ -855,6 +855,8 @@ void MainWindow::buildToolbar()
     m_search->setPlaceholderText(tr("Search all mail  (from: subject: has:attachment …)"));
     m_search->setToolTip(MessageFilterProxy::searchHelp());
     m_search->setClearButtonEnabled(true);
+    m_search->setAccessibleName(tr("Search mail"));
+    m_search->setAccessibleDescription(tr("Searches all cached mail. Supports from:, to:, subject:, has:attachment and is:unread."));
     m_search->setMinimumWidth(300);
     QAction *lead = m_search->addAction(icon(QStringLiteral("search")), QLineEdit::LeadingPosition);
     lead->setProperty("lucide", QStringLiteral("search"));
@@ -874,11 +876,14 @@ void MainWindow::buildPanes()
 {
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setObjectName(QStringLiteral("mainSplitter"));
+    m_splitter->setAccessibleName(tr("Mailboxes and messages"));
     m_splitter->setHandleWidth(5);
 
     auto *mailboxTree = new MailboxTree(m_splitter);
     m_mailboxes = mailboxTree;
     m_mailboxes->setObjectName(QStringLiteral("mailboxTree"));
+    m_mailboxes->setAccessibleName(tr("Mailboxes"));
+    m_mailboxes->setAccessibleDescription(tr("Mailboxes and folders, with unread and total counts."));
     m_mailboxes->setColumnCount(2);
     m_mailboxes->setHeaderHidden(true);
     m_mailboxes->setRootIsDecorated(true);
@@ -899,6 +904,8 @@ void MainWindow::buildPanes()
 
     m_list = new MessageListView(m_listSplitter);
     m_list->setObjectName(QStringLiteral("messageList"));
+    m_list->setAccessibleName(tr("Message list"));
+    m_list->setAccessibleDescription(tr("Messages in the current mailbox. Press Enter to open one."));
     m_list->setModel(m_proxy);
     m_list->setRootIsDecorated(false);
     m_list->setUniformRowHeights(true);
@@ -948,6 +955,9 @@ void MainWindow::buildPanes()
     m_view = new MessageView(m_listSplitter);
     m_view->setObjectName(QStringLiteral("messageView"));
     m_view->body()->setObjectName(QStringLiteral("previewPane"));
+    m_view->setAccessibleName(tr("Message"));
+    m_view->body()->setAccessibleName(tr("Message body"));
+    m_view->body()->setAccessibleDescription(tr("The selected message, read-only."));
     connect(m_view, &MessageView::mailtoRequested, this, [this](const QUrl &u) { composeMailto(u); });
     connect(m_view, &MessageView::unsubscribeRequested, this, [this](const QString &id) { unsubscribe(id); });
     connect(m_list, &QTreeView::doubleClicked, this, [this](const QModelIndex &i) { openMessageWindow(i); });
@@ -1026,10 +1036,12 @@ void MainWindow::buildStatusBar()
     m_accountStatus->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     m_syncLabel = new QLabel(row);
     m_syncLabel->setObjectName(QStringLiteral("syncLabel"));
+    m_syncLabel->setAccessibleName(tr("Sync status"));
     lay->addWidget(m_accountStatus, 0);
     lay->addWidget(m_syncLabel, 1);
     m_countLabel = new QLabel(this);
     m_countLabel->setObjectName(QStringLiteral("countLabel"));
+    m_countLabel->setAccessibleName(tr("Message count"));
     m_vacationLabel = new QLabel(this);
     m_vacationLabel->setObjectName(QStringLiteral("vacationLabel"));
     m_vacationLabel->setToolTip(tr("Gmail is answering your mail automatically. Settings \u203a Vacation Responder changes it."));

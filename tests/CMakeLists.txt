@@ -67,6 +67,7 @@ foreach(t tst_imap tst_sync)
     "QT_QPA_PLATFORM=offscreen;ZMAIL_OAUTH_CLIENT=${CMAKE_CURRENT_BINARY_DIR}/no-such-client.json;XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/xdg-config-offthread;ZMAIL_MARK_READ_DELAY_MS=0;ZMAIL_SEND_DELAY_MS=0;ZMAIL_OFFTHREAD_BYTES=0")
 endforeach()
 zmail_add_test(tst_authresults) # 1.0.4: SPF/DKIM/DMARC + display-name banner (synthetic headers)
+zmail_add_test(tst_accessibility) # 1.1.2: accessible names on the main widgets
 foreach(t tst_viewer tst_idle)
   target_compile_definitions(${t} PRIVATE ZMAIL_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 endforeach()

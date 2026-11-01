@@ -9,6 +9,23 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.5
+
+- **Searches with punctuation or a leading minus work again.** The search box
+  could build a full-text query that SQLite rejects (`-spam invoice`, an
+  address such as `ada@example.com`, `Q4)` or a stray quote),
+  and the search then found nothing. Every word that isn't plain letters and
+  digits is now quoted, and excluded words go after the wanted ones. Found by
+  the new search-query fuzzer.
+- **Fuzzing.** libFuzzer harnesses in `fuzz/` for the parsers that read
+  untrusted input (raw MIME, Gmail API messages, the HTML sanitizer, calendar
+  invitations and the search box), with small synthetic seed corpora. A new
+  CI job builds them with clang, ASan and UBSan, runs the test suite and each
+  seed corpus under that build, then runs every fuzzer for 60 seconds. See
+  `fuzz/README.md`.
+- **At most 1000 parts per multipart.** A hostile message with thousands of
+  MIME parts is now read only that far.
+
 ## 1.0.4
 
 - **A warning when Gmail couldn't confirm who sent a message.** zmail now reads

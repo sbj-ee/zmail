@@ -9,6 +9,9 @@ namespace zmail::RawMime {
 namespace {
 
 constexpr int kMaxDepth = 20;
+// Parts read from one multipart: real mail has a handful; a hostile message
+// with thousands of empty parts would only cost memory and time.
+constexpr int kMaxParts = 1000;
 
 QString decodeCharset(const QByteArray &bytes, const QByteArray &charset)
 {
@@ -73,7 +76,7 @@ QJsonObject partFrom(const QByteArray &raw, const QString &defaultType, int dept
             const QString childDefault = mime == QLatin1String("multipart/digest") ? QStringLiteral("message/rfc822")
                                                                                    : QStringLiteral("text/plain");
             int pos = body.indexOf(delim);
-            while (pos >= 0) {
+            while (pos >= 0 && parts.size() < kMaxParts) {
                 int start = pos + delim.size();
                 if (body.mid(start, 2) == "--") {
                     break; // closing delimiter

@@ -52,8 +52,16 @@ QString escapeFtsToken(QString t)
     if (t.isEmpty()) {
         return {};
     }
-    if (phrase || t.contains(QLatin1Char(' ')) || t.contains(QLatin1Char(':'))) {
+    if (phrase) {
         return QLatin1Char('"') + t + QLatin1Char('"');
+    }
+    // FTS5 barewords are letters, digits and '_' only, and AND/OR/NOT/NEAR are
+    // operators: anything else (parentheses, ^, {, -, ., an odd quote) is a
+    // syntax error unless quoted. A quoted string still takes the prefix '*'.
+    static const QRegularExpression bareword(QStringLiteral("^[\\p{L}\\p{N}_]+$"));
+    static const QRegularExpression keyword(QStringLiteral("^(AND|OR|NOT|NEAR)$"));
+    if (!bareword.match(t).hasMatch() || keyword.match(t).hasMatch()) {
+        return QLatin1Char('"') + t + QStringLiteral("\"*");
     }
     // Prefix match so "fish" hits "fishing".
     return t + QLatin1Char('*');
@@ -84,6 +92,7 @@ QStringList SearchQuery::freeTextTokens(const QString &userText)
 QString SearchQuery::toFts5(const QString &userText)
 {
     QStringList parts;
+    QStringList excluded;
     for (QString tok : freeTextTokens(userText)) {
         bool negate = false;
         if (tok.startsWith(QLatin1Char('-'))) {
@@ -94,7 +103,15 @@ QString SearchQuery::toFts5(const QString &userText)
         if (esc.isEmpty()) {
             continue;
         }
-        parts << (negate ? QStringLiteral("NOT %1").arg(esc) : esc);
+        (negate ? excluded : parts) << esc;
+    }
+    // FTS5's NOT is binary ("a NOT b"): a leading NOT is a syntax error, so the
+    // excluded terms go after the wanted ones. Only exclusions: nothing to MATCH.
+    if (parts.isEmpty()) {
+        return {};
+    }
+    for (const QString &e : excluded) {
+        parts << QStringLiteral("NOT %1").arg(e);
     }
     return parts.join(QLatin1Char(' '));
 }

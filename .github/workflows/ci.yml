@@ -115,3 +115,58 @@ jobs:
         env:
           UBSAN_OPTIONS: print_stacktrace=1
         run: ctest --test-dir build --output-on-failure --timeout 900
+
+  # libFuzzer harnesses (fuzz/) for the parsers that read untrusted input,
+  # built with clang + ASan + UBSan: the unit tests under that build, each
+  # seed corpus replayed, then every fuzzer for 60 seconds. A crash, leak or
+  # sanitizer report fails the job and is uploaded as an artifact.
+  fuzz:
+    name: Fuzz (libFuzzer + ASan/UBSan)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Qt 6 + clang
+        timeout-minutes: 10
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y -qq \
+            qt6-base-dev qt6-svg-dev qt6-qpa-plugins qt6-multimedia-dev qtkeychain-qt6-dev libqt6sql6-sqlite \
+            libmd4c-dev libmd4c-html0-dev libzip-dev libhunspell-dev hunspell-en-us fonts-noto-color-emoji \
+            libsodium-dev libgl1-mesa-dev cmake ninja-build clang libclang-rt-18-dev pkg-config
+
+      - name: Configure
+        run: CC=clang CXX=clang++ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DZMAIL_SANITIZE=ON -DZMAIL_FUZZ=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test (unit tests + seed corpora, sanitized)
+        env:
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure --timeout 900
+
+      - name: Fuzz each harness for 60 s
+        env:
+          QT_QPA_PLATFORM: offscreen
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          mkdir -p fuzz-out
+          status=0
+          for f in rawmime messageparser htmlsanitizer calendarinvite searchquery; do
+            mkdir -p "fuzz-out/corpus-$f"
+            echo "::group::fuzz_$f"
+            build/fuzz/fuzz_$f -max_total_time=60 -timeout=20 -rss_limit_mb=4096 \
+              -artifact_prefix="fuzz-out/$f-" "fuzz-out/corpus-$f" "fuzz/corpus/$f" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashes
+          path: fuzz-out/*-*
+          if-no-files-found: ignore

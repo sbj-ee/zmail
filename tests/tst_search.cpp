@@ -17,6 +17,9 @@
 #include <QStandardPaths>
 #include <QTreeView>
 #include <QTreeWidget>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QtTest>
 
 using namespace zmail;
@@ -94,7 +97,7 @@ private slots:
         QCOMPARE(SearchQuery::toFts5(QStringLiteral("\"exact phrase\"")), QStringLiteral("\"exact phrase\""));
         QCOMPARE(SearchQuery::toFts5(QStringLiteral("from:priya budget")), QStringLiteral("budget*"));
         QCOMPARE(SearchQuery::toFts5(QStringLiteral("has:attachment")), QString());
-        QCOMPARE(SearchQuery::toFts5(QStringLiteral("-spam invoice")), QStringLiteral("NOT spam* invoice*"));
+        QCOMPARE(SearchQuery::toFts5(QStringLiteral("-spam invoice")), QStringLiteral("invoice* NOT spam*"));
         QCOMPARE(SearchQuery::toLikeNeedle(QStringLiteral("from:x Hello")), QStringLiteral("Hello"));
         QCOMPARE(SearchQuery::toLikeNeedle(QStringLiteral("\"Crew Schedule\"")), QStringLiteral("Crew Schedule"));
     }
@@ -124,6 +127,39 @@ private slots:
         QCOMPARE(c.search(QStringLiteral("contractor")), QStringList{QStringLiteral("b")});
         QCOMPARE(c.search(QStringLiteral("from:priya estimate")), QStringList{QStringLiteral("b")});
         QVERIFY(c.search(QStringLiteral("has:attachment")).isEmpty()); // free-text empty → no MATCH
+        // 1.0.5 (found by fuzz_searchquery): these built an FTS5 expression
+        // SQLite rejected as a syntax error, so the search silently found nothing.
+        QCOMPARE(c.search(QStringLiteral("-fishing contractor")), QStringList{QStringLiteral("b")});
+        QCOMPARE(c.search(QStringLiteral("marcus@example.com")), QStringList{QStringLiteral("a")});
+        QCOMPARE(c.search(QStringLiteral("Q4)")), QStringList{QStringLiteral("b")});
+    }
+
+    void ftsQueryAlwaysValid()
+    {
+        // Whatever is typed, toFts5 gives an expression FTS5 accepts.
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("ftsvalid"));
+        db.setDatabaseName(QStringLiteral(":memory:"));
+        QVERIFY(db.open());
+        {
+            QSqlQuery q(db);
+            QVERIFY(q.exec(QStringLiteral("CREATE VIRTUAL TABLE t USING fts5(a)")));
+            const QStringList inputs{
+                QStringLiteral("NEAR(a b) OR -c AND \"unterminated ^ col:x {a b}"),
+                QStringLiteral("-only -negatives"), QStringLiteral("a.b-c"), QStringLiteral("\"\""),
+                QStringLiteral("AND"), QStringLiteral("x NOT"), QStringLiteral("caf\u00e9 \u201cq\u201d"),
+                QStringLiteral("(((("), QStringLiteral("*"), QStringLiteral("-\"phrase here\" word"),
+                QStringLiteral("a\"b\"c"), QStringLiteral("+x ~y")};
+            for (const QString &in : inputs) {
+                const QString m = SearchQuery::toFts5(in);
+                if (m.isEmpty()) {
+                    continue;
+                }
+                q.prepare(QStringLiteral("SELECT rowid FROM t WHERE t MATCH ?"));
+                q.addBindValue(m);
+                QVERIFY2(q.exec(), qPrintable(in + QStringLiteral(" -> ") + m + QStringLiteral(": ") + q.lastError().text()));
+            }
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("ftsvalid"));
     }
 
     void backfillRebuildsEmptyFts()

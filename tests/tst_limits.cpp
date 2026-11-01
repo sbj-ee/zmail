@@ -1,6 +1,10 @@
 #include "core/Limits.h"
+#include "core/MessageParser.h"
+#include "core/RawMime.h"
 
 #include <QByteArray>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QtTest>
 
 using namespace zmail::limits;
@@ -10,6 +14,22 @@ class TstLimits : public QObject
     Q_OBJECT
 
 private slots:
+    // 1.0.5: a hostile multipart with thousands of parts is read only so far.
+    void multipartPartCountIsCapped()
+    {
+        QByteArray raw = "From: a@example.com\r\nContent-Type: multipart/mixed; boundary=b\r\n\r\n";
+        for (int i = 0; i < 5000; ++i) {
+            raw += "--b\r\nContent-Type: text/plain\r\n\r\nx\r\n";
+        }
+        raw += "--b--\r\n";
+        const QJsonObject payload = zmail::RawMime::toGmailPayload(raw);
+        QCOMPARE(payload.value(QStringLiteral("parts")).toArray().size(), 1000);
+        QJsonObject json;
+        json.insert(QStringLiteral("payload"), payload);
+        const auto body = zmail::MessageParser::bodyFromFull(json);
+        QVERIFY(body.text.count(QLatin1Char('x')) <= 1000);
+    }
+
     // base64MimeSize must match real MIME base64 output (76-char lines, CRLF).
     void base64SizeMatchesRealEncoding_data()
     {

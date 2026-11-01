@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 1.0.4 LANGUAGES CXX)
+project(zmail VERSION 1.0.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +29,16 @@ if(ZMAIL_SANITIZE)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
+# libFuzzer harnesses (fuzz/): clang only, normally with ZMAIL_SANITIZE. Every
+# target gets coverage instrumentation; only the fuzzers link libFuzzer's main.
+option(ZMAIL_FUZZ "Build the libFuzzer harnesses in fuzz/ (clang)" OFF)
+if(ZMAIL_FUZZ)
+  if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "ZMAIL_FUZZ needs clang (libFuzzer)")
+  endif()
+  add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 # Hardening for the shipped binary, which parses untrusted HTML, MIME and
 # images: position-independent executable, stack protector and stack-clash
 # protection, control-flow protection (x86), fortified libc calls, and a
@@ -37,7 +47,7 @@ endif()
 # result (tools/check-hardening.sh). Fortify needs optimisation and doesn't mix
 # with the sanitizers, so it is left out of Debug and sanitizer builds.
 option(ZMAIL_HARDEN "Build with exploit-mitigation compiler and linker flags" ON)
-if(ZMAIL_HARDEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZMAIL_SANITIZE)
+if(ZMAIL_HARDEN AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT ZMAIL_SANITIZE AND NOT ZMAIL_FUZZ)
   include(CheckPIESupported)
   check_pie_supported(LANGUAGES CXX)
   set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -283,6 +293,9 @@ target_link_libraries(zmail PRIVATE zmail_app)
 if(ZMAIL_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+if(ZMAIL_FUZZ)
+  add_subdirectory(fuzz)
 endif()
 
 include(cmake/Packaging.cmake)

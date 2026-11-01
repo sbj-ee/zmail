@@ -1,0 +1,1 @@
+from:ada@example.com "quarterly report" invoice* has:attachment

@@ -9,6 +9,14 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.1.1
+
+- docs/PLAN.md rewritten as the current plan: what shipped (IMAP and OAuth,
+  in-house MIME parser, sanitizer + QTextBrowser), how that differs from the
+  original plan, quality gates, and what's next.
+- README: a "Local data and encryption" note. The cache is plaintext SQLite
+  (folder 0700, database 0600); full-disk encryption is recommended.
+
 ## 1.1.0
 
 - Messages of 256 KB or more are now parsed (sync engines), sanitized and

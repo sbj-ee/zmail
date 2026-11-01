@@ -51,6 +51,7 @@ struct CachedMessage
     QString listUnsubscribe;     // List-Unsubscribe header (RFC 2369)
     QString listUnsubscribePost; // List-Unsubscribe-Post header (RFC 8058)
     QString calendar;            // a text/calendar part or .ics attachment, as sent
+    QString authResults;         // topmost Authentication-Results header (2: 1.0.4)
     int extrasVersion = 0;
     qint64 unsubscribedMs = 0;   // when zmail unsubscribed through this message; 0 = never
 
@@ -116,9 +117,10 @@ public:
         QString listUnsubscribe;
         QString listUnsubscribePost;
         QString calendar;
+        QString authResults;
     };
     // Bodies stored by an older zmail have a lower extras_ver: no extras yet.
-    static constexpr int kExtrasVersion = 1;
+    static constexpr int kExtrasVersion = 2; // 2: Authentication-Results (1.0.4)
     void setBody(const QString &id, const QString &text, const QString &html, const QStringList &attachments,
                  const BodyExtras &extras = {});
     void setUnsubscribed(const QString &id, qint64 whenMs);

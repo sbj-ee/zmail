@@ -9,6 +9,22 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.0.4
+
+- **A warning when Gmail couldn't confirm who sent a message.** zmail now reads
+  the topmost `Authentication-Results` header, the one Gmail's own servers add
+  (authserv-id `mx.google.com`), for its SPF, DKIM and DMARC results. Any
+  other `Authentication-Results` header is ignored, because a sender can write
+  one. When DMARC fails, or none of the three passes, the viewer shows a banner
+  above the message. Mail with no such header (your own Sent mail, say) gets
+  no banner.
+- **A warning when the sender's name poses as another address.** If the
+  display name looks like an email address or a domain (`"security@example.com"
+  <x@example.net>`, `example.com <x@example.net>`) that isn't the real sender's,
+  the same banner says so.
+- Bodies cached by an older zmail are fetched again once, when next opened, so
+  their header can be read.
+
 ## 1.0.3
 
 - **Release builds are hardened explicitly.** The CMake build now asks for PIE,

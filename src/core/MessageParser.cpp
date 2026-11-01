@@ -1,5 +1,7 @@
 #include "MessageParser.h"
 
+#include "AuthResults.h"
+
 #include "CalendarInvite.h"
 
 #include <QJsonArray>
@@ -146,6 +148,7 @@ Body bodyFromFull(const QJsonObject &msg)
     const QJsonArray headers = payload.value(QStringLiteral("headers")).toArray();
     b.listUnsubscribe = header(headers, QStringLiteral("List-Unsubscribe")).simplified();
     b.listUnsubscribePost = header(headers, QStringLiteral("List-Unsubscribe-Post")).simplified();
+    b.authResults = Auth::topmostHeader(headers);
     return b;
 }
 

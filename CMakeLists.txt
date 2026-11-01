@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Single source of truth for the version: bump ONLY the VERSION here.
 # configure_file() turns it into generated/version.hpp (window title, About,
 # update checks); CPack names the .deb from PROJECT_VERSION.
-project(zmail VERSION 1.0.3 LANGUAGES CXX)
+project(zmail VERSION 1.0.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -89,6 +89,8 @@ add_library(zmail_app STATIC
   src/core/AppPasswordAccount.cpp
   src/core/AppPasswordAccount.h
   src/core/AuthManager.cpp
+  src/core/AuthResults.cpp
+  src/core/AuthResults.h
   src/core/AuthManager.h
   src/core/ClientConfig.cpp
   src/core/ClientConfig.h

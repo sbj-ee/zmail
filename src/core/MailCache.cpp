@@ -45,16 +45,17 @@ CachedMessage fromRow(const QSqlQuery &q)
     m.calendar = q.value(22).toString();
     m.extrasVersion = q.value(23).toInt();
     m.unsubscribedMs = q.value(24).toLongLong();
+    m.authResults = q.value(25).toString();
     return m;
 }
 const char *kCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
                     "size, labels, has_attachment, has_body, body_text, body_html, attachments, cc_addr, reply_to, "
                     "message_id_hdr, references_hdr, list_unsubscribe, list_unsubscribe_post, calendar, extras_ver, "
-                    "unsubscribed_ms";
+                    "unsubscribed_ms, auth_results";
 // The same row without the bodies (fromRow() reads them as empty).
 const char *kListCols = "id, thread_id, history_id, internal_date, from_name, from_addr, to_addr, subject, snippet, "
                         "size, labels, has_attachment, has_body, '', '', attachments, cc_addr, reply_to, "
-                        "message_id_hdr, references_hdr, '', '', '', extras_ver, unsubscribed_ms";
+                        "message_id_hdr, references_hdr, '', '', '', extras_ver, unsubscribed_ms, ''";
 } // namespace
 
 MailCache::MailCache()
@@ -233,7 +234,7 @@ bool MailCache::migrate()
     // 0.6.19: what the full message says beyond its body (how to unsubscribe,
     // a calendar invitation). extras_ver 0 marks a body cached before these
     // were read, so it is fetched once more when next opened.
-    for (const char *col : {"list_unsubscribe", "list_unsubscribe_post", "calendar"}) {
+    for (const char *col : {"list_unsubscribe", "list_unsubscribe_post", "calendar", "auth_results"}) {
         if (!have.contains(QLatin1String(col)) &&
             !exec(QStringLiteral("ALTER TABLE messages ADD COLUMN %1 TEXT").arg(QLatin1String(col)))) {
             return false;
@@ -465,7 +466,7 @@ void MailCache::setBody(const QString &id, const QString &text, const QString &h
     QSqlQuery q(QSqlDatabase::database(m_conn));
     q.prepare(QStringLiteral("UPDATE messages SET has_body = 1, body_text = ?, body_html = ?, attachments = ?, "
                              "has_attachment = ?, list_unsubscribe = ?, list_unsubscribe_post = ?, calendar = ?, "
-                             "extras_ver = ? WHERE id = ?"));
+                             "auth_results = ?, extras_ver = ? WHERE id = ?"));
     q.addBindValue(text);
     q.addBindValue(html);
     q.addBindValue(attachments.join(QLatin1Char('\n')));
@@ -473,6 +474,7 @@ void MailCache::setBody(const QString &id, const QString &text, const QString &h
     q.addBindValue(extras.listUnsubscribe);
     q.addBindValue(extras.listUnsubscribePost);
     q.addBindValue(extras.calendar);
+    q.addBindValue(extras.authResults);
     q.addBindValue(kExtrasVersion);
     q.addBindValue(id);
     q.exec();
@@ -678,8 +680,8 @@ QList<MailCache::Listed> MailCache::listing(int limit) const
         while (q.next()) {
             Listed l;
             l.message = fromRow(q);
-            l.snoozeWakeMs = q.value(25).toLongLong();
-            l.snoozeBadge = q.value(26).toBool() && l.snoozeWakeMs == 0;
+            l.snoozeWakeMs = q.value(26).toLongLong();
+            l.snoozeBadge = q.value(27).toBool() && l.snoozeWakeMs == 0;
             out.append(std::move(l));
         }
     }

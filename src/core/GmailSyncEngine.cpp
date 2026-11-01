@@ -764,7 +764,7 @@ void GmailSyncEngine::fetchBody(const QString &id, MessageCb cb)
                 const MailCache::Batch batch(*m_cache);
                 m_cache->upsert(meta);
                 m_cache->setBody(id, body.text, body.html, body.attachments,
-                                 {body.listUnsubscribe, body.listUnsubscribePost, calendar});
+                                 {body.listUnsubscribe, body.listUnsubscribePost, calendar, body.authResults});
             }
             cb(m_cache->message(id), {});
         };

@@ -124,6 +124,8 @@ ComposeWindow::ComposeWindow(QWidget *parent)
 
     m_stack = new QStackedWidget(central);
     m_body = new zmail::ui::SafeTextEdit(m_stack); // never reads files named in quoted/pasted HTML
+    m_body->setAccessibleName(tr("Message body"));
+    m_body->setAccessibleDescription(tr("The text of your message."));
     m_body->setObjectName(QStringLiteral("composeBody"));
     m_body->setFrameShape(QFrame::NoFrame);
     m_body->setAcceptRichText(true);
@@ -143,6 +145,7 @@ ComposeWindow::ComposeWindow(QWidget *parent)
         underline->setChecked(f.fontUnderline());
     });
     m_preview = new QTextBrowser(m_stack);
+    m_preview->setAccessibleName(tr("Markdown preview"));
     m_preview->setObjectName(QStringLiteral("markdownPreview"));
     m_preview->setFrameShape(QFrame::NoFrame);
     m_preview->setOpenLinks(false);
@@ -153,6 +156,8 @@ ComposeWindow::ComposeWindow(QWidget *parent)
     setCentralWidget(central);
 
     m_sizeMeter = new QProgressBar(this);
+    m_sizeMeter->setAccessibleName(tr("Message size"));
+    m_sizeMeter->setAccessibleDescription(tr("How close the message is to the 25 MB limit."));
     m_sizeMeter->setObjectName(QStringLiteral("sizeMeter"));
     m_sizeMeter->setRange(0, 1000);
     m_sizeMeter->setTextVisible(true);
@@ -293,16 +298,20 @@ void ComposeWindow::buildToolbar()
 
     tb->addWidget(new QLabel(tr(" Signature "), tb));
     m_signature = new QComboBox(tb);
+    m_signature->setAccessibleName(tr("Signature"));
     m_signature->setObjectName(QStringLiteral("signatureCombo"));
     m_signature->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     tb->addWidget(m_signature);
     tb->addWidget(new QLabel(tr("  Format "), tb));
     m_format = new QComboBox(tb);
+    m_format->setAccessibleName(tr("Format"));
+    m_format->setAccessibleDescription(tr("HTML, plain text or Markdown."));
     m_format->setObjectName(QStringLiteral("formatCombo"));
     m_format->addItems({tr("HTML"), tr("Plain text"), tr("Markdown")});
     tb->addWidget(m_format);
     tb->addWidget(new QLabel(tr("  Priority "), tb));
     m_priority = new QComboBox(tb);
+    m_priority->setAccessibleName(tr("Priority"));
     m_priority->setObjectName(QStringLiteral("priorityCombo"));
     m_priority->addItems({tr("Normal"), tr("High"), tr("Low")});
     tb->addWidget(m_priority);
@@ -318,11 +327,13 @@ void ComposeWindow::buildFormatBar()
 
     auto *font = new QFontComboBox(fb);
     font->setObjectName(QStringLiteral("fontCombo"));
+    font->setAccessibleName(tr("Font"));
     font->setCurrentFont(QApplication::font());
     font->setMaximumWidth(180);
     fb->addWidget(font);
     auto *size = new QComboBox(fb);
     size->setObjectName(QStringLiteral("fontSizeCombo"));
+    size->setAccessibleName(tr("Font size"));
     size->addItems({"9", "10", "11", "12", "14", "16", "18", "24"});
     size->setCurrentText(QStringLiteral("11"));
     fb->addWidget(size);
@@ -446,6 +457,12 @@ void ComposeWindow::buildHeaderBlock(QWidget *host)
     m_subject = field(tr("Subject:"), "fieldSubject");
     m_cc = field(tr("Cc:"), "fieldCc");
     m_bcc = field(tr("Bcc:"), "fieldBcc");
+    m_to->setAccessibleName(tr("To"));
+    m_to->setAccessibleDescription(tr("Recipients, separated by commas."));
+    m_from->setAccessibleName(tr("From"));
+    m_subject->setAccessibleName(tr("Subject"));
+    m_cc->setAccessibleName(tr("Cc"));
+    m_bcc->setAccessibleName(tr("Bcc"));
 
     auto *al = new QLabel(tr("Attached:"), frame);
     QFont f = al->font();

@@ -9,6 +9,17 @@ published by `.github/workflows/release.yml` and signed with minisign (see
 status paragraph and on the
 [GitHub Releases](https://github.com/sbj-ee/zmail/releases) page.
 
+## 1.1.2 - 2026-10-31
+
+- Accessibility: screen readers now announce names, and descriptions where
+  useful, for the search box, mailbox tree, message list, message pane, status
+  labels, the compose fields (To, From, Subject, Cc, Bcc, body, format,
+  signature, priority, font, size meter), and the message view's banners and
+  buttons.
+- Test: tst_accessibility checks the names through QAccessible, and fails if
+  any named text field, combo box or list in the main or compose window has
+  no accessible name.
+
 ## 1.1.1
 
 - docs/PLAN.md rewritten as the current plan: what shipped (IMAP and OAuth,

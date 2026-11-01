@@ -92,6 +92,7 @@ MessageView::MessageView(QWidget *parent)
     lay->setSpacing(0);
 
     m_warning = new QLabel(this);
+    m_warning->setAccessibleName(tr("Warning"));
     m_warning->setObjectName(QStringLiteral("messageWarning"));
     m_warning->setTextFormat(Qt::RichText);
     m_warning->setWordWrap(true);
@@ -107,6 +108,7 @@ MessageView::MessageView(QWidget *parent)
     hv->setContentsMargins(12, 8, 12, 8);
     hv->setSpacing(4);
     m_subject = valueLabel(m_header);
+    m_subject->setAccessibleName(tr("Subject"));
     m_subject->setObjectName(QStringLiteral("messageSubject"));
     QFont sf = m_subject->font();
     sf.setBold(true);
@@ -121,6 +123,7 @@ MessageView::MessageView(QWidget *parent)
     lay->addWidget(m_header);
 
     m_attachments = new QLabel(this);
+    m_attachments->setAccessibleName(tr("Attachments"));
     m_attachments->setObjectName(QStringLiteral("messageAttachments"));
     m_attachments->setTextFormat(Qt::PlainText);
     m_attachments->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -160,6 +163,7 @@ MessageView::MessageView(QWidget *parent)
     m_unsubscribeText->setWordWrap(true);
     ub->addWidget(m_unsubscribeText, 1);
     m_unsubscribe = new QPushButton(tr("Unsubscribe"), m_unsubscribeBar);
+    m_unsubscribe->setAccessibleName(tr("Unsubscribe from this list"));
     m_unsubscribe->setObjectName(QStringLiteral("unsubscribeButton"));
     m_unsubscribe->setToolTip(tr("Tell this mailing list to stop sending to you"));
     ub->addWidget(m_unsubscribe);
@@ -180,10 +184,12 @@ MessageView::MessageView(QWidget *parent)
     m_imagesText->setWordWrap(true); // Ask is the default: don't hold a narrow pane wide
     ib->addWidget(m_imagesText, 1);
     m_loadImages = new QPushButton(tr("Load images"), m_imagesBar);
+    m_loadImages->setAccessibleName(tr("Load remote images"));
     m_loadImages->setObjectName(QStringLiteral("loadImagesButton"));
     m_loadImages->setToolTip(tr("Download this message's remote images. The sender can see that you opened it."));
     ib->addWidget(m_loadImages);
     m_alwaysForSender = new QPushButton(tr("Always for this sender"), m_imagesBar);
+    m_alwaysForSender->setAccessibleName(tr("Always load images from this sender"));
     m_alwaysForSender->setObjectName(QStringLiteral("alwaysForSenderButton"));
     m_alwaysForSender->setToolTip(
         tr("Load remote images now and in future mail from this address. Edit the list in Settings \u203a Privacy."));
